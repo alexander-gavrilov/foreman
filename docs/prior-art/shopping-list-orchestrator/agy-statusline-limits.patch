@@ -1,0 +1,5 @@
+5a6,9
+> # orchestrator: snapshot quota + per-terminal context for orchestrator/limits (best-effort)
+> { d="$HOME/.cache/agent-limits"; mkdir -p "$d/agy-ctx"; t=$(date +%s)
+>   echo "$input" | jq -c --arg t "$t" '{at:($t|tonumber), quota, plan_tier, model:(.model.id // .model.display_name)}' > "$d/agy.json.tmp" && mv "$d/agy.json.tmp" "$d/agy.json"
+>   if [ -n "$ORCA_TERMINAL_HANDLE" ]; then echo "$input" | jq -c --arg t "$t" '{at:($t|tonumber), model:(.model.id // .model.display_name), context_window}' > "$d/agy-ctx/$ORCA_TERMINAL_HANDLE.json"; fi; } 2>/dev/null || true
