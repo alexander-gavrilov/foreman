@@ -44,7 +44,7 @@ def run_pass(interval_s=60):
     all_sessions = sessions.list_sessions()
     non_closed = [
         s for s in all_sessions
-        if s.get("lifecycle") != "closed" and s.get("state") != "closed"
+        if sessions.is_open(s)
     ]
 
     transport_kinds = {
@@ -174,7 +174,7 @@ def run_pass(interval_s=60):
                     agent = ws.get("agent")
                     agent_matches = (agent == prov or (prov == "antigravity" and agent == "agy"))
                     is_worker = (ws.get("role") == "worker")
-                    is_running = (ws.get("lifecycle") != "closed" and ws.get("state") not in ("closed", "gone"))
+                    is_running = (sessions.is_open(ws) and ws.get("state") != "gone")
                     if agent_matches and is_worker and is_running:
                         sessions.inbox_enqueue(ws["sid"], wind_down_text, sender="foreman")
 

@@ -80,7 +80,7 @@ def run(args):
     old = find_session(args.target, args)
     old_sid = old["sid"]
     name = "%s (%s)" % (old.get("title") or old_sid, old_sid)
-    if old.get("lifecycle") in ("rotated", "closed") or old.get("state") in ("rotated", "closed", "gone"):
+    if old.get("lifecycle") in ("rotated", "closed") or old.get("state") == "gone":
         why = old.get("lifecycle") if old.get("lifecycle") in ("rotated", "closed") else old.get("state")
         raise CliError("cannot rotate %s: session is already %s" % (name, why), code=2)
     if old.get("state") == "busy":

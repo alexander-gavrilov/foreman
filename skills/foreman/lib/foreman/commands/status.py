@@ -2,7 +2,6 @@
 from foreman import config, projects, sessions, timeutil
 from foreman.cliutil import CliError, add_project_arg, dump_json
 
-HIDDEN_STATES = ("closed",)
 
 
 def register(subparsers):
@@ -35,9 +34,7 @@ def _select_projects(args):
 
 def _state_text(rec, now):
     text = "%s %s" % (rec.get("state"), timeutil.age_text(rec.get("state_since"), now=now))
-    if rec.get("state") == "rotated" and rec.get("replaced_by"):
-        text += " → %s" % rec["replaced_by"]
-    elif rec.get("lifecycle") == "rotated":
+    if rec.get("lifecycle") == "rotated":
         text += (" · rotated → %s" % rec["replaced_by"]) if rec.get("replaced_by") else " · rotated"
     return text
 
@@ -49,7 +46,7 @@ def run(args):
     data = []
     for proj in projs:
         recs = [r for r in sessions.list_sessions(proj["slug"])
-                if r.get("state") not in HIDDEN_STATES and r.get("lifecycle") != "closed"]
+                if sessions.is_open(r)]
         data.append((proj, recs))
     if args.json:
         dump_json({"projects": [{"slug": p["slug"], "name": p.get("name"), "path": p.get("path"),

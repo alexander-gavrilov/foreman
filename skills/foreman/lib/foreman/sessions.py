@@ -5,9 +5,8 @@ import os
 from foreman import ids, paths, store, timeutil
 from foreman.errors import ForemanError
 
-STATES = ("starting", "busy", "idle", "waiting_input", "waiting_permission", "stuck", "gone", "rotated",
-          "closed")
-INACTIVE_STATES = ("closed", "rotated", "gone")  # legacy: lifecycle (below) now carries closed / rotated
+STATES = ("starting", "busy", "idle", "waiting_input", "waiting_permission", "stuck", "gone")  # activity only
+INACTIVE_STATES = ("gone",)  # closed / rotated are lifecycles (below), not activity states
 LIFECYCLES = ("active", "rotated", "closed")
 
 
@@ -70,8 +69,12 @@ def list_sessions(project=None):
     return out
 
 
-def _is_live(rec):
+def is_live(rec):
+    """Open, not gone and not rotated out: the session that currently does the work."""
     return rec.get("state") not in INACTIVE_STATES and rec.get("lifecycle") not in ("closed", "rotated")
+
+
+_is_live = is_live
 
 
 def _prefer_live(matches):
@@ -142,7 +145,7 @@ def update_session(sid, **fields):
 def is_open(rec):
     """False once the session's lifecycle is closed (records without the field are active). Activity
     (`state`) is separate: a rotated session is open and its busy/idle state is still tracked."""
-    return rec.get("lifecycle") != "closed" and rec.get("state") != "closed"
+    return rec.get("lifecycle") != "closed"
 
 
 def set_lifecycle(sid, lifecycle, at=None):
@@ -165,7 +168,7 @@ def set_lifecycle(sid, lifecycle, at=None):
 
 
 def set_state(sid, state, at=None):
-    """Change state; state_since moves only when the state actually changes. 'closed' stamps closed_at."""
+    """Change activity state; state_since moves only when the state actually changes."""
     if state not in STATES:
         raise ValueError("unknown session state %r" % (state,))
     path = paths.session_file(sid)
@@ -179,8 +182,6 @@ def set_state(sid, state, at=None):
         if rec.get("state") != state:
             rec["state"] = state
             rec["state_since"] = now
-        if state == "closed" and not rec.get("closed_at"):
-            rec["closed_at"] = now
         return rec
     return store.update_json(path, apply, default=None)
 

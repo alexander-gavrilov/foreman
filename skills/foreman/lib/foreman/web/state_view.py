@@ -52,11 +52,6 @@ def _overall_level(window_levels):
 
 def _build_limits(cfg):
     """Build limits dict matching web-api.md. Reads limits module or limits/*.json."""
-    if hasattr(limits_mod, "web_state"):
-        return limits_mod.web_state()
-    if hasattr(limits_mod, "for_state"):
-        return limits_mod.for_state()
-
     warn_th = cfg.get("thresholds", {}).get("limit_warn", 70)
     stop_th = cfg.get("thresholds", {}).get("limit_stop", 90)
     ref_now = timeutil.now()
@@ -134,7 +129,7 @@ def _triage_project(proj, proj_sessions, chat_messages):
     # 2. Check sessions state
     has_stuck_or_gone = any(s.get("state") in ("stuck", "gone") for s in proj_sessions)
     has_busy = any(s.get("state") in ("busy", "starting") for s in proj_sessions
-                   if s.get("state") not in sessions.INACTIVE_STATES)
+                   if sessions.is_live(s))
 
     # 3. Check live orchestrator
     orch_sid = proj.get("orchestrator")
@@ -146,7 +141,7 @@ def _triage_project(proj, proj_sessions, chat_messages):
         orch_session = sessions._prefer_live(candidates)
 
     orch_is_live = (orch_session is not None
-                    and orch_session.get("state") not in sessions.INACTIVE_STATES
+                    and sessions.is_live(orch_session)
                     and orch_session.get("state") != "stuck")
 
     # Group determination
@@ -282,18 +277,13 @@ def build_project(slug):
         tokens = s.get("context_tokens")
         lvl = _context_level(tokens, context_soft)
         age = _format_age(s.get("state_since"), ref_now)
-        is_live = s.get("state") not in sessions.INACTIVE_STATES
+        is_live = sessions.is_live(s)
         if is_live:
             live_count += 1
 
         lifecycle = s.get("lifecycle")
         if not lifecycle:
-            if s.get("state") == "closed":
-                lifecycle = "closed"
-            elif s.get("state") == "rotated":
-                lifecycle = "rotated"
-            else:
-                lifecycle = "active"
+            lifecycle = "active"
 
         formatted_sessions.append({
             "sid": s.get("sid"),

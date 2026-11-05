@@ -75,7 +75,7 @@ def run(args):
 
         non_closed = [
             s for s in sessions.list_sessions()
-            if s.get("lifecycle") != "closed" and s.get("state") != "closed"
+            if sessions.is_open(s)
         ]
         limit_warn = config.get("thresholds.limit_warn", 70)
         limit_stop = config.get("thresholds.limit_stop", 90)

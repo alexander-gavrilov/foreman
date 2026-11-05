@@ -48,10 +48,8 @@ class LauncherTest(ForemanTestCase):
             self.assertEqual(code, 2, c)
             self.assertIn("foreman %s: not implemented yet" % c, out + err)
 
-    def test_stubs_accept_arbitrary_arguments(self):
-        code, out, err = run_cli("web", "s-123456", "hello", "--flag", "x")
-        self.assertEqual(code, 2)
-        self.assertIn("not implemented yet", out + err)
+    def test_no_stub_commands_remain(self):
+        self.assertEqual(STUBS, [])
 
 
 def run_cli_path(path, *args, cwd=None):
@@ -364,10 +362,10 @@ class StatusCliTest(ForemanTestCase):
         self.assertNotIn("⚠", row_a)
 
     def test_closed_hidden_rotated_shown(self):
-        self.s.set_state(self.b, "rotated")
+        self.s.set_lifecycle(self.b, "rotated")
         self.s.update_session(self.b, replaced_by="s-abcdef")
         c = self.s.create_session("demo", "claude", title="old-one")
-        self.s.set_state(c["sid"], "closed")
+        self.s.set_lifecycle(c["sid"], "closed")
         out = self.cli("status")[1]
         self.assertNotIn("old-one", out)
         row_b = [l for l in out.splitlines() if "research" in l][0]

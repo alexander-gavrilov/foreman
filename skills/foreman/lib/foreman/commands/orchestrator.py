@@ -38,7 +38,7 @@ def _is_live_orch(rec):
         and rec.get("role") == "orchestrator"
         and sessions.is_open(rec)
         and rec.get("lifecycle") != "rotated"
-        and rec.get("state") not in ("gone", "rotated", "closed")
+        and rec.get("state") != "gone"
     )
 
 
@@ -166,7 +166,7 @@ def _adopt(args):
     if rec is not None:
         if rec.get("project") and rec["project"] != slug:
             raise CliError("session %s belongs to project %s, not %s" % (rec["sid"], rec["project"], slug), code=2)
-        if not sessions.is_open(rec) or rec.get("lifecycle") == "rotated" or rec.get("state") in ("gone", "rotated", "closed"):
+        if not sessions.is_open(rec) or rec.get("lifecycle") == "rotated" or rec.get("state") == "gone":
             raise CliError("cannot adopt %s: session is not active" % rec["sid"], code=2)
         tr = rec.get("transport") or {}
         tkind = args.transport or tr.get("kind")

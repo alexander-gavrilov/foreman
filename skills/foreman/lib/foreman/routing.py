@@ -185,7 +185,7 @@ def cold_cache_warning(session, now=None):
     older than 55 minutes), else None."""
     if not isinstance(session, dict):
         return None
-    if session.get("lifecycle") != "rotated" and session.get("state") != "rotated":
+    if session.get("lifecycle") != "rotated":
         return None
     stamp = session.get("last_event_at") or session.get("state_since")
     age = timeutil.age_seconds(stamp, now=now)
