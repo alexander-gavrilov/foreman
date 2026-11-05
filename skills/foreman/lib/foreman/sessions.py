@@ -85,6 +85,11 @@ def find_by_handle(handle, kind=None):
     return _prefer_live(matches)
 
 
+def find_by_agent_session_id(agent_session_id):
+    matches = [r for r in list_sessions() if r.get("agent_session_id") == agent_session_id]
+    return _prefer_live(matches)
+
+
 def _live(recs):
     return [r for r in recs if r.get("state") not in INACTIVE_STATES]
 
