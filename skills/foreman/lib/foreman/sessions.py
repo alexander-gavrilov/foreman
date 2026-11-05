@@ -178,10 +178,12 @@ def set_state(sid, state, at=None):
 
 # ---------------------------------------------------------------- inbox
 
-def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, msg_id=None, extra=None):
-    """Queue a message. With `key`, a message with the same key that is still undelivered suppresses the
-    new one (returns None). `msg_id` lets the caller embed the id in the text before queueing; `extra`
-    adds fields (e.g. {"asker": sid} on a question)."""
+def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, msg_id=None, extra=None,
+                  replace=False):
+    """Queue a message. With `key`, a message with the same key that is still undelivered suppresses the new
+    one (returns None); with `replace=True` it is updated in place to the new text instead, so the reader
+    sees the latest state. `msg_id` lets the caller embed the id in the text before queueing; `extra` adds
+    fields (e.g. {"asker": sid} on a question)."""
     msg = {"id": msg_id or ids.new_msg_id(), "ts": timeutil.now_iso(), "from": sender, "text": text,
            "kind": kind, "delivered_at": None}
     if extra:
@@ -189,15 +191,19 @@ def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, ms
     if key is None:
         return store.append_jsonl(paths.inbox_file(sid), msg)
     msg["key"] = key
-    path = paths.inbox_file(sid)
-    with store.locked(path):
-        if any(m.get("key") == key and not m.get("delivered_at") for m in store.read_jsonl(path)):
-            return None
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-    return msg
+    result = {}
+
+    def fn(rows):
+        for row in rows:
+            if row.get("key") == key and not row.get("delivered_at"):
+                if replace:
+                    row.update(text=text, ts=msg["ts"], **({"from": sender} if sender else {}))
+                return rows
+        rows.append(msg)
+        result["queued"] = msg
+        return rows
+    store.rewrite_jsonl(paths.inbox_file(sid), fn)
+    return result.get("queued")
 
 
 def inbox_all(sid):

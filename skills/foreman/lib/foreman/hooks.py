@@ -13,6 +13,7 @@ KEEP_OPEN_REASONS = ("clear", "resume")  # SessionEnd reasons after which the te
 BUSY_KINDS = ("prompt", "pre_tool", "post_tool")
 HEARTBEAT_STALE_INTERVALS = 3
 WARN_EVERY_S = 600
+PAST_IDS_KEPT = 20
 
 RULE_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "templates",
                              "project-rule.md")
@@ -89,6 +90,7 @@ def _recorded_orchestrator(asid, handles):
             if rec.get("role") != "orchestrator" or rec.get("lifecycle") == "closed":
                 continue
             owned = {rec.get("agent_session_id"), (rec.get("transport") or {}).get("handle")}
+            owned.update(rec.get("past_agent_session_ids") or [])
             if any(t in owned for t in tokens):
                 return True
         elif '"role": "orchestrator"' in text and any('"%s"' % t in text for t in tokens):
@@ -104,7 +106,8 @@ def _bind(agent, norm, env):
     asid = norm["agent_session_id"]
     recs = sessions.list_sessions()
     if asid:
-        matches = [r for r in recs if r.get("agent") == agent and r.get("agent_session_id") == asid]
+        matches = [r for r in recs if r.get("agent") == agent and
+                   (r.get("agent_session_id") == asid or asid in (r.get("past_agent_session_ids") or []))]
         rec = _newest_open(matches) or (matches[-1] if matches else None)
         if rec:
             return rec, False, False
@@ -175,10 +178,14 @@ def _next_state(rec, norm, created):
     return None
 
 
-def _field_updates(rec, norm):
+def _field_updates(rec, norm, rebind=False):
     upd = {"last_event_at": timeutil.now_iso()}
-    if norm["agent_session_id"] and norm["agent_session_id"] != rec.get("agent_session_id"):
-        upd["agent_session_id"] = norm["agent_session_id"]  # bound by terminal handle: re-bind (rule 1b)
+    asid, current = norm["agent_session_id"], rec.get("agent_session_id")
+    if asid and asid != current and (rebind or current is None) \
+            and asid not in (rec.get("past_agent_session_ids") or []):
+        upd["agent_session_id"] = asid  # bound by terminal handle: re-bind (rule 1b), remember the old id
+        if current:
+            upd["past_agent_session_ids"] = ((rec.get("past_agent_session_ids") or []) + [current])[-PAST_IDS_KEPT:]
     if norm["transcript_path"] and norm["transcript_path"] != rec.get("transcript_path"):
         upd["transcript_path"] = norm["transcript_path"]
     if norm["cwd"] and not rec.get("cwd"):
@@ -234,20 +241,21 @@ def _on_stop(agent, ad, rec, norm):
     """-> hook output for a Stop: the digest when messages are queued (claimed, so nobody else delivers
     them), else {} (and wake the orchestrator when a worker the orchestrator owns finished a turn)."""
     sid = rec["sid"]
-    if not norm["stop_hook_active"]:
-        claimed = sessions.inbox_claim(sid, claimer="stop-hook")
-        if claimed:
-            try:
-                out = ad.render_continue(digest.format_digest(claimed))
-            except Exception:
-                sessions.inbox_release(sid, [m["id"] for m in claimed])
-                raise
-            sessions.set_state(sid, "busy")  # the agent continues with the digest as its next input
-            return out
-    if rec.get("role") == "worker" and rec.get("owner") == "orchestrator":
+    # Also with stop_hook_active: that only means this Stop follows our own continuation. Messages that
+    # arrived meanwhile are delivered now; with nothing new queued the loop ends (it is bounded).
+    claimed = sessions.inbox_claim(sid, claimer="stop-hook")
+    if claimed:
+        try:
+            out = ad.render_continue(digest.format_digest(claimed))
+        except Exception:
+            sessions.inbox_release(sid, [m["id"] for m in claimed])
+            raise
+        sessions.set_state(sid, "busy")  # the agent continues with the digest as its next input
+        return out
+    if rec.get("role") == "worker":
         try:
             wake.queue_for_orchestrator(rec["project"], _wake_text(rec, norm), sender="foreman", kind="wake",
-                                        key="stop:" + sid)
+                                        key="stop:" + sid, background=True)
             if wake.find_orchestrator(rec["project"]) is not None:
                 _watch_warning(rec)
         except Exception as exc:
@@ -286,7 +294,7 @@ def _process(agent, event, payload, env):
         return {}
     os.makedirs(paths.sessions_dir(), exist_ok=True)
     with store.locked(os.path.join(paths.sessions_dir(), "_bind")):
-        rec, created, _ = _bind(agent, norm, env)
+        rec, created, by_handle = _bind(agent, norm, env)
     if rec is None:
         return _unbound_pre_tool(ad, norm, env) if norm["kind"] == "pre_tool" else {}
     sid = rec["sid"]
@@ -299,7 +307,7 @@ def _process(agent, event, payload, env):
         if blocked:
             out = ad.render_deny(blocked)
 
-    upd = _field_updates(rec, norm)
+    upd = _field_updates(rec, norm, rebind=by_handle)
     _refresh_context(agent, rec, norm, upd)
     sessions.update_session(sid, **upd)
     rec = dict(rec, **upd)

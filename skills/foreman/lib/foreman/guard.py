@@ -30,11 +30,16 @@ COORDINATION_READONLY = {"orca": {("terminal", "list"), ("terminal", "show"), ("
 # foreman subcommands an orchestrator may run. Value: None = any arguments, or a checker (see _check_foreman).
 FOREMAN_SAFE = {"status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "compact", "board",
                 "log", "stage", "watch", "clean", "work", "report", "gate", "orchestrator"}
+USER_ONLY_ORCHESTRATOR = ("adopt", "repair")
+FETCH_FLAGS = {"--prune", "-p", "--all", "-q", "--quiet", "-v", "--verbose"}
+REMOTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+MERGE_FLAGS = {"--squash", "-s", "--merge", "-m", "--rebase", "-r", "--auto"}
+MERGE_VALUE_FLAGS = {"--repo", "-R", "--match-head-commit", "--subject", "-t", "--body", "-b"}
 FIND_FORBIDDEN = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
 GIT_READONLY = {"status", "log", "diff", "show", "rev-parse", "rev-list", "ls-files", "ls-tree", "ls-remote",
                 "cat-file", "blame", "describe", "shortlog", "whatchanged", "diff-tree", "name-rev",
                 "merge-base", "for-each-ref", "show-ref", "grep", "check-ignore", "count-objects",
-                "show-branch", "cherry", "diff-index", "diff-files", "version", "fetch"}
+                "show-branch", "cherry", "diff-index", "diff-files", "version"}
 # options of the read-only subcommands that write a file or run a program
 GIT_FORBIDDEN_OPTIONS = ("--output", "--upload-pack", "--receive-pack", "--exec", "--ext-diff",
                          "--open-files-in-pager", "--textconv", "--config-env")
@@ -112,8 +117,8 @@ def _scan(cmd):
                     part.append(cmd[j + 1])
                     j += 2
                     continue
-                if cmd[j] == "`" or cmd.startswith("$(", j):
-                    raise _Reject("command substitution")
+                if cmd[j] in "`$":
+                    raise _Reject("shell expansion inside double quotes (use single quotes)")
                 part.append(cmd[j])
                 j += 1
             if j >= n:
@@ -121,8 +126,8 @@ def _scan(cmd):
             buf.append("".join(part))
             in_word = True
             i = j + 1
-        elif c == "`" or cmd.startswith("$(", i):
-            raise _Reject("command substitution")
+        elif c in "`$":
+            raise _Reject("command or parameter substitution")
         elif c in "()":
             raise _Reject("subshell or process substitution")
         elif c == "#" and not in_word:
@@ -172,6 +177,8 @@ def _scan(cmd):
             else:
                 toks.append(("redir", "<"))
                 i += 1
+        elif c in "{}*?[":
+            raise _Reject("unquoted brace or glob expansion (bash would expand it after the check)")
         else:
             buf.append(c)
             in_word = True
@@ -231,6 +238,8 @@ def _check_git(args):
     if i >= len(args):
         raise _Reject("git without a subcommand")
     sub, rest = args[i], args[i + 1:]
+    if sub == "fetch":
+        return _check_fetch(rest)
     if sub in GIT_READONLY:
         for a in rest:
             if _git_dangerous_option(sub, a):
@@ -278,8 +287,42 @@ def _check_git(args):
     raise _Reject("git %s" % sub)
 
 
+def _check_fetch(rest):
+    """`git fetch [--prune|--all|-q|-v] [<remote name>]`: a refspec (or a path or URL as the remote) would let
+    the fetch move local branches."""
+    positional = 0
+    for a in rest:
+        if a in FETCH_FLAGS:
+            continue
+        if a.startswith(("-", "+")) or not REMOTE_NAME.match(a):
+            raise _Reject("git fetch %s" % a)
+        positional += 1
+    if positional > 1:
+        raise _Reject("git fetch with a refspec")
+
+
+def _check_merge(rest):
+    """gh pr merge <pr> [--squash|--merge|--rebase|--auto] [--repo R] ...: never --delete-branch (gh would
+    switch the orchestrator's working tree to the default branch and delete the local branch)."""
+    skip = False
+    for a in rest:
+        if skip:
+            skip = False
+            continue
+        name, eq, _ = a.partition("=")
+        if a.startswith("-"):
+            if name in MERGE_FLAGS and not eq:
+                continue
+            if name in MERGE_VALUE_FLAGS:
+                skip = not eq
+                continue
+            raise _Reject("gh pr merge %s" % a)
+
+
 def _check_gh(args):
     if len(args) >= 2 and args[0] in GH_ALLOWED and args[1] in GH_ALLOWED[args[0]]:
+        if args[:2] == ["pr", "merge"]:
+            _check_merge(args[2:])
         return
     raise _Reject("gh %s" % " ".join(args[:2]))
 
@@ -300,19 +343,18 @@ def _check_foreman(args):
         raise _Reject("foreman option %s" % sub)
     if sub not in FOREMAN_SAFE:
         raise _Reject("`foreman %s` is not available to an orchestrator" % sub)
+    action = rest[0] if rest else None  # the action must come right after the subcommand, no option before it
     if sub == "board":
-        action = next((a for a in rest if not a.startswith("-")), None)
         if action not in ("show", "add", "set", "done"):
             raise _Reject("foreman board %s" % (action or ""))
         for a in rest:
             if _abbrev_of(a, "--check", 3) or a == "--check" or re.match(r"^check\s*=", a, re.I):
                 raise _Reject("an orchestrator cannot set or run board checks")
     elif sub == "orchestrator":
-        action = next((a for a in rest if not a.startswith("-")), None)
-        if action is None or "adopt".startswith(action):
-            raise _Reject("`foreman orchestrator adopt` is user-only")
+        if not action or action.startswith("-") or any(name.startswith(action) for name in USER_ONLY_ORCHESTRATOR):
+            raise _Reject("`foreman orchestrator %s` is user-only or unknown" % (action or ""))
     elif sub == "watch":
-        if next((a for a in rest if not a.startswith("-")), None) != "list":
+        if action != "list":
             raise _Reject("only `foreman watch list` is allowed")
     elif sub == "clean":
         if not any(_abbrev_of(a, "--dry-run", 3) for a in rest):
@@ -320,9 +362,10 @@ def _check_foreman(args):
 
 
 def _check_coordination(cmd, args):
-    positional = [a for a in args if not a.startswith("-")][:2]
-    if len(positional) < 2 or tuple(positional) not in COORDINATION_READONLY[cmd]:
-        raise _Reject("`%s %s` is not a read-only subcommand" % (cmd, " ".join(positional)))
+    """orca / herdr: the first two words must be exactly an allowed read-only pair (an option placed before
+    the subcommand would let its value pass for the subcommand while the tool runs another)."""
+    if tuple(args[:2]) not in COORDINATION_READONLY[cmd]:
+        raise _Reject("`%s %s` is not a read-only subcommand" % (cmd, " ".join(args[:2])))
 
 
 def _check_segment(words):
@@ -373,7 +416,9 @@ def check_command(cmd, project=None):
 
 def unverifiable(project=None):
     """The block message when the guard itself could not run (fail closed)."""
-    return _block("the guard could not verify this call", project)
+    return _block("the guard could not verify this call; if this keeps happening the user can repair the "
+                  "orchestrator's session record with `foreman orchestrator repair` (run by the user, not by "
+                  "you)", project)
 
 
 def is_allowed_tool(name):

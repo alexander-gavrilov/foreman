@@ -1,4 +1,8 @@
 """Deliver queued inbox messages to idle sessions through their transport (spec 4.7)."""
+import os
+import subprocess
+import sys
+
 from foreman import digest, sessions
 from foreman.transports import get_transport
 from foreman.transports.base import TerminalGone
@@ -55,3 +59,22 @@ def deliver_pending(sid):
         sessions.inbox_release(sid, [m["id"] for m in claimed])
         return "queued"
     return "delivered"
+
+
+LIB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_children = []  # keep the Popen objects until they exit (no ResourceWarning in long-lived callers)
+
+
+def spawn_deliver(sid):
+    """Run `foreman deliver <sid>` in a detached child. Used from hooks, which must return fast: agents kill
+    a hook that outlives its timeout, and the transport CLIs can be slow."""
+    code = ("import sys; sys.path.insert(0, %r); from foreman.cli import main; "
+            "sys.exit(main(['deliver', %r]))" % (LIB_DIR, sid))
+    try:
+        _children[:] = [c for c in _children if c.poll() is None]
+        _children.append(subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL,
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                          start_new_session=True, close_fds=True))
+        return True
+    except OSError:
+        return False

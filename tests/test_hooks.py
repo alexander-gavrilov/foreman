@@ -131,6 +131,26 @@ class BindingTest(HookCase):
         self.assertEqual((got["agent_session_id"], got["role"], got["owner"]), ("new", "orchestrator", "user"))
         self.assertEqual(len(self.sessions.list_sessions()), 1)
 
+    def test_old_agent_session_ids_still_find_the_record(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", state="idle", agent_session_id="old")
+        edit = lambda sid, e: self.hook("claude", "PreToolUse", claude(  # noqa: E731
+            "PreToolUse", sid=sid, cwd=self.proj["path"], tool_name="Write"), e)
+        self.assertEqual(edit("new", env)["hookSpecificOutput"]["permissionDecision"], "deny")  # re-bound
+        got = self.rec(rec["sid"])
+        self.assertEqual((got["agent_session_id"], got["past_agent_session_ids"]), ("new", ["old"]))
+        # a hook carrying the old id and no terminal environment is the same session, not a new worker
+        self.assertEqual(edit("old", {})["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertEqual(len(self.sessions.list_sessions()), 1)
+        self.assertEqual(self.rec(rec["sid"])["agent_session_id"], "new")  # the old id does not re-bind back
+
+    def test_old_ids_are_recognised_when_the_pipeline_fails(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", state="idle", agent_session_id="old")
+        self.hook("claude", "UserPromptSubmit", claude("UserPromptSubmit", sid="new", cwd=self.proj["path"]), env)
+        with mock.patch("foreman.hooks._bind", side_effect=RuntimeError("boom")):
+            out = self.hook("claude", "PreToolUse", claude("PreToolUse", sid="old", cwd=self.proj["path"],
+                                                           tool_name="Write"), {})
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_closed_session_is_not_rebound(self):
         rec, env = self.pending_launch(state="idle", agent_session_id="old")
         self.sessions.set_lifecycle(rec["sid"], "closed")
@@ -306,6 +326,14 @@ class GuardHookTest(HookCase):
                                                  "tool_name": "mcp__x__y", "tool_input": {}}, env)
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
 
+    def test_expansion_bypasses_are_denied_end_to_end(self):
+        rec, env = self.orch()
+        run = lambda cmd: self.hook("claude", "PreToolUse", claude(  # noqa: E731
+            "PreToolUse", cwd=self.proj["path"], tool_name="Bash", tool_input={"command": cmd}), env)
+        for bad in ("git diff {--output=PWNED,HEAD}", "find sub ${X:--delete}",
+                    "orca terminal --text list send --terminal t1 --text 'x' --enter", "git fetch . HEAD:other"):
+            self.assertEqual(run(bad)["hookSpecificOutput"]["permissionDecision"], "deny", bad)
+
     def test_claude_bash_with_foreman_table(self):
         rec, env = self.orch()
         run = lambda cmd: self.hook("claude", "PreToolUse", claude(  # noqa: E731
@@ -347,17 +375,22 @@ class WakeOnWorkerStopTest(HookCase):
         self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"]), self.env)
         self.assertTrue(self.sessions.inbox_pending(self.orch["sid"])[0]["text"].endswith("finished a turn"))
 
-    def test_second_stop_is_deduped_until_delivered(self):
-        for _ in range(2):
-            self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"], last_assistant_message="x"), self.env)
-        self.assertEqual(len(self.sessions.inbox_pending(self.orch["sid"])), 1)
+    def test_second_stop_replaces_the_pending_line_with_the_latest_turn(self):
+        for text in ("first turn", "second turn"):
+            self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"], last_assistant_message=text), self.env)
+        pend = self.sessions.inbox_pending(self.orch["sid"])
+        self.assertEqual(len(pend), 1)
+        self.assertTrue(pend[0]["text"].endswith("second turn"))
 
-    def test_orchestrator_and_user_sessions_do_not_wake(self):
+    def test_orchestrators_do_not_wake_themselves_but_user_owned_workers_do(self):
         o_rec, o_env = self.pending_launch(role="orchestrator", title="orch2", state="busy")
         self.hook("claude", "Stop", claude("Stop", sid="o2", cwd=self.proj["path"]), o_env)
-        u = self.sessions.create_session(self.slug, "claude", title="mine", owner="user", agent_session_id="u1")
-        self.hook("claude", "Stop", claude("Stop", sid="u1", cwd=self.proj["path"]))
-        self.assertEqual(self.sessions.inbox_pending(self.orch["sid"]), [])
+        self.assertEqual(self.sessions.inbox_pending(o_rec["sid"]), [])  # (o_rec is now the project's orchestrator)
+        self.sessions.create_session(self.slug, "claude", title="mine", owner="user", agent_session_id="u1")
+        self.hook("claude", "Stop", claude("Stop", sid="u1", cwd=self.proj["path"], last_assistant_message="hi"))
+        pend = self.sessions.inbox_pending(o_rec["sid"])
+        self.assertEqual(len(pend), 1)
+        self.assertIn("mine", pend[0]["text"])
 
     def test_agy_not_fully_idle_does_not_wake(self):
         rec, env = self.pending_launch(title="agy-w", agent="antigravity")
@@ -377,13 +410,25 @@ class DeliveryAtStopTest(HookCase):
         self.assertEqual(self.sessions.inbox_pending(rec["sid"]), [])
         self.assertEqual(self.rec(rec["sid"])["state"], "busy")  # it continues with the digest
 
-    def test_stop_hook_active_does_not_loop(self):
+    def test_stop_hook_active_blocks_again_only_for_new_messages(self):
         rec, env = self.pending_launch(role="orchestrator", title="orch", state="busy")
-        self.sessions.inbox_enqueue(rec["sid"], "later")
-        out = self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"], stop_hook_active=True), env)
-        self.assertEqual(out, {})
-        self.assertEqual(len(self.sessions.inbox_pending(rec["sid"])), 1)
-        self.assertEqual(self.rec(rec["sid"])["state"], "idle")
+        active = claude("Stop", cwd=self.proj["path"], stop_hook_active=True)
+        self.assertEqual(self.hook("claude", "Stop", active, env), {})  # nothing queued: no loop
+        self.sessions.inbox_enqueue(rec["sid"], "arrived during the continuation")
+        out = self.hook("claude", "Stop", active, env)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("arrived during the continuation", out["reason"])
+        self.assertEqual(self.hook("claude", "Stop", active, env), {})  # bounded: delivered once
+
+    def test_worker_finishing_during_the_digest_continuation_is_not_stranded(self):
+        orch, oenv = self.pending_launch(role="orchestrator", title="orch", state="busy")
+        w, wenv = self.pending_launch(title="fm-api")
+        self.sessions.inbox_enqueue(orch["sid"], "first")
+        self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"]), oenv)  # digest, orchestrator continues
+        self.hook("claude", "Stop", claude("Stop", sid="w-1", cwd=self.proj["path"], last_assistant_message="done"), wenv)
+        out = self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"], stop_hook_active=True), oenv)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("fm-api", out["reason"])
 
     def test_codex_uses_block(self):
         rec, env = self.pending_launch(agent="codex", title="cx")
@@ -522,6 +567,12 @@ class FailClosedTest(HookCase):
         self.assertTrue(self.deny(out))
         self.assertIn("foreman open", out["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_denial_names_the_recovery_step(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", agent_session_id="cl-1")
+        with mock.patch("foreman.hooks._bind", side_effect=RuntimeError("boom")):
+            out = self.hook("claude", "PreToolUse", self.edit(env), env)
+        self.assertIn("foreman orchestrator repair", out["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_exception_in_the_pipeline_denies_for_a_recorded_orchestrator_only(self):
         orch, oenv = self.pending_launch(role="orchestrator", title="orch", agent_session_id="cl-1")
         worker, wenv = self.pending_launch(title="w", agent_session_id="cl-2")
@@ -642,12 +693,30 @@ class WatchHeartbeatWarningTest(HookCase):
         self.stop()
         self.assertEqual(len(self.warnings()), 1)
 
-    def test_wake_is_delivered_at_once_to_an_idle_orchestrator(self):
+    def test_wake_is_delivered_at_once_to_an_idle_orchestrator_by_a_detached_child(self):
+        import time
         self.sessions.set_state(self.orch["sid"], "idle")
         self.ft.set_idle(self.orch["transport"]["handle"], True)
         self.stop()
+        deadline = time.time() + 20
+        while time.time() < deadline and not self.ft.inputs(self.orch["transport"]["handle"]):
+            time.sleep(0.1)
         self.assertIn("finished a turn", self.ft.inputs(self.orch["transport"]["handle"])[-1])
         self.assertEqual(self.sessions.inbox_pending(self.orch["sid"]), [])
+
+    def test_the_hook_itself_never_calls_the_transport(self):
+        from foreman import delivery
+        self.sessions.set_state(self.orch["sid"], "idle")
+        with mock.patch.object(delivery, "deliver_pending", side_effect=AssertionError("synchronous")), \
+                mock.patch.object(delivery, "spawn_deliver") as spawn:
+            self.stop()
+        spawn.assert_called_once_with(self.orch["sid"])
+
+    def test_a_busy_orchestrator_gets_no_child_process(self):
+        from foreman import delivery
+        with mock.patch.object(delivery, "spawn_deliver") as spawn:
+            self.stop()
+        spawn.assert_not_called()
 
 
 class StopClaimTest(HookCase):

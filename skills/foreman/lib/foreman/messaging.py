@@ -8,6 +8,7 @@ from foreman.cliutil import CliError, find_session
 from foreman.transports.base import TerminalGone
 
 HANDLE_ENV = ("ORCA_TERMINAL_HANDLE", "HERDR_PANE_ID", "FOREMAN_TERMINAL_HANDLE")
+AGENT_SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID")
 GONE_TEXT = "терминал оркестратора закрыт"
 
 
@@ -24,6 +25,13 @@ def current_session(env=None):
             rec = sessions.find_by_handle(env[key])
             if rec:
                 return rec
+    # a session reached without a terminal handle (claude-msg) still exports its own agent session id
+    known = [env[k] for k in AGENT_SESSION_ENV if env.get(k)]
+    if known:
+        found = [r for r in sessions.list_sessions() if sessions.is_open(r) and
+                 (r.get("agent_session_id") in known or set(known) & set(r.get("past_agent_session_ids") or []))]
+        if found:
+            return found[-1]
     return None
 
 
@@ -107,36 +115,50 @@ def reply_msg_id(ask_id):
 
 
 def _find_ask(msg_id):
+    """-> (sid of the asked session, the ask message) or (None, None)."""
     for rec in sessions.list_sessions():
         for m in sessions.inbox_all(rec["sid"]):
             if m.get("id") == msg_id and m.get("kind") == "ask":
-                return m
-    return None
+                return rec["sid"], m
+    return None, None
 
 
 def reply(msg_id, text, sender=None):
     """Answer an ask: queued into the asker's inbox (delivered at its next idle point, or at once if it is
-    idle now) and recorded in replies/<msgid>.json for `ask --wait`. CliError for an unknown or already
-    answered message id."""
+    idle now) and recorded in replies/<msgid>.json for `ask --wait`. Only the asked session (or a person at
+    the CLI, who has no session) may answer, and only once. CliError otherwise."""
     try:
         path = paths.reply_file(msg_id)
     except ValueError:
         raise CliError("unknown message %r" % msg_id)
-    if os.path.exists(path):
-        raise CliError("message %s is already answered" % msg_id)
-    question = _find_ask(msg_id)
+    target, question = _find_ask(msg_id)
     if question is None:
         raise CliError("unknown message %r (no pending question with this id)" % msg_id)
+    me = current_session()
+    if me is not None and me["sid"] != target:
+        raise CliError("question %s was asked of another session, not of you" % msg_id)
+    if os.path.exists(path):
+        raise CliError("message %s is already answered" % msg_id)
     sender = sender or current_sender()
     asker = question.get("asker")
     asker_rec = sessions.load_session(asker) if asker else None
-    if asker_rec is not None and sessions.is_open(asker_rec):
+    queue = asker_rec is not None and sessions.is_open(asker_rec)
+    if queue:
         quoted = " ".join(str(question.get("text", "")).split("\nReply with:")[0].split())[:80]
-        sessions.inbox_enqueue(asker, "answer to your question %s («%s»): %s" % (msg_id, quoted, text),
-                               sender=sender, kind="reply", msg_id=reply_msg_id(msg_id))
-    store.write_json(path, {"id": msg_id, "from": sender, "text": text, "asker": asker,
-                            "ts": timeutil.now_iso()})
-    if asker_rec is not None and sessions.is_open(asker_rec):
+        # keyed: of several concurrent repliers only one gets its row into the inbox
+        row = sessions.inbox_enqueue(asker, "answer to your question %s («%s»): %s" % (msg_id, quoted, text),
+                                     sender=sender, kind="reply", msg_id=reply_msg_id(msg_id),
+                                     key="reply:" + msg_id)
+        if row is None:
+            raise CliError("message %s is already answered" % msg_id)
+    try:
+        store.write_json_exclusive(path, {"id": msg_id, "from": sender, "text": text, "asker": asker,
+                                          "ts": timeutil.now_iso()})
+    except FileExistsError:
+        if queue:  # a stray row of a lost race must not be delivered
+            sessions.inbox_mark_delivered(asker, [reply_msg_id(msg_id)])
+        raise CliError("message %s is already answered" % msg_id)
+    if queue:
         try:
             delivery.deliver_pending(asker)
         except Exception:

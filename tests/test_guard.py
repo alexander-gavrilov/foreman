@@ -24,7 +24,9 @@ ALLOWED = [
     "foreman --version", "foreman open --project demo --agent claude",
     "orca terminal list --json", "orca terminal read --terminal t1", "orca terminal wait --terminal t1",
     "orca worktree ps --json", "herdr pane list", "herdr agent wait w1 --until idle", "herdr agent read w1",
-    "git fetch origin", "git -C /repo log -3", "git remote -v", "git blame README.md",
+    "git fetch", "git fetch origin", "git fetch --prune origin", "git fetch --all", "git fetch -q origin",
+    "gh pr merge 12 --merge --auto", "gh pr merge 12 -R owner/repo --rebase", "gh pr merge 12 --squash --subject 'x y'",
+    "git -C /repo log -3", "git remote -v", "git blame README.md",
     "git diff --stat --name-only", "git grep -n foo -- src",
 ]
 
@@ -65,6 +67,22 @@ BLOCKED = [
     "git ls-remote --upload-pack=./x .", "git fetch --upload-pack=./x origin", "git fetch --upload=./x origin",
     "tree -o out.txt", "tree -ao out.txt", "tree --output out.txt", "file -C", "file -mC magic", "file --compile",
     "rg --pre-glob '*.x' foo", "rg --pre=./x foo", "find . -ok rm {} ;", "find . -fls out.txt",
+    # review 2: expansion after approval (brace, parameter, glob)
+    "git diff {--output=PWNED1,HEAD}", "git diff ${X:---output=PWNED2}", "find sub ${X:--delete}",
+    "foreman board set t1 {'check=touch PWNED',}", "rg ${X:---pre=sh} x",
+    "echo ${FOREMAN_A:=--output=x}; git diff $FOREMAN_A", "git diff $X", 'git diff "$X"', 'echo "cost $5"',
+    "ls *", "cat ?", "ls [a-b]*", "git diff *.py", "echo $HOME", "echo {a,b}", "git diff --$X",
+    # review 2: options before subcommands
+    "orca terminal --text list send --terminal t1 --text 'rm -rf x' --enter", "herdr pane --pane list run w1:p1 x",
+    "orca --json terminal list", "orca terminal --json list", "herdr --no-color pane list",
+    "foreman orchestrator --project x adopt term_1", "foreman board --project x done t1",
+    "foreman watch --project x list", "foreman orchestrator repair", "foreman orchestrator", "foreman orchestrator --help",
+    # review 2: fetch may only fetch, never move refs
+    "git fetch . HEAD:other", "git fetch origin +HEAD:refs/heads/main", "git fetch origin main",
+    "git fetch --tags origin", "git fetch origin:x", "git fetch ../other", "git fetch --prune . ",
+    # review 2: gh pr merge must not delete the local branch
+    "gh pr merge 12 --delete-branch", "gh pr merge 12 -d", "gh pr merge 12 -sd", "gh pr merge 12 --delete-branch=true",
+    "gh pr merge 12 --squash --admin", "gh pr merge 12 --del", "gh -R x pr merge 12",
     "sleep 5", "du -sh .", "whoami", "uname -a", "basename x", "true", "git help log",
 ]
 
@@ -81,6 +99,9 @@ class GuardCommandTest(unittest.TestCase):
     def test_blocked(self):
         for cmd in BLOCKED:
             self.assertIsNotNone(self.g.check_command(cmd), "should be blocked: %r" % cmd)
+
+    def test_unverifiable_message_names_the_recovery_step(self):
+        self.assertIn("foreman orchestrator repair", self.g.unverifiable())
 
     def test_table_size(self):
         self.assertGreaterEqual(len(ALLOWED) + len(BLOCKED), 30)

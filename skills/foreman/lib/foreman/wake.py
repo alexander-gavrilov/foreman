@@ -21,23 +21,28 @@ def find_orchestrator(project):
     return live[-1] if live else None
 
 
-def queue_for_orchestrator(project, text, sender="foreman", kind="wake", key=None):
+def queue_for_orchestrator(project, text, sender="foreman", kind="wake", key=None, background=False):
     """Queue `text` for the project's orchestrator and, if both its record and its terminal say idle,
-    type it now (a Stop hook would never fire for a session that is already idle). Returns the queued
-    message, or None when there is no orchestrator or `key` deduplicated it."""
+    deliver it now (a Stop hook would never fire for a session that is already idle). With `key`, a pending
+    message under the same key is updated to the new text. `background=True` (hooks) delivers from a
+    detached child process instead of in the caller. Returns the newly queued message, or None when there
+    is no orchestrator or the key matched a pending message."""
     orch = find_orchestrator(project)
     if orch is None:
         return None
-    msg = sessions.inbox_enqueue(orch["sid"], text, sender=sender, kind=kind, key=key)
-    if msg is not None and orch.get("state") == "idle":
+    msg = sessions.inbox_enqueue(orch["sid"], text, sender=sender, kind=kind, key=key, replace=key is not None)
+    if orch.get("state") == "idle":
         try:
-            delivery.deliver_pending(orch["sid"])
+            if background:
+                delivery.spawn_deliver(orch["sid"])
+            else:
+                delivery.deliver_pending(orch["sid"])
         except Exception:
             pass
     return msg
 
 
 def wake(project, text, key=None):
-    """Queue a one-line event for the orchestrator of `project`. `key` deduplicates: the same key is queued
-    at most once until delivered. Returns True if queued."""
+    """Queue a one-line event for the orchestrator of `project`. `key` makes it a single pending line: a
+    newer text replaces the pending one. Returns True if a new message was queued."""
     return queue_for_orchestrator(project, text, sender="foreman", kind="wake", key=key) is not None

@@ -96,8 +96,11 @@ class AskReplyTest(RuntimeCase):
         self.assertEqual(self.sessions.inbox_pending(self.sessions.find("fm-api")["sid"]), [])
 
     def test_reply_unblocks_wait_and_is_not_delivered_twice(self):
+        from foreman import messaging
         w = self.session(title="fm-api", idle=False, state="busy")
         asker = self.session(role="orchestrator", title="orch", idle=False, state="busy")
+        # the replier thread acts as the asked session, the main thread as the asker
+        who = lambda env=None: w if threading.current_thread().name == "replier" else asker  # noqa: E731
 
         def answer():
             deadline = time.time() + 5
@@ -107,9 +110,9 @@ class AskReplyTest(RuntimeCase):
                     foreman("reply", pend[0]["id"], "all green")
                     return
                 time.sleep(0.05)
-        t = threading.Thread(target=answer)
+        t = threading.Thread(target=answer, name="replier")
         t.start()
-        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": asker["transport"]["handle"]}):
+        with mock.patch.object(messaging, "current_session", who):
             code, out, _ = foreman("ask", "fm-api", "status?", "--wait", "10")
         t.join()
         self.assertEqual(code, 0)
@@ -130,6 +133,67 @@ class AskReplyTest(RuntimeCase):
         self.assertEqual((pend[0]["from"], pend[0]["kind"]), ("fm-api", "reply"))
         self.assertIn("all green", pend[0]["text"])
         self.assertIn(mid, pend[0]["text"])
+
+    def test_only_the_asked_session_may_reply(self):
+        w = self.session(title="fm-api", idle=False, state="busy")
+        other = self.session(title="other", idle=False, state="busy", handle=self.term("other"))
+        foreman("ask", "fm-api", "q")
+        mid = self.sessions.inbox_pending(w["sid"])[0]["id"]
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": other["transport"]["handle"]}):
+            code, _, err = foreman("reply", mid, "forged")
+        self.assertEqual(code, 2)
+        self.assertIn("not of you", err)
+        from foreman import paths
+        self.assertFalse(os.path.exists(paths.reply_file(mid)))
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": w["transport"]["handle"]}):
+            self.assertEqual(foreman("reply", mid, "real")[0], 0)
+
+    def test_two_replies_race_only_one_wins_and_one_row_is_queued(self):
+        from foreman import messaging, paths
+        w = self.session(title="fm-api", idle=False, state="busy")
+        asker = self.session(role="orchestrator", title="orch", idle=False, state="busy")
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": asker["transport"]["handle"]}):
+            foreman("ask", "fm-api", "q")
+        mid = self.sessions.inbox_pending(w["sid"])[0]["id"]
+        outcomes = []
+
+        def attempt(text):
+            try:
+                messaging.reply(mid, text, sender="fm-api")
+                outcomes.append("ok")
+            except Exception as exc:
+                outcomes.append(type(exc).__name__)
+        threads = [threading.Thread(target=attempt, args=(t,)) for t in ("a", "b", "c")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(outcomes.count("ok"), 1, outcomes)
+        rows = [m for m in self.sessions.inbox_all(asker["sid"]) if m["kind"] == "reply"]
+        self.assertEqual(len(rows), 1)
+        from foreman import store
+        self.assertEqual(store.read_json(paths.reply_file(mid))["text"], rows[0]["text"].rsplit(": ", 1)[1])
+
+    def test_asker_is_found_through_the_agents_own_session_variables(self):
+        w = self.session(title="fm-api", idle=False, state="busy")
+        for var, agent in (("CLAUDE_CODE_SESSION_ID", "claude"), ("CODEX_THREAD_ID", "codex"),
+                           ("ANTIGRAVITY_CONVERSATION_ID", "antigravity")):
+            asker = self.sessions.create_session(self.slug, agent, title="a-" + agent, state="busy",
+                                                 agent_session_id="id-" + agent)  # no terminal at all
+            with mock.patch.dict(os.environ, {var: "id-" + agent}):
+                foreman("ask", "fm-api", "q from " + agent)
+            mid = self.sessions.inbox_pending(w["sid"])[-1]["id"]
+            foreman("reply", mid, "ok " + agent)
+            pend = self.sessions.inbox_pending(asker["sid"])
+            self.assertEqual(len(pend), 1, var)
+            self.assertIn("ok " + agent, pend[0]["text"])
+            self.sessions.inbox_mark_delivered(w["sid"])
+
+    def test_current_session_also_matches_past_agent_session_ids(self):
+        from foreman import messaging
+        s = self.session(title="x")
+        self.sessions.update_session(s["sid"], agent_session_id="new", past_agent_session_ids=["old"])
+        self.assertEqual(messaging.current_session({"CLAUDE_CODE_SESSION_ID": "old"})["sid"], s["sid"])
 
     def test_reply_to_idle_asker_is_typed_at_once(self):
         w = self.session(title="fm-api", idle=False, state="busy")

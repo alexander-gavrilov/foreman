@@ -42,6 +42,17 @@ class InboxKeyTest(RuntimeCase):
         self.sessions.inbox_mark_delivered(s["sid"])
         self.assertIsNotNone(self.sessions.inbox_enqueue(s["sid"], "z", key="k1"))
 
+    def test_replace_updates_the_pending_message_in_place(self):
+        s = self.session()
+        first = self.sessions.inbox_enqueue(s["sid"], "old text", key="k", replace=True)
+        self.assertIsNotNone(first)
+        self.assertIsNone(self.sessions.inbox_enqueue(s["sid"], "new text", key="k", replace=True))
+        pend = self.sessions.inbox_pending(s["sid"])
+        self.assertEqual([(m["id"], m["text"]) for m in pend], [(first["id"], "new text")])
+        self.sessions.inbox_mark_delivered(s["sid"])
+        self.assertIsNotNone(self.sessions.inbox_enqueue(s["sid"], "after delivery", key="k", replace=True))
+        self.assertEqual(len(self.sessions.inbox_all(s["sid"])), 2)
+
     def test_explicit_msg_id_and_default_unchanged(self):
         s = self.session()
         m = self.sessions.inbox_enqueue(s["sid"], "x", msg_id="m-deadbeef")
@@ -103,13 +114,13 @@ class WakeTest(RuntimeCase):
         from foreman import wake
         self.assertFalse(wake.wake(self.slug, "w finished", "k"))
 
-    def test_queues_and_dedupes(self):
+    def test_queues_once_and_keeps_the_latest_text_under_the_same_key(self):
         from foreman import wake
         o = self.session(role="orchestrator", title="orch", idle=False, state="busy")
         self.assertTrue(wake.wake(self.slug, "w finished", "k"))
         self.assertFalse(wake.wake(self.slug, "w finished again", "k"))
         pend = self.sessions.inbox_pending(o["sid"])
-        self.assertEqual([m["text"] for m in pend], ["w finished"])
+        self.assertEqual([m["text"] for m in pend], ["w finished again"])
         self.assertEqual(pend[0]["kind"], "wake")
 
     def test_found_by_role_when_project_field_missing(self):
