@@ -160,7 +160,8 @@ def absorb_strays(rec):
         otr = other.get("transport") or {}
         if (other["sid"] == rec["sid"] or not is_open(other) or other.get("agent") != rec.get("agent")
                 or otr.get("handle") != tr["handle"] or otr.get("kind") != tr.get("kind")
-                or other.get("role") != "worker" or other.get("owner") != "user"):
+                or not ((other.get("role") == "worker" and other.get("owner") == "user")
+                        or other.get("pending_orchestrator"))):
             continue
         fields = {k: other[k] for k in ABSORBED_FIELDS if other.get(k) is not None}
         if other.get("agent_session_id"):
@@ -173,6 +174,68 @@ def absorb_strays(rec):
                        agent_session_id=None)
         merged.append(other["sid"])
     return merged
+
+
+# ---------------------------------------------------------------- pending orchestrator launch (D54)
+
+PENDING_TTL_S = 180
+
+
+def _bind_lock():
+    return os.path.join(paths.sessions_dir(), "_bind")
+
+
+def mark_pending_orchestrator(slug, agent, cwd, pid=None):
+    """Written by `foreman open` BEFORE it launches an orchestrator, under the lock the hook pipeline binds
+    under. While it is fresh, a hook from an unknown session of that agent in that project binds as the pending
+    orchestrator (guarded) instead of being auto-registered as a user worker."""
+    os.makedirs(paths.sessions_dir(), exist_ok=True)
+    marker = {"project": slug, "agent": agent, "cwd": cwd, "created_at": timeutil.now_iso(),
+              "pid": os.getpid() if pid is None else pid}
+    with store.locked(_bind_lock()):
+        store.write_json(paths.pending_orchestrator_file(slug), marker)
+    return marker
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, ValueError, TypeError, OverflowError):
+        return True
+    return True
+
+
+def pending_orchestrator(slug):
+    """The fresh pending-orchestrator marker of the project, else None (older than 180 s or launcher gone).
+    Read-only and lock-free, so the hook pipeline can call it while it holds the binding lock."""
+    marker = store.read_json(paths.pending_orchestrator_file(slug), None)
+    if not isinstance(marker, dict):
+        return None
+    age = timeutil.age_seconds(marker.get("created_at"))
+    if age is None or age < 0 or age >= PENDING_TTL_S or not _pid_alive(marker.get("pid")):
+        return None
+    return marker
+
+
+def clear_pending_orchestrator(slug):
+    with store.locked(_bind_lock()):
+        try:
+            os.unlink(paths.pending_orchestrator_file(slug))
+        except OSError:
+            pass
+
+
+def discard_pending_strays(slug):
+    """A launch that failed leaves no orchestrator: close what the hooks bound as the pending one. Returns sids."""
+    out = []
+    with store.locked(_bind_lock()):
+        for rec in list_sessions(slug):
+            if rec.get("pending_orchestrator") and is_open(rec):
+                set_lifecycle(rec["sid"], "closed")
+                out.append(rec["sid"])
+    return out
 
 
 def is_open(rec):

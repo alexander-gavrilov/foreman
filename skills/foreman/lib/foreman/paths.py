@@ -68,6 +68,10 @@ def sessions_dir():
     return _join("sessions")
 
 
+def pending_orchestrator_file(slug):
+    return _join("sessions", "pending", _name(slug) + ".json")
+
+
 def session_file(sid):
     return _join("sessions", _name(sid) + ".json")
 

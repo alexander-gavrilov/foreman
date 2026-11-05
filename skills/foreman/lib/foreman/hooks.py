@@ -123,15 +123,22 @@ def _bind(agent, norm, env):
     proj = projects.project_for_path(norm["cwd"]) if norm["cwd"] else None
     if proj is None:
         return None, False, False
+    pending = sessions.pending_orchestrator(proj["slug"])
+    pending = pending if pending and pending.get("agent") == agent else None
     transport = {"kind": None, "handle": None}
     for key, handle in handle_env:
         holder = _newest_open([r for r in recs if (r.get("transport") or {}).get("handle") == handle])
         if holder is None:
             transport = {"kind": _terminal_kind(key), "handle": handle}
             break
+    # D54: while `foreman open` is launching this project's orchestrator and has not recorded it yet, an unknown
+    # session of that agent in the project IS that orchestrator: bind it as one (guarded), `open` absorbs it
     rec = sessions.create_session(
-        proj["slug"], agent, model=norm["model"], role="worker", owner="user", transport=transport,
-        agent_session_id=asid, cwd=norm["cwd"], transcript_path=norm["transcript_path"], state="starting")
+        proj["slug"], agent, model=norm["model"], role="orchestrator" if pending else "worker", owner="user",
+        transport=transport, agent_session_id=asid, cwd=norm["cwd"], transcript_path=norm["transcript_path"],
+        state="starting")
+    if pending:
+        rec = sessions.update_session(rec["sid"], pending_orchestrator=True)
     return rec, True, False
 
 

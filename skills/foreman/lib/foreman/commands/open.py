@@ -102,24 +102,43 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
         raise CliError(str(exc), code=2)
 
     launch_title = None if tkind in ("fake", "orca") else title
+    if role == "orchestrator":
+        # D54: from here until the record exists, hooks of an unknown session of this agent in the project bind
+        # as the pending orchestrator (guarded) instead of becoming an unguarded user worker.
+        pending = sessions.pending_orchestrator(project["slug"])
+        if pending and pending.get("pid") != os.getpid():
+            raise CliError("an orchestrator launch for project %s is already in progress (pid %s)"
+                           % (project["slug"], pending.get("pid")), code=2)
+        sessions.mark_pending_orchestrator(project["slug"], chosen_agent, project["path"])
     try:
-        handle = transport.launch(chosen_agent, chosen_model, chosen_effort, project["path"], prompt, launch_title)
-    except NotImplementedError as exc:
-        raise CliError(str(exc), code=2)
-    except TransportError as exc:
-        raise CliError(str(exc), code=1)
+        try:
+            handle = transport.launch(chosen_agent, chosen_model, chosen_effort, project["path"], prompt,
+                                      launch_title)
+        except NotImplementedError as exc:
+            raise CliError(str(exc), code=2)
+        except TransportError as exc:
+            raise CliError(str(exc), code=1)
 
-    require_agent_handle(transport, handle)
+        require_agent_handle(transport, handle)
 
-    os.makedirs(paths.sessions_dir(), exist_ok=True)
-    with store.locked(os.path.join(paths.sessions_dir(), "_bind")):  # the lock the hook pipeline binds under
-        rec = sessions.create_session(
-            project=project["slug"], agent=chosen_agent, model=chosen_model, effort=chosen_effort,
-            role=role, owner=owner, purpose=purpose, title=title,
-            transport={"kind": tkind, "handle": handle},
-            cwd=project["path"], state="starting", replaces=replaces, lifecycle="active",
-        )
-        sessions.absorb_strays(rec)  # a hook that fired during the launch already auto-registered a worker
+        os.makedirs(paths.sessions_dir(), exist_ok=True)
+        with store.locked(os.path.join(paths.sessions_dir(), "_bind")):  # the lock the hook pipeline binds under
+            rec = sessions.create_session(
+                project=project["slug"], agent=chosen_agent, model=chosen_model, effort=chosen_effort,
+                role=role, owner=owner, purpose=purpose, title=title,
+                transport={"kind": tkind, "handle": handle},
+                cwd=project["path"], state="starting", replaces=replaces, lifecycle="active",
+            )
+            # a hook that fired during the launch already registered a session on this terminal (a user worker,
+            # or for an orchestrator launch the pending orchestrator): merge it into the real record
+            sessions.absorb_strays(rec)
+    except BaseException:
+        if role == "orchestrator":
+            sessions.discard_pending_strays(project["slug"])
+        raise
+    finally:
+        if role == "orchestrator":
+            sessions.clear_pending_orchestrator(project["slug"])
     if launch_title != rec["title"]:
         try:
             transport.rename(handle, rec["title"])
