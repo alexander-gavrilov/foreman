@@ -50,3 +50,23 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
 - D21 · Project gates (spec §9 syntax): `project.json` `gates` is a list of named gates
   (`spec-approval`, `pr-merge`, `close-user-session`, `expensive-model`, or free text); the orchestrator briefing
   lists them and `foreman gate <name>` answers "ask the user" or "proceed".
+- D4 · 2026-11-05 · Platforms stay Linux + macOS (spec §6). A control-panel message (foreman-ac, 13:00) says any
+  Windows work goes to the Orca tab "foreman-win"; Windows is not a v1 target unless the user adds it. At the time
+  of the message no such tab or Windows host was visible to `orca terminal list` / `orca host list`.
+
+## After integration research (`docs/build/integration-facts.md`)
+
+- D22 · Claude inter-session messaging is a transport (`claude-msg`) through the session's unix socket with its peer
+  token, discovered from `~/.claude/sessions/<pid>.json`. It sends only (it cannot launch). — Spec §6 names it as a
+  transport; there is no CLI for it. It is an undocumented interface, so foreman isolates it in one module.
+- D23 · Codex is a worker-only agent in v1. — Its hooks could not be exercised on this machine (Codex is not logged in),
+  so "the product enforces the role" cannot be proven for it (spec §4.1 rule). The adapter is built from the
+  documented format and covered by unit tests; promotion to orchestrator-capable needs one verified run.
+- D24 · Codex hook trust is left to the user (one approval in Codex `/hooks`), listed as a user-only step.
+  — Writing `trusted_hash` into `~/.codex/config.toml` would be foreman granting trust to itself (spec §7).
+- D25 · Limits come from a statusline tap (`foreman tap statusline -- <original>`) installed by `foreman install`,
+  plus import of the existing `~/.cache/agent-limits/*.json` snapshots. — Statusline stdin is the only place both
+  agents expose limits; the tap does not replace the user's statusline (fancy-statusline keeps working).
+- D26 · "Waiting for permission" of an Antigravity session is known only on Herdr (`blocked`); on Orca such a session
+  shows as busy and becomes "stuck" after the threshold. — agy has no permission hook event.
+- D27 · Orca `terminal wait --for tui-idle` timed out on idle Antigravity tabs (observed while closing research workers). foreman's idle signal for agy is its own Stop hook (`fullyIdle`), with Orca `worktree ps` as a fallback, not tui-idle alone.

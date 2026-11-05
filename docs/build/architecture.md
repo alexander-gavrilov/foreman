@@ -117,12 +117,42 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
 - A hook never breaks the agent: any internal error is logged to `events.jsonl` and the hook exits 0 (except an
   intended block).
 
+## 4a. Agent adapters (facts: `integration-facts.md`)
+
+| | Claude Code | Antigravity (agy) | Codex |
+|---|---|---|---|
+| project hook file written by `init` | `.claude/settings.local.json` (`hooks` key, Claude layout) | `.agents/hooks.json` (top key = hook name `foreman`, then events; flat lists except Pre/PostToolUse) + workspace must be trusted | `.codex/hooks.json` (Claude layout); the user approves the hook once in Codex `/hooks` (foreman never trusts itself) |
+| events used | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification (permission_prompt / idle_prompt), PermissionRequest, SessionEnd | SessionStart, PreInvocation, PreToolUse, PostToolUse, Stop (`fullyIdle`) — event name passed as argument | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Stop, SessionEnd |
+| session id | `session_id` | `conversationId` | `session_id` |
+| block an edit | stdout `hookSpecificOutput.permissionDecision: deny` | stdout `{"decision":"deny","reason":…}` | `hookSpecificOutput.permissionDecision: deny` (or exit 2) |
+| continue with a digest at Stop | `{"decision":"block","reason":digest}` (skip if `stop_hook_active`) | `{"decision":"continue","reason":digest}` | `{"decision":"block","reason":digest}` |
+| waiting for permission | Notification `permission_prompt`, PermissionRequest | not visible to hooks (Herdr `blocked` status when on Herdr) | PermissionRequest |
+| context | transcript tail `usage` (sum of input + cache_creation + cache_read + output) or statusline `context_window` | statusline `context_window` only | unknown in v1 (no statusline command) |
+| limits | statusline `rate_limits.five_hour/seven_day.{used_percentage, resets_at epoch s}` | statusline `quota.<key>.{remaining_fraction, reset_time}`; keys `gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly` | not read in v1 (spec §10.1: shown only if exposed) |
+| orchestrator-capable | yes (verified) | yes in principle (deny + continue exist); verified in the e2e phase | worker only in v1: hooks could not be run here (not logged in) |
+
+Hook outputs always print valid JSON (`{}` when nothing) because agy requires it. Legacy snapshots in
+`~/.cache/agent-limits/` (written by the user's existing statusline scripts) are also imported as a limits
+source, with `quota: null` / missing values ignored.
+
 ## 5. Transports
 
 Interface (`foreman.transports.base.Transport`): `list() -> [TermInfo]`, `alive(handle)`, `launch(agent, model,
 effort, cwd, prompt, title) -> handle`, `send(handle, text)` (types + submits; raises `TerminalGone`),
 `read(handle, lines)`, `wait_idle(handle, timeout)`, `close(handle)`, `rename(handle, title)`.
-Implementations: `orca`, `herdr`, `fake` (file-backed, for tests: `$FOREMAN_FAKE_TRANSPORT`).
+Implementations: `orca`, `herdr`, `claude-msg`, `fake` (file-backed, for tests: `$FOREMAN_FAKE_TRANSPORT`).
+
+| | Orca | Herdr | claude-msg |
+|---|---|---|---|
+| list | `orca terminal list --json` | `herdr pane list` | `~/.claude/sessions/<pid>.json` (+ pid alive) |
+| launch | `orca agent launch --agent A --worktree path:P --model M [--effort E] --surface terminal --prompt T --json` | `herdr tab create --cwd P --label T --no-focus` → `herdr agent start N --kind A --pane ID -- --model M` → `herdr agent prompt` | — (not a launcher) |
+| send+submit | `orca terminal send --terminal H --text T --enter --json` | `herdr agent prompt H T` (pane: `pane send-text` + `send-keys enter`) | unix socket `messagingSocketPath`: `{"type":"auth","token":peerToken}` then `{"type":"user","message":{"role":"user","content":T}}` |
+| idle | `orca terminal wait --for tui-idle --timeout-ms` | `herdr agent wait H --until idle` | `status: idle` in the sessions file |
+| gone | send → `terminal_not_writable`; show → `connected:false` | `pane_not_found` / `agent_not_found` | pid dead / socket refused |
+| agent state | `orca worktree ps --json` (`working`/`done`) | `agent_status` idle/working/blocked/done | `status` idle/busy |
+
+A session record's transport handle is the Orca `term_…` handle (`ORCA_TERMINAL_HANDLE`), the Herdr pane id
+(`HERDR_PANE_ID`), or `claude:<sessionId>` for a Claude session reached only by messaging.
 
 ## 6. Limits
 
