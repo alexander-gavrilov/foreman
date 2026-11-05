@@ -11,6 +11,7 @@ EVENTS_MAX_BYTES = 5 * 1024 * 1024
 WAKE_EXCERPT = 200
 KEEP_OPEN_REASONS = ("clear", "resume")  # SessionEnd reasons after which the terminal keeps a session
 BUSY_KINDS = ("prompt", "pre_tool", "post_tool")
+PROVISIONAL_AGENTS = ("antigravity", "agy")
 HEARTBEAT_STALE_INTERVALS = 3
 WARN_EVERY_S = 600
 PAST_IDS_KEPT = 20
@@ -243,7 +244,10 @@ def _on_stop(agent, ad, rec, norm):
     sid = rec["sid"]
     # Also with stop_hook_active: that only means this Stop follows our own continuation. Messages that
     # arrived meanwhile are delivered now; with nothing new queued the loop ends (it is bounded).
-    claimed = sessions.inbox_claim(sid, claimer="stop-hook")
+    # agy ignores a continuation once its consecutive-continuation cap is hit: its claim stays provisional until
+    # the next agent activity confirms it; otherwise the watch loop types the digest at idle (watch.py).
+    provisional = agent in PROVISIONAL_AGENTS
+    claimed = sessions.inbox_claim(sid, claimer=sessions.PROVISIONAL if provisional else "stop-hook")
     if claimed:
         try:
             out = ad.render_continue(digest.format_digest(claimed))
@@ -252,7 +256,8 @@ def _on_stop(agent, ad, rec, norm):
             raise
         sessions.set_state(sid, "busy")  # the agent continues with the digest as its next input
         return out
-    if rec.get("role") == "worker":
+    if rec.get("role") == "worker" and (rec.get("owner") or "orchestrator") == "orchestrator":
+        # only workers the orchestrator owns; a user-owned session wakes it just on stuck/gone/threshold (watch)
         try:
             wake.queue_for_orchestrator(rec["project"], _wake_text(rec, norm), sender="foreman", kind="wake",
                                         key="stop:" + sid, background=True)
@@ -306,6 +311,12 @@ def _process(agent, event, payload, env):
             blocked = guard.unverifiable(rec.get("project"))
         if blocked:
             out = ad.render_deny(blocked)
+
+    if norm["kind"] in BUSY_KINDS and agent in PROVISIONAL_AGENTS:
+        try:
+            sessions.inbox_confirm(sid)  # the agent is working again: its continuation was taken
+        except Exception as exc:
+            _log_error(agent, "confirm", exc)
 
     upd = _field_updates(rec, norm, rebind=by_handle)
     _refresh_context(agent, rec, norm, upd)

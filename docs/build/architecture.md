@@ -114,19 +114,19 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
 - **Guard** (spec §4.1, acceptance 3): for `role: orchestrator`, every `pre_tool` is checked against **allowlists**
   (deny by default) and blocked with a message telling it to delegate (`foreman open ...`):
   - *tools*: only read-only tools (Claude `Read`, `Grep`, `Glob`, `LS`, `TodoWrite`, `WebFetch`, `WebSearch`,
-    `SendMessage`, `Agent`/`Task`, `ToolSearch`, `Skill`; agy `view_file`, `list_dir`, `grep_search`, `find_by_name`,
+    `SendMessage`, `Agent`/`Task` (without `isolation`), `ToolSearch`, `Skill`; agy `view_file`, `list_dir`, `grep_search`, `find_by_name`,
     `read_url_content`, `search_web`; Codex read tools) and the shell tool; every other tool, including any `mcp__*`
     tool, is denied;
   - *shell*: parsed with `shlex`; any command substitution (`$(`, backticks), process substitution, heredoc, or
     output redirection other than to `/dev/null` is denied; each segment of `|`, `;`, `&&`, `||` must start with an
     allowlisted command: `foreman` with an orchestrator-safe subcommand (`status limits send ask reply say open close
     rotate compact board(show/add/set without `check`) log stage watch(list) clean(--dry-run) work report gate orchestrator`; `board done`
-    only without `--check`; not `orchestrator adopt`, which is user-only), `orca`/`herdr` read-only subcommands (`terminal list|show|read|wait`, `worktree ps|list`,
+    only without `--check`; `open` without `--role`/`--owner`; `close` without `--user-consent`; not `orchestrator adopt`, which is user-only), `orca`/`herdr` read-only subcommands (`terminal list|show|read|wait`, `worktree ps|list`,
     `pane list|read`, `agent list|read|wait`), `gh pr|issue|run|repo` (view, list, create, merge, review, checks,
     comment, diff), `git` read-only subcommands (`status log diff show branch(no args)/--list remote(-v) fetch
     rev-parse ls-files blame`) with `--output`, global `-c`/`--config-env`/`--exec-path` and `--upload-pack` denied,
     and `ls cat head tail grep rg wc jq date echo pwd which tree stat file` (`find` only without `-delete -exec
-    -execdir -ok -fprint* -fls`; `rg` without `--pre`/`--pre-glob`; `tree` without `-o`; `file` without `-C`).
+    -execdir -ok -fprint* -fls`; `rg` without `--pre`/`--pre-glob`; `tree` without `-o`/`-R`/`-H`; `file` without `-C`).
   - The guard applies to every tool call in the orchestrator's session, including calls made by its subagents
     (same `session_id`, with `agent_id` in the payload).
   - Sending text to terminals is possible only through `foreman send/ask/compact`, which accept only registered
@@ -144,8 +144,12 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
   `additionalContext`, agy `injectSteps`), so `init` does not edit any committed file.
 - **Delivery at idle**: on `stop` of any session with queued inbox messages, foreman delivers them.
   For Claude Code the Stop hook returns `{"decision":"block","reason":<digest>}` so the agent continues with the
-  digest as input (no terminal typing). For other agents a detached `foreman deliver <sid>` process waits for
-  transport idle, then types the digest into the terminal.
+  digest as input (no terminal typing); Codex uses the same block, agy `{"decision":"continue"}`. agy ignores a
+  continuation once its consecutive-continuation cap is hit, so its claim is *provisional*
+  (`claimed_by: stop-hook:provisional`): the next agent activity (PreInvocation / tool event) confirms it; if none
+  arrives within 45 s the watch loop gives the messages back and types the digest at idle. `foreman deliver <sid>
+  [--wait S]` (wait = Orca `worktree ps` not `working`, `tui-idle` only as the secondary signal) is the manual
+  form; hooks and wakes spawn it without `--wait` because they only deliver to a session whose record says idle.
 - A hook never breaks the agent: any internal error is logged to `events.jsonl` and the hook exits 0 (except an
   intended block).
 

@@ -2,7 +2,8 @@
 import hashlib
 import os
 
-from foreman import config, delivery, limits, notify, paths, projects, sessions, store, timeutil, transports, wake
+from foreman import (config, delivery, limits, notify, paths, projects, routing, sessions, store, timeutil,
+                     transports, wake)
 
 _CONDITION_PREFIXES = (
     "gone:",
@@ -13,6 +14,9 @@ _CONDITION_PREFIXES = (
     "limit_warn:",
     "limit_stop:",
 )
+
+
+PROVISIONAL_GRACE_S = 45  # an agy continuation shows agent activity within seconds, or it was not taken
 
 
 def run_pass(interval_s=60):
@@ -52,14 +56,20 @@ def run_pass(interval_s=60):
         for s in non_closed
     } - {None, ""}
 
+    # A failed list() (Orca restart, timeout) is "unknown", never "everything is gone": that kind is skipped.
     live_handles_by_kind = {}
+    transport_by_kind = {}
     for kind in transport_kinds:
         try:
             t = transports.get_transport(kind)
-            term_list = t.list()
-            live_handles_by_kind[kind] = {item.handle for item in term_list}
+            live_handles_by_kind[kind] = {item.handle for item in t.list()}
+            transport_by_kind[kind] = t
         except Exception:
-            live_handles_by_kind[kind] = set()
+            continue
+
+    # Consecutive passes in which a session's handle was missing from list() AND alive(handle) was False.
+    gone_miss_prev = state.get("gone_miss") if isinstance(state.get("gone_miss"), dict) else {}
+    gone_miss = {}
 
     # 3. Per non-closed session checks
     for s in non_closed:
@@ -71,19 +81,34 @@ def run_pass(interval_s=60):
         handle = tr.get("handle")
         is_rotated = (s.get("lifecycle") == "rotated")
 
-        # Terminal gone (watched for all non-closed sessions, including rotated)
-        if kind and kind in live_handles_by_kind and handle and handle not in live_handles_by_kind[kind]:
-            cond = "gone:" + sid
-            active_conditions.add(cond)
-            if s.get("state") != "gone":
-                # Mark state gone, but never change lifecycle of a rotated session to closed
-                sessions.set_state(sid, "gone")
-            if cond not in dedupe:
-                wake.wake(project, "terminal gone: " + title)
-                dedupe.add(cond)
-                summary["wakes"] += 1
-                summary["conditions"].append(cond)
-            continue
+        # Terminal gone (watched for all non-closed sessions, including rotated). Gone only after the handle is
+        # missing from list() and alive(handle) is False on two consecutive passes (or a hook already said gone).
+        if kind in live_handles_by_kind and handle:
+            seen = handle in live_handles_by_kind[kind]
+            if not seen:
+                try:
+                    seen = bool(transport_by_kind[kind].alive(handle))
+                except Exception:
+                    seen = True  # cannot tell: not evidence of death
+            if seen:
+                if s.get("state") == "gone":
+                    sessions.set_state(sid, "idle")  # the terminal is back; the next hook event refines this
+                    s = dict(s, state="idle")
+            else:
+                misses = int(gone_miss_prev.get(sid) or 0) + 1
+                gone_miss[sid] = misses
+                if misses >= 2 or s.get("state") == "gone":
+                    cond = "gone:" + sid
+                    active_conditions.add(cond)
+                    if s.get("state") != "gone":
+                        # Mark state gone, but never change lifecycle of a rotated session to closed
+                        sessions.set_state(sid, "gone")
+                    if cond not in dedupe:
+                        wake.wake(project, "terminal gone: " + title)
+                        dedupe.add(cond)
+                        summary["wakes"] += 1
+                        summary["conditions"].append(cond)
+                continue
 
         # Rotated sessions are watched only for terminal gone, never for stuck/waiting/context
         if is_rotated:
@@ -143,20 +168,14 @@ def run_pass(interval_s=60):
                     summary["conditions"].append(cond_soft)
 
     # 4. Limits crossing limit_warn / limit_stop
-    limit_warn = config.get("thresholds.limit_warn", 70)
-    limit_stop = config.get("thresholds.limit_stop", 90)
     all_projs = projects.list_projects()
 
-    for prov in ("claude", "antigravity"):
-        p_limits = limits.load_provider_limits(prov)
-        vals = [
-            w["used_pct"]
-            for w in p_limits.values()
-            if isinstance(w, dict) and w.get("used_pct") is not None
-        ]
-        max_pct = max(vals) if vals else 0
+    prov_levels = limits.levels()  # stale readings count as unknown there
+    for prov in ("claude", "antigravity", limits.P3):
+        level = prov_levels.get(prov, "unknown")
+        max_pct = limits.max_pct(prov)
 
-        if max_pct >= limit_stop:
+        if level == "stop":
             cond_stop = "limit_stop:" + prov
             cond_warn = "limit_warn:" + prov
             active_conditions.add(cond_stop)
@@ -171,8 +190,9 @@ def run_pass(interval_s=60):
                 # Queue wind-down message for every running worker session of that provider
                 wind_down_text = "Лимит %s ≥90%%: wind down and hand off at your next idle point" % prov
                 for ws in all_sessions:
-                    agent = ws.get("agent")
-                    agent_matches = (agent == prov or (prov == "antigravity" and agent == "agy"))
+                    key = routing.limit_key(ws.get("agent"), ws.get("model"))
+                    # antigravity's level covers every agy worker; the 3p windows only the 3p-model ones
+                    agent_matches = key == prov or (prov == "antigravity" and key == limits.P3)
                     is_worker = (ws.get("role") == "worker")
                     is_running = (sessions.is_open(ws) and ws.get("state") != "gone")
                     if agent_matches and is_worker and is_running:
@@ -181,7 +201,7 @@ def run_pass(interval_s=60):
                 dedupe.add(cond_stop)
                 dedupe.add(cond_warn)
                 summary["conditions"].append(cond_stop)
-        elif max_pct >= limit_warn:
+        elif level == "warn":
             cond_warn = "limit_warn:" + prov
             active_conditions.add(cond_warn)
             if cond_warn not in dedupe:
@@ -198,6 +218,19 @@ def run_pass(interval_s=60):
         c for c in dedupe
         if not any(c.startswith(pfx) for pfx in _CONDITION_PREFIXES) or c in active_conditions
     }
+
+    # 5b. agy continuations that were never taken (consecutive-continuation cap): give the messages back and
+    # let step 6 type them at idle (architecture 4a fallback).
+    for s in all_sessions:
+        if sessions.is_open(s) and s.get("agent") in ("antigravity", "agy"):
+            stuck = sessions.inbox_provisional(s["sid"])
+            claimed_at = min((timeutil.age_seconds(m.get("delivered_at")) or 0) for m in stuck) if stuck else None
+            if stuck and claimed_at >= PROVISIONAL_GRACE_S:
+                sessions.inbox_release(s["sid"], [m["id"] for m in stuck])
+                if s.get("state") == "busy":  # the Stop hook set busy for a continuation that never started
+                    sessions.set_state(s["sid"], "idle")
+                s = dict(s, state="idle")
+                all_sessions = [s if x["sid"] == s["sid"] else x for x in all_sessions]
 
     # 6. Deliver pending inbox messages for idle sessions
     for s in all_sessions:
@@ -237,6 +270,7 @@ def run_pass(interval_s=60):
 
     # Save state
     state["dedupe"] = sorted(list(dedupe))
+    state["gone_miss"] = gone_miss
     store.write_json(paths.watch_state_file(), state)
 
     return summary

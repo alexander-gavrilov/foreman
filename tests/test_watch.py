@@ -9,6 +9,7 @@ from tests.helpers import ForemanTestCase, run_cli
 class WatchTest(ForemanTestCase):
     def setUp(self):
         super().setUp()
+        os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"  # fixtures' limit resets_at must stay in the future
         self.init_project("demo")
 
     def test_quiet_state_zero_wakes_and_zero_transport_sends(self):
@@ -48,6 +49,8 @@ class WatchTest(ForemanTestCase):
                                     state="busy", title="s-dead")
 
         with patch("foreman.wake.wake") as mock_wake:
+            watch.run_pass()  # first miss: not yet gone (two consecutive passes are required)
+            self.assertEqual(mock_wake.call_count, 0)
             watch.run_pass()
             mock_wake.assert_called_once_with("demo", "terminal gone: s-dead")
 
@@ -243,6 +246,7 @@ class WatchTest(ForemanTestCase):
         sessions.update_session(s_rotated["sid"], lifecycle="rotated")
 
         with patch("foreman.wake.wake") as mock_wake:
+            watch.run_pass()
             watch.run_pass()
             mock_wake.assert_called_once_with("demo", "terminal gone: rotated-sess")
 

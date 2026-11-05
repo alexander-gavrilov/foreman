@@ -6,6 +6,7 @@ import os
 from foreman import config, paths, sessions, store, timeutil
 
 _PROVIDERS = ("claude", "antigravity")
+P3 = "antigravity-3p"  # pseudo-provider: the `3p_*` windows, spent only by 3p (Claude etc.) models on Antigravity
 
 
 def _to_iso(ts):
@@ -172,78 +173,126 @@ def _window_level(used_pct, limit_warn, limit_stop):
     return "ok"
 
 
-def levels():
-    """Return {provider: "ok"|"warn"|"stop"|"unknown"} for claude and antigravity."""
-    limit_warn = config.get("thresholds.limit_warn", 70)
-    limit_stop = config.get("thresholds.limit_stop", 90)
+_FIVE_HOUR_S = 5 * 3600
+_WEEK_S = 7 * 86400
 
+
+def _window_length_s(name):
+    """Length of a window by its key (five_hour, seven_day, weekly, 3p_five_hour, ...); None when unknown."""
+    n = str(name or "").lower()
+    if "five" in n or "5h" in n:
+        return _FIVE_HOUR_S
+    if "seven" in n or "week" in n:
+        return _WEEK_S
+    return None
+
+
+def window_stale(name, window, now=None):
+    """True when a stored reading no longer describes the current window (architecture section 6): its
+    resets_at has passed, or, with no resets_at, it was observed more than one window length ago."""
+    if not isinstance(window, dict):
+        return False
+    ref = now if now is not None else timeutil.now()
+    reset = timeutil.parse(_to_iso(window.get("resets_at")))
+    if reset is not None:
+        return ref >= reset
+    length = _window_length_s(name)
+    observed = timeutil.parse(window.get("observed_at"))
+    if length is not None and observed is not None:
+        return (ref - observed).total_seconds() > length
+    return False
+
+
+def fresh_pct(name, window, now=None):
+    """used_pct of a window, or None when it is missing or stale (= unknown)."""
+    if not isinstance(window, dict) or window.get("used_pct") is None:
+        return None
+    return None if window_stale(name, window, now=now) else window["used_pct"]
+
+
+def window_level(name, window, now=None):
+    return _window_level(fresh_pct(name, window, now=now), config.get("thresholds.limit_warn", 70),
+                         config.get("thresholds.limit_stop", 90))
+
+
+def split_3p(windows):
+    """-> (gemini windows, 3p windows) of an antigravity reading: keys starting with '3p_' are the 3p ones."""
+    gem = {n: w for n, w in windows.items() if not str(n).startswith("3p_")}
+    p3 = {n: w for n, w in windows.items() if str(n).startswith("3p_")}
+    return gem, p3
+
+
+def provider_windows(provider):
+    """Stored windows of a provider key: claude, antigravity (Gemini windows only), antigravity-3p, codex."""
+    if provider == P3:
+        return split_3p(load_provider_limits("antigravity"))[1]
+    windows = load_provider_limits(provider)
+    return split_3p(windows)[0] if provider == "antigravity" else windows
+
+
+def _max_level(windows, now=None):
     rank = {"unknown": 0, "ok": 1, "warn": 2, "stop": 3}
-    out = {}
-    for prov in _PROVIDERS:
-        windows = load_provider_limits(prov)
-        valid = [w["used_pct"] for w in windows.values() if isinstance(w, dict) and w.get("used_pct") is not None]
-        if not valid:
-            out[prov] = "unknown"
-        else:
-            win_levels = [_window_level(pct, limit_warn, limit_stop) for pct in valid]
-            out[prov] = max(win_levels, key=lambda l: rank.get(l, 0))
+    found = [window_level(n, w, now=now) for n, w in windows.items() if isinstance(w, dict)]
+    return max(found, key=lambda l: rank[l]) if found else "unknown"
 
+
+def max_pct(provider, now=None):
+    """Highest fresh used_pct over the provider's windows (0 when none)."""
+    vals = [fresh_pct(n, w, now=now) for n, w in provider_windows(provider).items()]
+    vals = [v for v in vals if v is not None]
+    return max(vals) if vals else 0
+
+
+def levels():
+    """Return {provider: "ok"|"warn"|"stop"|"unknown"} for claude and antigravity (codex when it has a file).
+    Stale readings count as unknown. "antigravity" covers the Gemini windows only; the 3p windows are reported
+    as "antigravity-3p" (present only when such a window was ever read) and apply to 3p models alone."""
+    now = timeutil.now()
+    out = {prov: _max_level(provider_windows(prov), now=now) for prov in _PROVIDERS}
+    if provider_windows(P3):
+        out[P3] = _max_level(provider_windows(P3), now=now)
     if os.path.exists(paths.limits_file("codex")):
-        windows = load_provider_limits("codex")
-        valid = [w["used_pct"] for w in windows.values() if isinstance(w, dict) and w.get("used_pct") is not None]
-        if not valid:
-            out["codex"] = "unknown"
-        else:
-            win_levels = [_window_level(pct, limit_warn, limit_stop) for pct in valid]
-            out["codex"] = max(win_levels, key=lambda l: rank.get(l, 0))
-
+        out["codex"] = _max_level(load_provider_limits("codex"), now=now)
     return out
 
 
+def _pick(windows, *names):
+    for n in names:
+        if windows.get(n):
+            return n, windows[n]
+    return None, None
+
+
 def summary_line():
-    """One-line limits summary for status reports (weekly first; unknown shown as '?')."""
+    """One-line limits summary for status reports (weekly first; unknown or stale shown as '?')."""
+    now = timeutil.now()
     parts = []
 
-    # Claude
+    def pct(label, name, entry):
+        v = fresh_pct(name, entry, now=now) if entry else None
+        return "%s %d%%" % (label, v) if v is not None else label + " ?"
+
+    def age(windows):
+        newest = _newest_observed(windows)
+        return timeutil.age_text(_to_iso(newest.timestamp())) if newest else "?"
+
     cl = load_provider_limits("claude")
-    wk_entry = cl.get("seven_day") or cl.get("weekly")
-    fh_entry = cl.get("five_hour")
-    if wk_entry or fh_entry:
-        items = []
-        if wk_entry and wk_entry.get("used_pct") is not None:
-            items.append("wk %d%%" % wk_entry["used_pct"])
-        else:
-            items.append("wk ?")
-        if fh_entry and fh_entry.get("used_pct") is not None:
-            items.append("5h %d%%" % fh_entry["used_pct"])
-        else:
-            items.append("5h ?")
-        newest = _newest_observed(cl)
-        age = timeutil.age_text(_to_iso(newest.timestamp())) if newest else "?"
-        parts.append("Claude " + " · ".join(items) + " (%s)" % age)
+    wk_name, wk = _pick(cl, "seven_day", "weekly")
+    fh_name, fh = _pick(cl, "five_hour")
+    if wk or fh:
+        parts.append("Claude %s · %s (%s)" % (pct("wk", wk_name, wk), pct("5h", fh_name, fh), age(cl)))
     else:
         parts.append("Claude ?")
 
-    # Antigravity
     agy = load_provider_limits("antigravity")
-    wk_entry = agy.get("weekly") or agy.get("seven_day")
-    fh_entry = agy.get("five_hour")
-    p3_entry = agy.get("3p_five_hour")
-    if wk_entry or fh_entry:
-        items = []
-        if wk_entry and wk_entry.get("used_pct") is not None:
-            items.append("wk %d%%" % wk_entry["used_pct"])
-        else:
-            items.append("wk ?")
-        if fh_entry and fh_entry.get("used_pct") is not None:
-            items.append("5h %d%%" % fh_entry["used_pct"])
-        else:
-            items.append("5h ?")
-        if p3_entry and p3_entry.get("used_pct") is not None:
-            items.append("3p 5h %d%%" % p3_entry["used_pct"])
-        newest = _newest_observed(agy)
-        age = timeutil.age_text(_to_iso(newest.timestamp())) if newest else "?"
-        parts.append("agy " + " · ".join(items) + " (%s)" % age)
+    wk_name, wk = _pick(agy, "weekly", "seven_day")
+    fh_name, fh = _pick(agy, "five_hour")
+    p3_name, p3 = _pick(agy, "3p_five_hour")
+    if wk or fh:
+        items = [pct("wk", wk_name, wk), pct("5h", fh_name, fh)]
+        if p3 and fresh_pct(p3_name, p3, now=now) is not None:
+            items.append("3p 5h %d%%" % p3["used_pct"])
+        parts.append("agy " + " · ".join(items) + " (%s)" % age(agy))
     else:
         parts.append("agy ?")
 

@@ -77,6 +77,13 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
     if role == "orchestrator" and agent and agent not in routing.ORCHESTRATOR_AGENTS:
         raise CliError("agent %r is worker-only in v1 and cannot be the orchestrator (use: %s)"
                        % (agent, ", ".join(routing.ORCHESTRATOR_AGENTS)), code=2)
+    if role == "orchestrator":
+        # A project has at most one live orchestrator; only a rotation (replaces=<it>) may succeed it.
+        live = [r for r in sessions.list_sessions(project["slug"])
+                if r.get("role") == "orchestrator" and sessions.is_live(r) and r["sid"] != replaces]
+        if live:
+            raise CliError("project %s already has a live orchestrator (%s); close or rotate it first"
+                           % (project["slug"], live[-1]["sid"]), code=2)
     eff_kind = kind or ("orchestrator" if role == "orchestrator" else "routine")
     preferred = (agent, model, effort) if agent else None
     try:

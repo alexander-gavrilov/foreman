@@ -3,10 +3,12 @@
 The binary is $ORCA_CLI_COMMAND (a path or a command line) or `orca` on PATH."""
 import os
 import shlex
+import time
 
 from foreman.transports import _proc
 from foreman.transports.base import TermInfo, TerminalGone, Transport
 
+POLL_S = 1.0
 GONE = ("terminal_not_writable", "terminal_not_found", "handle_not_found", "terminal not found")
 
 
@@ -112,7 +114,19 @@ class OrcaTransport(Transport):
         term = inner.get("terminal") if isinstance(inner.get("terminal"), dict) else inner
         return "\n".join(str(x) for x in term.get("tail") or [])
 
-    def wait_idle(self, handle, timeout):
+    def _idle_now(self, handle):
+        """True/False from `orca worktree ps` (state != working); None when ps gives no state for this
+        terminal. TerminalGone when the terminal is not listed any more."""
+        try:
+            terms = self.list()
+        except _proc.TransportError:
+            return None
+        for info in terms:
+            if info.handle == handle:
+                return info.idle
+        raise TerminalGone(handle)
+
+    def _tui_idle(self, handle, timeout):
         res = self._call("terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms",
                          str(int(timeout * 1000)), timeout=timeout + 15)
         if res.ok:
@@ -120,6 +134,24 @@ class OrcaTransport(Transport):
         if res.is_gone(GONE):
             raise TerminalGone(handle)
         return False  # timeout (exit 1, code "timeout")
+
+    def wait_idle(self, handle, timeout):
+        """Idle = `orca worktree ps` reports the agent as not working (decision D27: `tui-idle` alone times out
+        on idle Antigravity tabs). `terminal wait --for tui-idle` is only the secondary signal, used when ps
+        has no state for the terminal."""
+        deadline = time.monotonic() + timeout
+        first = True
+        while True:
+            idle = self._idle_now(handle)
+            if idle:
+                return True
+            remaining = timeout if first else deadline - time.monotonic()
+            first = False
+            if idle is None:
+                return self._tui_idle(handle, max(remaining, 1))
+            if remaining <= 0:
+                return False
+            time.sleep(min(POLL_S, remaining))
 
     def close(self, handle):
         res = self._call("terminal", "close", "--terminal", handle)

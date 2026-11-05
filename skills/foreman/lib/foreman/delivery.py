@@ -67,7 +67,9 @@ _children = []  # keep the Popen objects until they exit (no ResourceWarning in 
 
 def spawn_deliver(sid):
     """Run `foreman deliver <sid>` in a detached child. Used from hooks, which must return fast: agents kill
-    a hook that outlives its timeout, and the transport CLIs can be slow."""
+    a hook that outlives its timeout, and the transport CLIs can be slow. No `--wait`: the callers (wake,
+    hooks) only deliver to a session whose record says idle, and deliver_pending re-checks the terminal; a busy
+    session gets its mail from its own Stop hook, so a waiting child would only duplicate that."""
     code = ("import sys; sys.path.insert(0, %r); from foreman.cli import main; "
             "sys.exit(main(['deliver', %r]))" % (LIB_DIR, sid))
     try:

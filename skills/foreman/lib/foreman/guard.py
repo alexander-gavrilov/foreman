@@ -22,6 +22,8 @@ ALLOWED_TOOLS = {
     "read_file", "grep_files", "update_plan", "web_search", "view_image",
 }
 
+SUBAGENT_TOOLS = {"agent", "task"}
+
 SIMPLE_COMMANDS = {"ls", "cat", "head", "tail", "grep", "rg", "wc", "jq", "echo", "pwd", "which", "tree",
                    "stat", "file", "date", "find"}
 COORDINATION_READONLY = {"orca": {("terminal", "list"), ("terminal", "show"), ("terminal", "read"),
@@ -54,7 +56,6 @@ GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "checks", "comment", "di
               "issue": {"view", "list", "create", "comment", "status"},
               "run": {"view", "list", "watch"},
               "repo": {"view", "list"}}
-ENV_ASSIGN = re.compile(r"^FOREMAN_ACTOR=")  # the only variable an orchestrator may set
 
 SEPARATORS = {"|", "||", "&&", ";", "&"}
 WRITE_REDIRECTS = {">", ">>", ">|", "&>", "&>>", "<>"}
@@ -478,6 +479,15 @@ def _check_foreman(args):
         for a in rest:
             if _abbrev_of(a, "--check", 3) or a == "--check" or re.match(r"^check\s*=", a, re.I):
                 raise _Reject("an orchestrator cannot set or run board checks")
+    elif sub == "open":
+        # --role/--owner (abbreviations included): the orchestrator spawns workers it owns; another orchestrator
+        # or a user-owned session is made by `foreman orchestrator start` / the user.
+        if any(_abbrev_of(a, "--role", 3) or _abbrev_of(a, "--owner", 3) for a in rest):
+            raise _Reject("an orchestrator cannot pass --role or --owner to `foreman open`")
+    elif sub == "close":
+        if any(_abbrev_of(a, "--user-consent", 3) for a in rest):
+            raise _Reject("closing a user's session needs the user's own consent: the user runs "
+                          "`foreman close --user-consent`")
     elif sub == "orchestrator":
         if not action or action.startswith("-") or any(name.startswith(action) for name in USER_ONLY_ORCHESTRATOR):
             raise _Reject("`foreman orchestrator %s` is user-only or unknown" % (action or ""))
@@ -497,8 +507,6 @@ def _check_coordination(cmd, args):
 
 
 def _check_segment(words, project=None):
-    while words and ENV_ASSIGN.match(words[0]):
-        words = words[1:]
     if not words:
         raise _Reject("nothing to run")
     cmd, args = words[0], words[1:]
@@ -520,6 +528,8 @@ def _check_segment(words, project=None):
         raise _Reject("date sets the clock")
     if cmd == "tree" and any(re.match(r"^-[^-]*o", a) or a.startswith("--o") for a in args):
         raise _Reject("tree writes its output to a file")
+    if cmd == "tree" and any(re.match(r"^-[^-]*[RH]", a) for a in args):
+        raise _Reject("tree -R/-H writes 00Tree.html files into directories")
     if cmd == "file" and any(re.match(r"^-[^-]*C", a) or _abbrev_of(a, "--compile", 3) for a in args):
         raise _Reject("file -C writes a compiled magic file")
 
@@ -564,6 +574,11 @@ def check_tool(norm, project=None):
                 return _block("%s without a readable command" % name, project)
             return check_command(norm["command"], project)
         if is_allowed_tool(name):
+            tool_input = norm.get("tool_input")
+            if low in SUBAGENT_TOOLS and isinstance(tool_input, dict) and tool_input.get("isolation") not in (None, ""):
+                # remote/worktree isolation runs the subagent where this project's guard hook does not exist
+                return _block("%s with isolation=%s runs outside this session's guard" %
+                              (name, tool_input.get("isolation")), project)
             return None
         return _block("tool %s is not allowed for an orchestrator" % (name or "(none)"), project)
     except Exception as exc:

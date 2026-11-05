@@ -19,19 +19,21 @@ def run(args):
 
     providers = ["claude", "antigravity"]
     import os
+    if limits.provider_windows(limits.P3):
+        providers.append(limits.P3)  # Antigravity's 3p models: their own windows, shown apart from Gemini's
     if os.path.exists(paths.limits_file("codex")):
         providers.append("codex")
 
     data = {}
     for prov in providers:
-        windows = limits.load_provider_limits(prov)
+        windows = limits.provider_windows(prov)
         prov_level = all_levels.get(prov, "unknown")
         prov_windows = {}
         for w_name, w_data in windows.items():
             if not isinstance(w_data, dict):
                 continue
             used = w_data.get("used_pct")
-            level = limits._window_level(used, limit_warn, limit_stop)
+            level = limits.window_level(w_name, w_data)  # stale readings are unknown
             obs = w_data.get("observed_at")
             prov_windows[w_name] = {
                 "used_pct": used,
@@ -51,7 +53,8 @@ def run(args):
 
     for prov in providers:
         prov_info = data[prov]
-        print("%s (%s):" % (prov.capitalize(), prov_info["level"]))
+        label = "Antigravity 3p" if prov == limits.P3 else prov.capitalize()
+        print("%s (%s):" % (label, prov_info["level"]))
         if not prov_info["windows"]:
             print("  (no readings)")
         else:

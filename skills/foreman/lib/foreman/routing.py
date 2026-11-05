@@ -38,6 +38,20 @@ def provider_of(agent, model=None):
     return agent
 
 
+def is_3p_model(model):
+    """Models Antigravity serves from a third party (Claude, GPT-OSS): they spend the `3p_*` windows."""
+    m = str(model or "").lower()
+    return m.startswith(("claude", "gpt"))
+
+
+def limit_key(agent, model=None):
+    """The key into `levels` that gates (agent, model): antigravity's 3p models use "antigravity-3p"; every
+    other combination uses the agent's provider."""
+    if agent in ("antigravity", "agy"):
+        return "antigravity-3p" if is_3p_model(model) else "antigravity"
+    return provider_of(agent, model)
+
+
 def _parse_reset(val):
     if isinstance(val, (int, float)) and not isinstance(val, bool):
         try:
@@ -125,7 +139,13 @@ def _explicit(preferred):
 
 
 def _level(levels, provider):
-    return provider_level((levels or {}).get(provider))
+    """Level that gates a limit key. A 3p model on Antigravity is gated by its own 3p windows and, as before, by
+    the antigravity level; Gemini candidates never look at the 3p windows."""
+    own = provider_level((levels or {}).get(provider))
+    if provider == "antigravity-3p":
+        other = provider_level((levels or {}).get("antigravity"))
+        return max(own, other, key=lambda k: _RANK.get(k, 0))
+    return own
 
 
 def choose(kind, levels, preferred=None):
@@ -138,7 +158,7 @@ def choose(kind, levels, preferred=None):
             match = next((c for c in candidates if c[0] == agent), None)
             model = match[1] if match else None
             effort = effort or (match[2] if match else None)
-        provider = provider_of(agent, model)
+        provider = limit_key(agent, model)
         level = _level(levels, provider)
         if level == "stop":
             raise RoutingError("%s is at its limit (stop): no new sessions on it" % provider, [provider])
@@ -147,7 +167,7 @@ def choose(kind, levels, preferred=None):
     usable = []
     stopped = []
     for cand in candidates:
-        provider = provider_of(cand[0], cand[1])
+        provider = limit_key(cand[0], cand[1])
         if _level(levels, provider) == "stop":
             if provider not in stopped:
                 stopped.append(provider)
@@ -156,15 +176,15 @@ def choose(kind, levels, preferred=None):
     if not usable:
         raise RoutingError("no provider available for %s: %s at its limit (stop)" % (kind, ", ".join(stopped)),
                            stopped)
-    calm = [c for c in usable if _level(levels, provider_of(c[0], c[1])) != "warn"]
+    calm = [c for c in usable if _level(levels, limit_key(c[0], c[1])) != "warn"]
     pick = calm[0] if calm else usable[0]
     notes = []
     top = usable[0]
-    top_provider = provider_of(top[0], top[1])
+    top_provider = limit_key(top[0], top[1])
     if pick is not top and _level(levels, top_provider) == "warn":
-        notes.append("%s is at warn: preferring %s" % (top_provider, provider_of(pick[0], pick[1])))
+        notes.append("%s is at warn: preferring %s" % (top_provider, limit_key(pick[0], pick[1])))
     else:
-        note = _note_for(provider_of(pick[0], pick[1]), _level(levels, provider_of(pick[0], pick[1])))
+        note = _note_for(limit_key(pick[0], pick[1]), _level(levels, limit_key(pick[0], pick[1])))
         if note:
             notes.append(note)
     if stopped:
