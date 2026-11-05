@@ -114,6 +114,82 @@ class SessionsTest(ForemanTestCase):
         self.s.inbox_mark_delivered(sid)  # all
         self.assertEqual(self.s.inbox_pending(sid), [])
 
+    def test_inbox_claim_is_exclusive_and_stamps(self):
+        rec = self.s.create_session("p", "claude")
+        sid = rec["sid"]
+        self.assertEqual(self.s.inbox_claim(sid), [])
+        a = self.s.inbox_enqueue(sid, "a")
+        b = self.s.inbox_enqueue(sid, "b")
+        got = self.s.inbox_claim(sid, claimer="deliver")
+        self.assertEqual([m["id"] for m in got], [a["id"], b["id"]])
+        self.assertTrue(all(m["delivered_at"] for m in got))
+        self.assertEqual(got[0]["claimed_by"], "deliver")
+        self.assertEqual(self.s.inbox_claim(sid), [])        # a second claim gets nothing
+        self.assertEqual(self.s.inbox_pending(sid), [])       # and pending (read-only) is empty
+        c = self.s.inbox_enqueue(sid, "c")
+        self.assertEqual([m["id"] for m in self.s.inbox_claim(sid)], [c["id"]])
+
+    def test_inbox_claim_limit_and_pending_is_read_only(self):
+        sid = self.s.create_session("p", "claude")["sid"]
+        for t in "abc":
+            self.s.inbox_enqueue(sid, t)
+        self.assertEqual(len(self.s.inbox_pending(sid)), 3)
+        self.assertEqual(len(self.s.inbox_pending(sid)), 3)   # looking does not consume
+        self.assertEqual([m["text"] for m in self.s.inbox_claim(sid, limit=2)], ["a", "b"])
+        self.assertEqual([m["text"] for m in self.s.inbox_pending(sid)], ["c"])
+
+    def test_inbox_release_returns_failed_deliveries_to_pending(self):
+        sid = self.s.create_session("p", "claude")["sid"]
+        self.s.inbox_enqueue(sid, "a")
+        got = self.s.inbox_claim(sid)
+        self.s.inbox_release(sid, [m["id"] for m in got])
+        self.assertEqual([m["text"] for m in self.s.inbox_pending(sid)], ["a"])
+        self.assertEqual(len(self.s.inbox_claim(sid)), 1)
+
+    def test_inbox_claim_across_processes_delivers_each_message_once(self):
+        from tests import mp_workers
+        sid = self.s.create_session("p", "claude")["sid"]
+        sent = [self.s.inbox_enqueue(sid, "m%d" % i)["id"] for i in range(60)]
+        results = mp_workers.run_in_processes(mp_workers.claim_all, [(sid, 3)] * 5)
+        claimed = [i for part in results for i in part]
+        self.assertEqual(len(claimed), 60)
+        self.assertEqual(sorted(claimed), sorted(sent))       # no duplicates, none lost
+
+    def test_find_title_ambiguous_across_projects(self):
+        a = self.s.create_session("p1", "claude", title="api")
+        b = self.s.create_session("p2", "claude", title="api")
+        with self.assertRaises(self.s.AmbiguousSession) as cm:
+            self.s.find("api")
+        msg = str(cm.exception)
+        for part in (a["sid"], b["sid"], "p1", "p2"):
+            self.assertIn(part, msg)
+        # scoped to a project: unambiguous
+        self.assertEqual(self.s.find("api", project="p2")["sid"], b["sid"])
+
+    def test_find_title_is_scoped_to_given_project_only(self):
+        self.s.create_session("p1", "claude", title="only-here")
+        self.assertIsNone(self.s.find("only-here", project="p2"))
+        self.assertIsNotNone(self.s.find("only-here"))   # unique overall -> found
+
+    def test_find_ignores_inactive_duplicates_for_ambiguity(self):
+        a = self.s.create_session("p1", "claude", title="api")
+        old = self.s.create_session("p2", "claude", title="api")
+        self.s.set_state(old["sid"], "closed")
+        self.assertEqual(self.s.find("api")["sid"], a["sid"])
+
+    def test_find_sid_and_handle_are_global_even_with_project(self):
+        a = self.s.create_session("p1", "claude", title="x", transport={"kind": "fake", "handle": "H"})
+        self.assertEqual(self.s.find(a["sid"], project="p2")["sid"], a["sid"])
+        self.assertEqual(self.s.find("H", project="p2")["sid"], a["sid"])
+
+    def test_corrupt_session_file_is_skipped_in_listing(self):
+        from foreman import paths
+        good = self.s.create_session("p", "claude", title="good")
+        bad = self.s.create_session("p", "claude", title="bad")
+        with open(paths.session_file(bad["sid"]), "w") as f:
+            f.write("{")
+        self.assertEqual([r["sid"] for r in self.s.list_sessions("p")], [good["sid"]])
+
 
 if __name__ == "__main__":
     unittest.main()
