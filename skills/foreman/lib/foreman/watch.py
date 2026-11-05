@@ -2,7 +2,8 @@
 import hashlib
 import os
 
-from foreman import config, delivery, limits, notify, paths, projects, sessions, store, timeutil, transports, wake
+from foreman import (config, delivery, limits, notify, paths, projects, routing, sessions, store, timeutil,
+                     transports, wake)
 
 _CONDITION_PREFIXES = (
     "gone:",
@@ -167,7 +168,7 @@ def run_pass(interval_s=60):
     all_projs = projects.list_projects()
 
     prov_levels = limits.levels()  # stale readings count as unknown there
-    for prov in ("claude", "antigravity"):
+    for prov in ("claude", "antigravity", limits.P3):
         level = prov_levels.get(prov, "unknown")
         max_pct = limits.max_pct(prov)
 
@@ -186,8 +187,9 @@ def run_pass(interval_s=60):
                 # Queue wind-down message for every running worker session of that provider
                 wind_down_text = "Лимит %s ≥90%%: wind down and hand off at your next idle point" % prov
                 for ws in all_sessions:
-                    agent = ws.get("agent")
-                    agent_matches = (agent == prov or (prov == "antigravity" and agent == "agy"))
+                    key = routing.limit_key(ws.get("agent"), ws.get("model"))
+                    # antigravity's level covers every agy worker; the 3p windows only the 3p-model ones
+                    agent_matches = key == prov or (prov == "antigravity" and key == limits.P3)
                     is_worker = (ws.get("role") == "worker")
                     is_running = (sessions.is_open(ws) and ws.get("state") != "gone")
                     if agent_matches and is_worker and is_running:

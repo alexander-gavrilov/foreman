@@ -6,6 +6,7 @@ import os
 from foreman import config, paths, sessions, store, timeutil
 
 _PROVIDERS = ("claude", "antigravity")
+P3 = "antigravity-3p"  # pseudo-provider: the `3p_*` windows, spent only by 3p (Claude etc.) models on Antigravity
 
 
 def _to_iso(ts):
@@ -214,6 +215,21 @@ def window_level(name, window, now=None):
                          config.get("thresholds.limit_stop", 90))
 
 
+def split_3p(windows):
+    """-> (gemini windows, 3p windows) of an antigravity reading: keys starting with '3p_' are the 3p ones."""
+    gem = {n: w for n, w in windows.items() if not str(n).startswith("3p_")}
+    p3 = {n: w for n, w in windows.items() if str(n).startswith("3p_")}
+    return gem, p3
+
+
+def provider_windows(provider):
+    """Stored windows of a provider key: claude, antigravity (Gemini windows only), antigravity-3p, codex."""
+    if provider == P3:
+        return split_3p(load_provider_limits("antigravity"))[1]
+    windows = load_provider_limits(provider)
+    return split_3p(windows)[0] if provider == "antigravity" else windows
+
+
 def _max_level(windows, now=None):
     rank = {"unknown": 0, "ok": 1, "warn": 2, "stop": 3}
     found = [window_level(n, w, now=now) for n, w in windows.items() if isinstance(w, dict)]
@@ -222,16 +238,19 @@ def _max_level(windows, now=None):
 
 def max_pct(provider, now=None):
     """Highest fresh used_pct over the provider's windows (0 when none)."""
-    vals = [fresh_pct(n, w, now=now) for n, w in load_provider_limits(provider).items()]
+    vals = [fresh_pct(n, w, now=now) for n, w in provider_windows(provider).items()]
     vals = [v for v in vals if v is not None]
     return max(vals) if vals else 0
 
 
 def levels():
     """Return {provider: "ok"|"warn"|"stop"|"unknown"} for claude and antigravity (codex when it has a file).
-    Stale readings count as unknown."""
+    Stale readings count as unknown. "antigravity" covers the Gemini windows only; the 3p windows are reported
+    as "antigravity-3p" (present only when such a window was ever read) and apply to 3p models alone."""
     now = timeutil.now()
-    out = {prov: _max_level(load_provider_limits(prov), now=now) for prov in _PROVIDERS}
+    out = {prov: _max_level(provider_windows(prov), now=now) for prov in _PROVIDERS}
+    if provider_windows(P3):
+        out[P3] = _max_level(provider_windows(P3), now=now)
     if os.path.exists(paths.limits_file("codex")):
         out["codex"] = _max_level(load_provider_limits("codex"), now=now)
     return out
