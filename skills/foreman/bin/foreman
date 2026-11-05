@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""foreman launcher: resolves its real path (following symlinks), puts ../lib on sys.path, runs foreman.cli:main."""
+import os
+import sys
+
+if sys.version_info < (3, 9):
+    sys.stderr.write("foreman needs Python 3.9 or newer\n")
+    sys.exit(1)
+
+_here = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(_here), "lib"))
+
+from foreman.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

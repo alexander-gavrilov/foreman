@@ -1,0 +1,72 @@
+# foreman — build decision log
+
+The autonomous build lead (Claude Opus 5.5) records here every significant decision taken while building v1,
+with the reason. The user reviews these after delivery. Format: `D<n> · date · decision — reason`.
+"Spec §x" points to `docs/superpowers/specs/2026-11-05-foreman-design.md`.
+
+## Process
+
+- D1 · 2026-11-05 · Order of work: research of agent/transport integration facts → architecture contract →
+  core skeleton → parallel work packages (sessions+hooks, transports+messaging, watch+limits, web API,
+  web frontend, Telegram+notify, findings+init+install) → end-to-end tests → independent review → delivery
+  report. — Spec §10.2 proposed core → web+Telegram → self-improvement → permissions; the brief asks for every
+  §8 item, which needs all of them except permissions (§4.12, explicitly not in v1).
+- D2 · 2026-11-05 · Permission policy (spec §4.12) is **not** built in v1. — Spec says "not in the first release
+  unless the user says otherwise"; the user has not said otherwise.
+- D3 · 2026-11-05 · Worker routing for the build: Antigravity Gemini 3.8 Flash for reading/research and
+  mechanical code, Claude Sonnet 5.5 for core code, Gemini 4 Argon for the web frontend, Opus (a different
+  instance from the author) for reviews. — The user's routing guidance in the build brief.
+
+## Architecture (see `docs/build/architecture.md`)
+
+- D10 · Stdlib-only Python 3 (≥3.9), shipped inside the skill folder. — Copy-only `npx skills` distribution must
+  not need a second install mechanism; runs unchanged on Linux and macOS.
+- D11 · One daemon `foreman serve` (web + Telegram poll + 60 s watch loop) under systemd user unit / launchd,
+  instead of a separate timer unit. — One unit per machine on both OSes; the loop is pure Python, so it costs no
+  tokens (spec §4.6). `watch/heartbeat.json` makes "is it really running" checkable (no phantom monitoring).
+  `foreman watch run` stays available as a one-shot pass for timers or tests.
+- D12 · State lives in `$FOREMAN_HOME` (default `~/.local/state/foreman`), including `agent-work/`. — Spec §4.8/4.9:
+  board, journal and work files live outside the repository; one root makes isolation in tests trivial.
+- D13 · Session ↔ terminal binding through hooks: pending launch matched by the transport handle in the hook's
+  environment; unknown sessions in an initialised project folder are auto-registered as `owner: user`.
+  — Answers spec §9 "how sessions the user already had open get registered": on their next hook, plus a scan of
+  live transport terminals at `foreman init`.
+- D14 · Orchestrator guard is an allowlist for shell commands plus a hard block on file-editing tools.
+  — A denylist cannot be complete; spec §4.1 requires that the product, not prose, prevents drift.
+- D15 · Delivery to an idle Claude Code session uses the Stop hook's `decision: block` with the digest as reason;
+  other agents get the digest typed into their terminal by a detached deliverer after `wait idle`.
+  — No typing into a TUI that may be mid-render; never interrupts a busy session (spec §4.2/§4.7).
+- D16 · Every worker turn end wakes the orchestrator with a one-line digest (batched with other pending wakes).
+  — Spec §4.6 "a session finished"; this is what the user did by hand ("wait tui-idle, read") in past orchestrations.
+- D17 · Thresholds (spec §9): stuck = busy with no hook event for 20 min; waiting too long = waiting for input or
+  permission for 15 min; quiet = no unanswered question, no stuck/gone session and nothing busy.
+  All are config overrides.
+- D18 · Web UI actions (open/close/rotate) are sent to the orchestrator as structured chat messages, not executed
+  by the web server directly. — Spec §5.2 "ask it to open, close or rotate"; one decision maker per project.
+- D19 · Web access: bind only to configured addresses, reject non-private client addresses, per-device token set
+  by a one-time pairing code; notification links carry no token. — Spec §5.2 access rules.
+- D20 · Work-folder janitor announces at TTL−1 day (journal + General notification) and deletes at TTL only if
+  announced. — Spec §4.9 "the list is shown before deletion" with no user action needed.
+- D21 · Project gates (spec §9 syntax): `project.json` `gates` is a list of named gates
+  (`spec-approval`, `pr-merge`, `close-user-session`, `expensive-model`, or free text); the orchestrator briefing
+  lists them and `foreman gate <name>` answers "ask the user" or "proceed".
+- D4 · 2026-11-05 · Platforms stay Linux + macOS (spec §6). A control-panel message (foreman-ac, 13:00) says any
+  Windows work goes to the Orca tab "foreman-win"; Windows is not a v1 target unless the user adds it. At the time
+  of the message no such tab or Windows host was visible to `orca terminal list` / `orca host list`.
+
+## After integration research (`docs/build/integration-facts.md`)
+
+- D22 · Claude inter-session messaging is a transport (`claude-msg`) through the session's unix socket with its peer
+  token, discovered from `~/.claude/sessions/<pid>.json`. It sends only (it cannot launch). — Spec §6 names it as a
+  transport; there is no CLI for it. It is an undocumented interface, so foreman isolates it in one module.
+- D23 · Codex is a worker-only agent in v1. — Its hooks could not be exercised on this machine (Codex is not logged in),
+  so "the product enforces the role" cannot be proven for it (spec §4.1 rule). The adapter is built from the
+  documented format and covered by unit tests; promotion to orchestrator-capable needs one verified run.
+- D24 · Codex hook trust is left to the user (one approval in Codex `/hooks`), listed as a user-only step.
+  — Writing `trusted_hash` into `~/.codex/config.toml` would be foreman granting trust to itself (spec §7).
+- D25 · Limits come from a statusline tap (`foreman tap statusline -- <original>`) installed by `foreman install`,
+  plus import of the existing `~/.cache/agent-limits/*.json` snapshots. — Statusline stdin is the only place both
+  agents expose limits; the tap does not replace the user's statusline (fancy-statusline keeps working).
+- D26 · "Waiting for permission" of an Antigravity session is known only on Herdr (`blocked`); on Orca such a session
+  shows as busy and becomes "stuck" after the threshold. — agy has no permission hook event.
+- D27 · Orca `terminal wait --for tui-idle` timed out on idle Antigravity tabs (observed while closing research workers). foreman's idle signal for agy is its own Stop hook (`fullyIdle`), with Orca `worktree ps` as a fallback, not tui-idle alone.
