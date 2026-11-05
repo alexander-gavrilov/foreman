@@ -38,6 +38,13 @@ class ForemanTestCase(unittest.TestCase):
         os.environ["HOME"] = self.home
         os.environ["FOREMAN_HOME"] = self.foreman_home
         os.environ["FOREMAN_FAKE_TRANSPORT"] = self.fake_transport
+        # the notify dispatcher must never pop a real desktop notification from a test (macOS: terminal-notifier)
+        import types
+        from unittest import mock
+        from foreman import macnotify
+        patcher = mock.patch.object(macnotify, "subprocess", types.SimpleNamespace(run=mock.MagicMock()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         for k in ("FOREMAN_NOW", "FOREMAN_ACTOR", "XDG_STATE_HOME"):
             os.environ.pop(k, None)
 

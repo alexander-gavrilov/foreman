@@ -219,7 +219,7 @@ def create_project_topic(project_slug):
     return tid
 
 
-def send_message(thread_id, text, buttons=None, msg_id=None):
+def send_message(thread_id, text, buttons=None, msg_id=None, timeout=15):
     """Send a message to a topic (None = General topic).
 
     If buttons are provided, inline_keyboard is attached with callback_data '<msgid>|<option index>'.
@@ -248,7 +248,7 @@ def send_message(thread_id, text, buttons=None, msg_id=None):
                 row.append({"text": btn, "callback_data": cb_data})
         payload["reply_markup"] = {"inline_keyboard": [row]}
 
-    res = _api_call("sendMessage", payload)
+    res = _api_call("sendMessage", payload, timeout=timeout)
     if res and res.get("ok"):
         tg_mid = res.get("result", {}).get("message_id")
         if tg_mid and msg_id:

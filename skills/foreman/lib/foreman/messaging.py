@@ -193,6 +193,24 @@ def compact(rec, what=None):
     return "delivered"
 
 
+def _mirror(project, text, msg_id):
+    """D51: the project's Telegram topic mirrors the project chat. Never fails the caller."""
+    try:
+        from foreman import notify
+        notify.mirror_to_topic(project, text, msg_id=msg_id)
+    except Exception:
+        pass
+
+
+def _notify_gone(project, msg):
+    """The terminal-gone notice goes to every configured channel, the topic included."""
+    try:
+        from foreman import notify
+        notify.notify(project, GONE_TEXT, msg_id=msg["id"])
+    except Exception:
+        pass
+
+
 def say(project, text, question=False, options=None, notify_user=False):
     """Orchestrator -> user: append to the project chat; fan out to the notifiers for a question or on request.
     A failing notifier never fails the call."""
@@ -204,6 +222,8 @@ def say(project, text, question=False, options=None, notify_user=False):
             notify.notify(project, text, msg_id=msg["id"], question=bool(question), options=list(options or []))
         except Exception:
             pass
+    else:
+        _mirror(project, text, msg["id"])
     return msg
 
 
@@ -222,6 +242,8 @@ def user_reply(project, text, reply_to=None, channel="web"):
     """A message from the user (web, Telegram, CLI): appended to the chat and queued for the orchestrator.
     If its terminal is gone, a foreman message in the chat says so. -> {"id", "delivery"}"""
     msg = projects.chat_append(project, "user", text, channel=channel, reply_to=reply_to)
+    if channel != "telegram":  # a Telegram reply is already in the topic; everything else is mirrored there
+        _mirror(project, "user (%s): %s" % (channel, text), msg["id"])
     context = ""
     if reply_to:
         _mark_answered(project, reply_to, msg["id"])
@@ -234,7 +256,8 @@ def user_reply(project, text, reply_to=None, channel="web"):
         sessions.inbox_enqueue(orch["sid"], context + text, sender="user", kind="user")
         status = delivery.deliver_pending(orch["sid"])
     if status == "terminal_gone":
-        projects.chat_append(project, "foreman", GONE_TEXT, channel="system")
+        gone = projects.chat_append(project, "foreman", GONE_TEXT, channel="system")
+        _notify_gone(project, gone)
     return {"id": msg["id"], "delivery": status}
 
 
