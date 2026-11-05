@@ -9,7 +9,7 @@ ALL_COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "clos
                 "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact"]
 # implemented commands (each work package removes its own from the stub list)
 IMPLEMENTED = ("board", "log", "status", "gate", "hook", "deliver", "send", "ask", "reply", "say", "stage", "compact",
-               "limits", "tap", "watch", "clean", "work", "telegram", "web", "serve")
+               "limits", "tap", "watch", "clean", "work", "telegram", "web", "serve", "open", "close", "rotate", "orchestrator")
 STUBS = [c for c in ALL_COMMANDS if c not in IMPLEMENTED]
 
 

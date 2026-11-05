@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 
-from foreman import projects
+from foreman import projects, sessions
 from foreman.cliutil import CliError, add_project_arg, dump_json, resolve_project
 
 TAIL_LINES = 20
@@ -45,14 +45,20 @@ def run(args):
     return {"show": _show, "add": _add, "set": _set, "done": _done}[args.board_cmd](args, proj)
 
 
-def _task_line(t):
+def _owner_text(owner, replaced):
+    if "→" not in owner and owner in replaced:
+        return "%s → %s" % (owner, replaced[owner])
+    return owner
+
+
+def _task_line(t, replaced=None):
     parts = ["%s [%s] %s" % (t["id"], "x" if t.get("status") == "done" else " ", t["title"])]
     if t.get("stage"):
         parts[0] += " (%s)" % t["stage"]
     if t.get("status") not in (None, "open", "done"):
         parts.append(t["status"])
     if t.get("owner"):
-        parts.append("owner %s" % t["owner"])
+        parts.append("owner %s" % _owner_text(t["owner"], replaced or {}))
     if t.get("next"):
         parts.append("next: %s" % t["next"])
     chk = t.get("check") or {}
@@ -69,10 +75,17 @@ def _show(args, proj):
         dump_json({"project": proj["slug"], "tasks": board["tasks"], "backlog": board["backlog"]})
         return 0
     tasks = board["tasks"]
+    replaced = {}
+    if tasks:
+        for r in sessions.list_sessions(proj["slug"]):
+            if r.get("replaced_by"):
+                replaced[r["sid"]] = r["replaced_by"]
+                if r.get("title"):
+                    replaced[r["title"]] = r["replaced_by"]
     print("# %s — %s" % (proj["slug"], ("%d task%s" % (len(tasks), "" if len(tasks) == 1 else "s"))
                          if tasks else "no tasks"))
     for t in tasks:
-        print(_task_line(t))
+        print(_task_line(t, replaced))
     return 0
 
 
