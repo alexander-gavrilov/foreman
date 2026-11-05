@@ -11,7 +11,7 @@ ALLOWED = [
     "FOREMAN_ACTOR=orchestrator foreman log append done",
     "orca terminal list --json", "herdr pane list",
     "git status", "git log --oneline -5", "git diff HEAD~1", "git -C /repo show abc123", "git branch",
-    "git branch -a", "git rev-parse HEAD", "git log --oneline --exit-code -- --output", "git grep -n foo -- src",
+    "git branch -a", "git rev-parse HEAD", "git grep -n foo -- src",
     "git diff --stat --name-only", "git ls-files | wc -l", "git stash list",
     "gh pr view 12", "gh pr list --state open", "gh pr create --title t --body b", "gh pr merge 12 --squash",
     "gh pr review 12 --approve", "gh pr checks 12", "gh pr comment 12 --body ok", "gh issue list",
@@ -36,7 +36,8 @@ BLOCKED = [
     "git ls-remote --upload-pack=./evil.sh /some/repo", "git ls-remote --exec=./evil.sh .",
     "git diff --ext-diff", "git diff --ext", "git diff --out=x.patch", "git log --output x",
     "git ls-remote --upload=./evil.sh .", "git ls-remote --exe=./evil.sh .", "git grep -nOless foo",
-    "git grep --open-files=less foo", "git show --textc HEAD", "git grep -O less foo", "git help -m log", "foreman status & rm x", "xargs rm", "env rm x", "/bin/rm x", "./foreman status", "",
+    "git grep --open-files=less foo", "git show --textc HEAD",
+    "git grep -e -- --open-files-in-pager=less", "git log -- --output=x", "git grep -O less foo", "git help -m log", "foreman status & rm x", "xargs rm", "env rm x", "/bin/rm x", "./foreman status", "",
 ]
 
 
