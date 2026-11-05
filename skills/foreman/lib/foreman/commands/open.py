@@ -2,7 +2,7 @@
 import os
 import shutil
 
-from foreman import limits, messaging, projects, routing, sessions, transports
+from foreman import limits, messaging, paths, projects, routing, sessions, store, transports
 from foreman.cliutil import CliError, add_project_arg, dump_json, read_text_arg, resolve_project
 from foreman.transports._proc import TransportError
 from foreman.transports.base import TerminalGone
@@ -104,12 +104,15 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
 
     require_agent_handle(transport, handle)
 
-    rec = sessions.create_session(
-        project=project["slug"], agent=chosen_agent, model=chosen_model, effort=chosen_effort,
-        role=role, owner=owner, purpose=purpose, title=title,
-        transport={"kind": tkind, "handle": handle},
-        cwd=project["path"], state="starting", replaces=replaces, lifecycle="active",
-    )
+    os.makedirs(paths.sessions_dir(), exist_ok=True)
+    with store.locked(os.path.join(paths.sessions_dir(), "_bind")):  # the lock the hook pipeline binds under
+        rec = sessions.create_session(
+            project=project["slug"], agent=chosen_agent, model=chosen_model, effort=chosen_effort,
+            role=role, owner=owner, purpose=purpose, title=title,
+            transport={"kind": tkind, "handle": handle},
+            cwd=project["path"], state="starting", replaces=replaces, lifecycle="active",
+        )
+        sessions.absorb_strays(rec)  # a hook that fired during the launch already auto-registered a worker
     if launch_title != rec["title"]:
         try:
             transport.rename(handle, rec["title"])

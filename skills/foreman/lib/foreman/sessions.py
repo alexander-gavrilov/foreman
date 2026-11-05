@@ -142,6 +142,39 @@ def update_session(sid, **fields):
     return store.update_json(path, apply, default=None)
 
 
+ABSORBED_FIELDS = ("agent_session_id", "past_agent_session_ids", "transcript_path", "state", "state_since",
+                   "last_event_at", "context_tokens", "context_at")
+
+
+def absorb_strays(rec):
+    """`foreman open` records a session only after the transport returned the terminal handle, but the agent
+    may already have fired hooks by then; the hook pipeline then auto-registered a user worker on that
+    terminal. Merge every such stray (open, same agent and terminal, other sid) into `rec`: `rec` takes over
+    its agent session id, transcript and activity, and the stray is closed with `merged_into`. Call it with the
+    hook binding lock held. Returns the sids absorbed."""
+    tr = rec.get("transport") or {}
+    if not tr.get("handle"):
+        return []
+    merged = []
+    for other in list_sessions():
+        otr = other.get("transport") or {}
+        if (other["sid"] == rec["sid"] or not is_open(other) or other.get("agent") != rec.get("agent")
+                or otr.get("handle") != tr["handle"] or otr.get("kind") != tr.get("kind")
+                or other.get("role") != "worker" or other.get("owner") != "user"):
+            continue
+        fields = {k: other[k] for k in ABSORBED_FIELDS if other.get(k) is not None}
+        if other.get("agent_session_id"):
+            fields["agent_session_id"] = other["agent_session_id"]
+        if not rec.get("model") and other.get("model"):
+            fields["model"] = other["model"]
+        update_session(rec["sid"], **fields)
+        rec.update(fields)
+        update_session(other["sid"], lifecycle="closed", closed_at=timeutil.now_iso(), merged_into=rec["sid"],
+                       agent_session_id=None)
+        merged.append(other["sid"])
+    return merged
+
+
 def is_open(rec):
     """False once the session's lifecycle is closed (records without the field are active). Activity
     (`state`) is separate: a rotated session is open and its busy/idle state is still tracked."""
