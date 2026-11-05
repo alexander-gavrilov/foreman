@@ -47,7 +47,7 @@ class TelegramNotificationTest(AcceptanceCase):
         got = digests(self.inputs(self.orch_a))
         self.assertEqual(len(got), 1)
         self.assertIn("да, мерджь и закрывай", got[0])
-        self.assertIn("user", got[0])
+        self.assertIn("USER (telegram)", got[0])
         self.assertEqual(digests(self.inputs(self.orch_b)), [], "the other project's orchestrator must not hear it")
 
     def test_a_topic_reply_reaches_an_antigravity_orchestrator(self):

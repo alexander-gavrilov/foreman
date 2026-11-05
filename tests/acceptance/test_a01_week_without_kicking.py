@@ -82,6 +82,8 @@ class WeekWithoutKickingTest(AcceptanceCase):
         # Friday: a worker's terminal disappears.
         self.advance(days=1)
         self.terminal().kill(self.ui["transport"]["handle"])
+        self.fm_ok("watch", "run")  # review 3a: gone needs two consecutive passes with the terminal missing
+        self.advance(minutes=1)
         self.fm_ok("watch", "run")
         self.wait_for(lambda: any("terminal gone: fm-ui" in d for d in self.orch_digests()), what="the gone wake")
 

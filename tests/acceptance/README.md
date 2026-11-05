@@ -33,13 +33,14 @@ fail the test if a real `gh` were run.
 | 5 | `test_a05_rotation` | handoff message, one batched ask + answer routed back, board shows old → new | pass |
 | 6 | `test_a06_notifications` | Telegram topic + deep link, topic reply → Claude and Antigravity orchestrators, macOS `terminal-notifier -open` argv | pass |
 | 7 | `test_a07_web` | `foreman web` + pairing + `/api/state` lists every project | pass |
-| 8 | `test_a08_limits` | ≥70% steers, ≥90% refuses, empty reading keeps last value | pass; 1 expected failure (stale reading after window reset, PRODUCT BUG) |
+| 8 | `test_a08_limits` | ≥70% steers, ≥90% refuses, empty reading keeps last value | pass (incl. the stale-reading-after-window-reset guard) |
 | 9 | `test_a09_janitor` | 14-day folder listed then removed by the watch loop alone | pass |
-| 10 | `test_a10_findings` | work-Mac default is a local draft; public issue argv has no project data | pass; 1 expected failure (credentials are not scrubbed, PRODUCT BUG) |
+| 10 | `test_a10_findings` | work-Mac default is a local draft; public issue argv has no project data | pass (incl. the pasted-credential guard) |
 | 11 | `test_a11_install` | install/uninstall round trip, Linux and darwin branches, installed artifacts executed | pass |
 
-`@unittest.expectedFailure` marks a scenario that exposes a product bug; the comment above it starts with
-`PRODUCT BUG:`. When the product is fixed the test starts "unexpectedly succeeding": remove the decorator.
+A scenario that exposes a product bug is marked `@unittest.expectedFailure` with a comment starting `PRODUCT BUG:`;
+when the product is fixed it starts "unexpectedly succeeding" and the decorator is removed (both scenarios of items
+8 and 10 went this way).
 
 ## What still needs the user (not testable here)
 

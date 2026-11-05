@@ -141,10 +141,8 @@ class FindingsTest(AcceptanceCase):
         self.assertNotIn("123e4567", body)
         self.assertIn("the hook returned {} twice", body)
 
-    # PRODUCT BUG: scrub.scrub() masks paths, project names, hosts, emails, ids and code, but not credentials: a
-    # GitHub token, an Anthropic key, a bearer JWT and a Telegram bot token pasted into a finding all reach the public
-    # issue verbatim (or with only an inner hex run replaced). Spec §8.10 / §4.11: no secret may leave the machine.
-    @unittest.expectedFailure
+    # Regression guard (was a product bug): scrub used to mask paths, names and ids but not credentials.
+    # Spec §8.10 / §4.11: no secret may leave the machine in a public issue.
     def test_a_pasted_credential_does_not_reach_the_public_issue(self):
         for secret, essential in SECRET_FORMS:
             with self.subTest(secret=secret[:12]):

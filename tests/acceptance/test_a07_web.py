@@ -29,6 +29,7 @@ class WebTest(AcceptanceCase):
         self.hook(gone, "UserPromptSubmit")
         self.terminal().kill(gone["transport"]["handle"])
         self.fm_ok("watch", "run")
+        self.fm_ok("watch", "run")  # gone needs two consecutive passes (review 3a)
         # notes: quiet
         self.tap_claude(self.claude_statusline(weekly=61, five_hour=42))
         self.web = WebClient(self).start()

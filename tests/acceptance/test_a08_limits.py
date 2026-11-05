@@ -130,10 +130,8 @@ class LimitsTest(AcceptanceCase):
 
     # --- architecture §6: a stale reading -------------------------------------------------------------------------
 
-    # PRODUCT BUG: limits.levels() (used by `foreman open`) classifies by used_pct only and ignores resets_at, so a
-    # 95% reading stays "stop" for ever, although architecture §6 and spec §4.4 say a reading older than its
-    # window's reset counts as unknown (routing.window_level already implements that; levels() never calls it).
-    @unittest.expectedFailure
+    # Regression guard (was a product bug): limits.levels() used to classify by used_pct only, so a 95% reading
+    # stayed "stop" for ever. Architecture §6 / spec §4.4: a reading older than its window's reset is unknown.
     def test_a_reading_older_than_its_window_reset_no_longer_blocks(self):
         """Architecture §6: a reading older than the window's reset counts as unknown, which allows the provider."""
         self.tap_claude(self.claude_statusline(weekly=95))  # resets 3 days after T0

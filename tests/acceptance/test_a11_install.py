@@ -48,6 +48,10 @@ class Runner:
 class HostInstallTest(AcceptanceCase):
     def setUp(self):
         super().setUp()
+        # `uninstall --purge` only deletes a folder named foreman (review 3c, F10)
+        self.foreman_home = os.path.join(self.tmp, "foreman")
+        os.makedirs(self.foreman_home)
+        os.environ["FOREMAN_HOME"] = self.foreman_home
         self.claude_settings = os.path.join(self.home, ".claude", "settings.json")
         self.agy_settings = os.path.join(self.home, ".gemini", "antigravity-cli", "settings.json")
         self.sl_log = os.path.join(self.tmp, "statusline-ran.txt")
@@ -98,7 +102,8 @@ class HostInstallTest(AcceptanceCase):
         slug, path = self.make_project("demo")
         hooks = read_json(os.path.join(path, ".claude", "settings.local.json"))["hooks"]
         command = hooks["SessionStart"][0]["hooks"][0]["command"]
-        self.assertTrue(command.startswith(self.link), command)
+        # (a non-default FOREMAN_HOME is carried in front, so the hook and the daemon share one state)
+        self.assertTrue(command.startswith("FOREMAN_HOME=") and (" " + self.link + " hook ") in command, command)
         proc = subprocess.run(["sh", "-c", command], input=json.dumps(
             {"hook_event_name": "SessionStart", "session_id": "c-1", "cwd": path, "source": "startup"}),
             capture_output=True, text=True, env=self.env())
@@ -214,7 +219,7 @@ class BranchesTest(AcceptanceCase):
                 link = os.path.join(self.home, ".local", "bin", "foreman")
                 self.assertEqual(os.readlink(link), BIN)
                 cmd = read_json(os.path.join(self.home, ".claude", "settings.json"))["statusLine"]["command"]
-                self.assertTrue(cmd.endswith("tap statusline --agent claude -- bash ~/sl.sh"), cmd)
+                self.assertTrue(cmd.endswith("tap statusline --agent claude -- sh -c 'bash ~/sl.sh'"), cmd)
                 install.uninstall(platform=platform, runner=Runner())
                 self.assertFalse(os.path.lexists(link))
 
