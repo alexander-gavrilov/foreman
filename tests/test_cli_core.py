@@ -6,8 +6,10 @@ from tests.helpers import ForemanTestCase, run_cli, BIN, ROOT
 
 ALL_COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "board", "log",
                 "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
-                "hook", "tap", "deliver", "gate", "telegram", "orchestrator"]
-STUBS = [c for c in ALL_COMMANDS if c not in ("board", "log", "status", "gate")]
+                "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact"]
+# implemented commands (each work package removes its own from the stub list)
+IMPLEMENTED = ("board", "log", "status", "gate", "hook", "deliver", "send", "ask", "reply", "say", "stage", "compact")
+STUBS = [c for c in ALL_COMMANDS if c not in IMPLEMENTED]
 
 
 class LauncherTest(ForemanTestCase):
@@ -46,7 +48,7 @@ class LauncherTest(ForemanTestCase):
             self.assertIn("foreman %s: not implemented yet" % c, out + err)
 
     def test_stubs_accept_arbitrary_arguments(self):
-        code, out, err = run_cli("send", "s-123456", "hello", "--flag", "x")
+        code, out, err = run_cli("web", "s-123456", "hello", "--flag", "x")
         self.assertEqual(code, 2)
         self.assertIn("not implemented yet", out + err)
 

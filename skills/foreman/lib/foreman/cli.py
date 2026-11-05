@@ -9,7 +9,7 @@ from foreman.errors import ForemanError
 
 COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "board", "log",
             "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
-            "hook", "tap", "deliver", "gate", "telegram", "orchestrator"]
+            "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact"]
 
 
 def _load(name):
