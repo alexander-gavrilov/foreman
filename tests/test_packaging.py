@@ -79,4 +79,6 @@ class Packaging(ForemanTestCase):
         self.assertLessEqual(len(lines), 10)
         for part in ("foreman work new", "other agents", "foreman report", "foreman stage"):
             self.assertIn(part, text)
+        # F5: a rule finding must never become a public issue by accident
+        self.assertIn("foreman report --project", text)
         self.assertFalse(os.path.exists(os.path.join(ROOT, "skills", "foreman", "templates", "rules-block.md")))

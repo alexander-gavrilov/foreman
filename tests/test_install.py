@@ -172,6 +172,23 @@ class InstallTest(ForemanTestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("removed", out)
 
+    def test_install_says_what_upstream_mode_is_and_how_to_change_it(self):
+        env = {"FOREMAN_INSTALL_DRY_SERVICES": "1"}
+        for kind, expect in (("home", "auto"), ("work", "draft")):
+            self.write_config({})
+            code, out, err = run_cli("install", "--machine-kind", kind, env=env)
+            self.assertEqual(code, 0, err)
+            line = [l for l in out.splitlines() if l.startswith("upstream:")]
+            self.assertEqual(len(line), 1, out)
+            self.assertIn("upstream.mode=%s" % expect, line[0])
+            self.assertIn("config.json", line[0])
+            self.assertIn("draft", line[0])
+            self.assertIn("off", line[0])
+        # an explicit choice is reported as it is
+        self.write_config({"upstream": {"mode": "off"}})
+        code, out, err = run_cli("install", "--machine-kind", "home", env=env)
+        self.assertIn("upstream.mode=off", out)
+
     def test_cli_uses_platform_param(self):
         r = Runner()
         os.environ["FOREMAN_INSTALL_DRY_SERVICES"] = "0"

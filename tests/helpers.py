@@ -16,7 +16,14 @@ if LIB not in sys.path:
     sys.path.insert(0, LIB)
 
 _ENV_KEYS = ("HOME", "FOREMAN_HOME", "FOREMAN_FAKE_TRANSPORT", "FOREMAN_NOW",
-             "FOREMAN_ACTOR", "XDG_STATE_HOME")
+             "FOREMAN_ACTOR", "XDG_STATE_HOME", "PATH")
+
+GH_SHIM = """#!/bin/sh
+# test shim: the real gh must never run from a test (it would use the developer's or CI's credentials)
+echo "$0 $*" >> "$FOREMAN_GH_SHIM_LOG"
+echo "gh must not be called from a test" >&2
+exit 97
+"""
 
 
 class ForemanTestCase(unittest.TestCase):
@@ -40,6 +47,30 @@ class ForemanTestCase(unittest.TestCase):
         os.environ["FOREMAN_FAKE_TRANSPORT"] = self.fake_transport
         for k in ("FOREMAN_NOW", "FOREMAN_ACTOR", "XDG_STATE_HOME"):
             os.environ.pop(k, None)
+        # Reporting upstream is draft-only in tests, and a `gh` shim first on PATH fails the test if anything
+        # runs it. A test that really wants gh calls self.allow_gh() (and provides its own gh on PATH).
+        self.write_config({"upstream": {"mode": "draft"}})
+        shim_dir = os.path.join(self.tmp, "gh-shim")
+        os.makedirs(shim_dir)
+        self.gh_shim_log = os.path.join(shim_dir, "calls.log")
+        shim = os.path.join(shim_dir, "gh")
+        with open(shim, "w") as f:
+            f.write(GH_SHIM)
+        os.chmod(shim, 0o755)
+        os.environ["FOREMAN_GH_SHIM_LOG"] = self.gh_shim_log
+        os.environ["PATH"] = shim_dir + os.pathsep + os.environ.get("PATH", "")
+        self._gh_allowed = False
+        self.addCleanup(self._check_gh_shim)
+
+    def allow_gh(self):
+        """Opt out of the gh guard (the test supplies its own gh on PATH)."""
+        self._gh_allowed = True
+
+    def _check_gh_shim(self):
+        os.environ.pop("FOREMAN_GH_SHIM_LOG", None)
+        if not self._gh_allowed and os.path.exists(self.gh_shim_log):
+            with open(self.gh_shim_log) as f:
+                self.fail("the real gh was called from a test: " + f.read().strip())
 
     @staticmethod
     def _restore_env(saved):
