@@ -68,10 +68,24 @@ class ForemanTestCase(unittest.TestCase):
         os.environ["PATH"] = shim_dir + os.pathsep + os.environ.get("PATH", "")
         self._gh_allowed = False
         self.addCleanup(self._check_gh_shim)
+        self.addCleanup(self._reap_delivery_children)  # LIFO: runs before the temp tree goes
 
     def allow_gh(self):
         """Opt out of the gh guard (the test supplies its own gh on PATH)."""
         self._gh_allowed = True
+
+    @staticmethod
+    def _reap_delivery_children():
+        """Detached `foreman deliver` children spawned by hooks: wait for them (bounded), so none outlives the
+        test as a ResourceWarning."""
+        from foreman import delivery
+        for child in list(delivery._children):
+            try:
+                child.wait(timeout=15)
+            except Exception:
+                child.kill()
+                child.wait()
+        delivery._children[:] = []
 
     def _check_gh_shim(self):
         os.environ.pop("FOREMAN_GH_SHIM_LOG", None)

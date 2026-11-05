@@ -83,7 +83,7 @@ def merge_claude_layout(data, agent, events, fm):
         found = False
         for group in groups:
             for h in (group.get("hooks") if isinstance(group, dict) else None) or []:
-                if isinstance(h, dict) and tail.search(h.get("command") or ""):
+                if isinstance(h, dict) and tail.search(h.get("command") or "") and _is_foreman_handler(h):
                     found = True
                     h["command"] = want
         if not found:
@@ -128,7 +128,18 @@ _FOREMAN_HANDLER = re.compile(r"\bhook --agent (?:claude|antigravity|codex) --ev
 
 
 def _is_foreman_handler(h):
-    return isinstance(h, dict) and bool(_FOREMAN_HANDLER.search(h.get("command") or ""))
+    """foreman's own hook command: `[VAR=value ...] <path>/foreman hook --agent A --event E`. Anchored to the
+    executable's name, so another tool with the same arguments is never taken for ours (review 4 N11)."""
+    cmd = h.get("command") if isinstance(h, dict) else None
+    if not isinstance(cmd, str) or not _FOREMAN_HANDLER.search(cmd):
+        return False
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return False
+    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        words.pop(0)
+    return bool(words) and os.path.basename(words[0]) == "foreman" and words[1:2] == ["hook"]
 
 
 def strip_claude_layout(data):
@@ -157,6 +168,18 @@ def strip_claude_layout(data):
     if changed and not hooks:
         del data["hooks"]
     return changed
+
+
+def _has_foreman_hooks(project_path, agent):
+    try:
+        data = _load_json(os.path.join(project_path, HOOK_FILES[agent]))
+    except InitError:
+        return False
+    if not data:
+        return False
+    if agent == "antigravity":
+        return "foreman" in data
+    return strip_claude_layout(data)  # works on the loaded copy only
 
 
 def remove_hooks(project_path, agent):
@@ -189,6 +212,9 @@ def remove_project(path, home=None):
     path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
     changes = []
     for agent, rel in HOOK_FILES.items():
+        if _has_foreman_hooks(path, agent) and is_tracked(path, rel):
+            changes.append("left %s alone: it is tracked by git (remove the foreman hooks there yourself)" % rel)
+            continue
         try:
             if remove_hooks(path, agent):
                 changes.append("removed foreman hooks from %s" % rel)

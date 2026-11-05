@@ -5,6 +5,7 @@ same loop run in-process every five minutes (288 passes). In both: no byte typed
 inbox message, no Telegram message, no model CLI started. The heartbeat proves the loop really ran."""
 import os
 import unittest
+from unittest import mock
 
 from tests.acceptance.common import AcceptanceCase, digests, iso
 
@@ -48,11 +49,13 @@ class IdleDayTest(AcceptanceCase):
         from foreman import paths, store, watch
         os.environ["FOREMAN_NOW"] = iso(self.clock)
         wakes = 0
-        for _ in range(24 * 12):
-            self.advance(minutes=5)
-            os.environ["FOREMAN_NOW"] = iso(self.clock)
-            summary = watch.run_pass()
-            wakes += summary["wakes"] + summary["deliveries"]
+        # review 4 N13: the shims must be on THIS process's PATH, or a model started in-process goes unseen
+        with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([self.shim_dir, os.environ.get("PATH", "")])}):
+            for _ in range(24 * 12):
+                self.advance(minutes=5)
+                os.environ["FOREMAN_NOW"] = iso(self.clock)
+                summary = watch.run_pass()
+                wakes += summary["wakes"] + summary["deliveries"]
         self.assertEqual(wakes, 0)
         self.assert_nothing_spent()
         beat = store.read_json(paths.watch_heartbeat_file())
