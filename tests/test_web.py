@@ -70,6 +70,9 @@ class WebAuthTest(ForemanTestCase):
         code, url = auth.create_pairing_code(label="test-device")
         self.assertEqual(len(code), 8)
         self.assertIn("code=" + code, url)
+        # Alphabet: 32-letter unambiguous (digits 2-9 and letters without 0, 1, i, l, o)
+        unambiguous_32 = "23456789abcdefghjkmnpqrstuvwxyz"
+        self.assertTrue(all(c in unambiguous_32 for c in code.lower()))
 
         # secrets.json must exist and have mode 0600
         sec_path = paths.secrets_file()
@@ -186,12 +189,17 @@ class StateViewTest(ForemanTestCase):
         self.assertIn("chat", p_detail)
         self.assertIn("board", p_detail)
         self.assertIn("sessions", p_detail)
+        self.assertEqual(len(p_detail["sessions"]), 1)
+        self.assertIn("lifecycle", p_detail["sessions"][0])
+        self.assertEqual(p_detail["sessions"][0]["lifecycle"], "active")
         self.assertIn("watches", p_detail)
 
 
 class ServerHttpTest(ForemanTestCase):
     def setUp(self):
         super().setUp()
+        from foreman.web import auth
+        auth.reset_pairing_rate_limits()
         from foreman.web.server import create_server, StateMonitor
         self.monitor = StateMonitor(poll_interval=0.1)
         self.monitor.start()
@@ -263,6 +271,7 @@ class ServerHttpTest(ForemanTestCase):
         set_cookie = hdrs.get("Set-Cookie", "")
         self.assertIn("fm_token=", set_cookie)
         self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("SameSite=Strict", set_cookie)
 
         # Extract cookie
         cookie_val = set_cookie.split("fm_token=")[1].split(";")[0]
@@ -395,6 +404,90 @@ class ServerHttpTest(ForemanTestCase):
         response_bytes = sock._wfile.getvalue()
         self.assertIn(b"403", response_bytes)
         self.assertIn(b"Forbidden", response_bytes)
+
+    def test_host_header_dns_rebinding_rejected(self):
+        # Requests with an invalid Host header must be rejected with 421 or 403
+        status, hdrs, body = self._http("/api/state", headers={"Host": "evil.attacker.com"})
+        self.assertIn(status, (421, 403))
+
+        status, hdrs, body = self._http("/api/state", headers={"Host": "attacker.site:8765"})
+        self.assertIn(status, (421, 403))
+
+        # Valid Host headers (localhost or 127.0.0.1) pass Host check (even if unauth -> 401)
+        status, hdrs, body = self._http("/api/state", headers={"Host": "127.0.0.1:%d" % self.port})
+        self.assertEqual(status, 401)
+
+        status, hdrs, body = self._http("/api/state", headers={"Host": "localhost:%d" % self.port})
+        self.assertEqual(status, 401)
+
+    def test_csrf_origin_header_on_post(self):
+        from foreman.web import auth
+        from foreman import projects
+
+        code, _ = auth.create_pairing_code()
+        _, dev_token, _ = auth.exchange_pairing_code(code)
+
+        p = self.init_project("csrfproj")
+
+        # 1. POST with cross-origin Origin must be rejected with 403
+        status, hdrs, body = self._http(
+            "/api/projects/csrfproj/messages",
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + dev_token,
+                "Origin": "http://evil.com",
+            },
+            data={"text": "evil message"}
+        )
+        self.assertEqual(status, 403)
+
+        # 2. POST with cookie auth and NO Origin header must be rejected with 403 (CSRF risk)
+        status, hdrs, body = self._http(
+            "/api/projects/csrfproj/messages",
+            method="POST",
+            headers={
+                "Cookie": "fm_token=" + dev_token,
+                # No Origin header
+            },
+            data={"text": "cookie only message"}
+        )
+        self.assertEqual(status, 403)
+
+        # 3. POST with Bearer token and NO Origin header is allowed (API client)
+        status, hdrs, body = self._http(
+            "/api/projects/csrfproj/messages",
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + dev_token,
+                # No Origin header
+            },
+            data={"text": "bearer token message"}
+        )
+        self.assertEqual(status, 200)
+
+        # 4. POST with matching UI Origin is allowed (browser UI with cookie)
+        status, hdrs, body = self._http(
+            "/api/projects/csrfproj/messages",
+            method="POST",
+            headers={
+                "Cookie": "fm_token=" + dev_token,
+                "Origin": "http://127.0.0.1:%d" % self.port,
+            },
+            data={"text": "matching origin message"}
+        )
+        self.assertEqual(status, 200)
+
+    def test_pairing_rate_limit_429(self):
+        # 5 failed attempts per minute per client IP -> 429 on subsequent attempts
+        for _ in range(5):
+            status, hdrs, body = self._http("/pair?code=badcode99&json=1")
+            self.assertEqual(status, 401)
+
+        # 6th failed attempt triggers 429
+        status, hdrs, body = self._http("/pair?code=badcode99&json=1")
+        self.assertEqual(status, 429)
+        self.assertIn("429", str(status))
+
 
 
 

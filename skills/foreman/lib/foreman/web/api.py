@@ -93,8 +93,19 @@ def handle_pair(handler, parsed_url):
     query = urllib.parse.parse_qs(parsed_url.query)
     codes = query.get("code")
     is_json = "1" in query.get("json", []) or "application/json" in handler.headers.get("Accept", "")
+    client_ip = handler.client_address[0] if handler.client_address else None
+
+    # Rate limiting: at most 5 failed attempts per minute per client IP
+    if not auth.check_pairing_rate_limit(client_ip):
+        if is_json:
+            _send_json(handler, 429, {"ok": False, "error": "too many failed pairing attempts"},
+                       extra_headers={"Retry-After": "60"})
+        else:
+            handler.send_error(429, "Too Many Requests: failed pairing attempts limit reached")
+        return
 
     if not codes or not codes[0]:
+        auth.record_failed_pairing(client_ip)
         if is_json:
             _send_json(handler, 400, {"ok": False, "error": "code query parameter required"})
         else:
@@ -109,6 +120,7 @@ def handle_pair(handler, parsed_url):
     ok, token_or_err, dev_id = auth.exchange_pairing_code(code, label=label)
 
     if not ok:
+        auth.record_failed_pairing(client_ip)
         if is_json:
             _send_json(handler, 401, {"ok": False, "error": token_or_err})
         else:
@@ -118,8 +130,8 @@ def handle_pair(handler, parsed_url):
             handler.wfile.write(token_or_err.encode("utf-8") + b"\n")
         return
 
-    # Set cookie: fm_token; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax
-    cookie_str = "fm_token=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax" % token_or_err
+    # Set cookie: fm_token; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict
+    cookie_str = "fm_token=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" % token_or_err
 
     if is_json:
         _send_json(handler, 200, {"ok": True, "device_id": dev_id},
@@ -290,6 +302,25 @@ def dispatch(handler):
     if not _is_authenticated(handler):
         _send_unauthorized(handler)
         return
+
+    # CSRF check for state-changing requests (POST, etc.)
+    if method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = handler.headers.get("Origin")
+        auth_hdr = handler.headers.get("Authorization") or ""
+        has_bearer = auth_hdr.startswith("Bearer ")
+
+        if origin:
+            parsed_origin = urllib.parse.urlsplit(origin)
+            origin_host = (parsed_origin.hostname or "").lower()
+            from foreman.web.server import is_allowed_host
+            if not is_allowed_host(origin_host):
+                _send_json(handler, 403, {"error": "forbidden", "message": "cross-origin request forbidden"})
+                return
+        else:
+            # Absent Origin requires a Bearer token (reject cookie-only POST)
+            if not has_bearer:
+                _send_json(handler, 403, {"error": "forbidden", "message": "origin header required for cookie auth"})
+                return
 
     state_monitor = getattr(handler.server, "state_monitor", None)
 

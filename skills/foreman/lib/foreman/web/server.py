@@ -21,6 +21,51 @@ logger = logging.getLogger(__name__)
 CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 
 
+def is_allowed_host(host_hdr):
+    """Check if Host header matches configured bind addresses, base_url host, machine name or localhost."""
+    if not host_hdr or not isinstance(host_hdr, str):
+        return False
+    host = host_hdr.strip()
+    if host.startswith("[") and "]" in host:
+        hostname = host[1:host.index("]")].lower()
+    elif ":" in host:
+        hostname = host.split(":", 1)[0].lower()
+    else:
+        hostname = host.lower()
+
+    # Always allowed local hostnames
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::"):
+        return True
+
+    cfg = config.load()
+    binds = cfg.get("web", {}).get("bind", ["127.0.0.1"])
+    if isinstance(binds, str):
+        binds = [binds]
+    for b in binds:
+        b_clean = b.strip().lower()
+        if b_clean.startswith("[") and "]" in b_clean:
+            b_clean = b_clean[1:b_clean.index("]")]
+        if hostname == b_clean:
+            return True
+
+    base_url = cfg.get("web", {}).get("base_url")
+    if base_url:
+        import urllib.parse
+        base_host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
+        if hostname == base_host:
+            return True
+
+    machine_name = (cfg.get("machine", {}).get("name") or "").lower()
+    if machine_name and hostname in (machine_name, machine_name + ".local", machine_name + ".lan"):
+        return True
+
+    local_host = socket.gethostname().lower()
+    if hostname in (local_host, local_host.split(".")[0]):
+        return True
+
+    return False
+
+
 def is_allowed_client_ip(ip_str):
     """Check if client IP is loopback, RFC1918, CGNAT 100.64/10, link-local or IPv6 ULA/loopback."""
     if not ip_str or not isinstance(ip_str, str):
@@ -142,6 +187,12 @@ class ForemanRequestHandler(BaseHTTPRequestHandler):
             client_ip = self.client_address[0]
             if not is_allowed_client_ip(client_ip):
                 self.send_error(403, "Forbidden: client IP not permitted")
+                self.close_connection = True
+                return
+
+            host_hdr = self.headers.get("Host", "")
+            if not is_allowed_host(host_hdr):
+                self.send_error(421, "Misdirected Request: host header not permitted")
                 self.close_connection = True
                 return
 

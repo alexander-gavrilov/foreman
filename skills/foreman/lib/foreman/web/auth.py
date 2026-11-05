@@ -1,19 +1,59 @@
 """Web authentication and device token management (architecture §9).
 
 Pairing:
-- One-time 8-char code valid for 10 minutes.
+- One-time 8-char code from a 32-letter unambiguous alphabet valid for 10 minutes.
 - Stored hashed in secrets.json (mode 0600).
 - Exchanged for a random device token stored hashed with label and created_at.
-- Device token is validated via cookie `fm_token` or `Authorization: Bearer <token>`.
+- Device token is validated via cookie `fm_token` (HttpOnly; SameSite=Strict; Path=/)
+  or `Authorization: Bearer <token>`.
+- Rate limiting: at most 5 failed pairing attempts per minute per client IP.
 """
 from datetime import timedelta
 import hashlib
 import os
 import secrets
+import threading
+import time
 
 from foreman import config, ids, paths, store, timeutil
 
 PAIRING_TTL_SECONDS = 600  # 10 minutes
+PAIRING_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"  # 32 unambiguous chars (no 0, 1, i, l, o)
+
+# Rate limiting for failed pairing attempts: client_ip -> list of failure timestamps
+_failed_pairing_lock = threading.Lock()
+_failed_pairing_attempts = {}
+
+
+def check_pairing_rate_limit(client_ip):
+    """Return True if client_ip is within the rate limit (< 5 failures in past 60s), False if exceeded."""
+    if not client_ip:
+        return True
+    now = time.time()
+    cutoff = now - 60.0
+    with _failed_pairing_lock:
+        recent = [t for t in _failed_pairing_attempts.get(client_ip, []) if t >= cutoff]
+        _failed_pairing_attempts[client_ip] = recent
+        return len(recent) < 5
+
+
+def record_failed_pairing(client_ip):
+    """Record a failed pairing attempt for client_ip."""
+    if not client_ip:
+        return
+    now = time.time()
+    cutoff = now - 60.0
+    with _failed_pairing_lock:
+        recent = [t for t in _failed_pairing_attempts.get(client_ip, []) if t >= cutoff]
+        recent.append(now)
+        _failed_pairing_attempts[client_ip] = recent
+
+
+def reset_pairing_rate_limits():
+    """Clear all rate limit records (for testing)."""
+    with _failed_pairing_lock:
+        _failed_pairing_attempts.clear()
+
 
 
 def hash_token(token):
@@ -34,9 +74,9 @@ def _get_base_url():
 
 
 def create_pairing_code(label=None):
-    """Generate a one-time 8-char hex code valid for 10 minutes, store hashed in secrets.json (0600).
-    Returns (code, pair_url)."""
-    code = secrets.token_hex(4)  # 8 characters
+    """Generate a one-time 8-char code from a 32-letter unambiguous alphabet valid for 10 minutes,
+    store hashed in secrets.json (0600). Returns (code, pair_url)."""
+    code = "".join(secrets.choice(PAIRING_ALPHABET) for _ in range(8))
     now_dt = timeutil.now()
     now = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     expires_at = (now_dt + timedelta(seconds=PAIRING_TTL_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")

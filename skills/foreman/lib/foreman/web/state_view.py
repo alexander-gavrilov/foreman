@@ -286,6 +286,15 @@ def build_project(slug):
         if is_live:
             live_count += 1
 
+        lifecycle = s.get("lifecycle")
+        if not lifecycle:
+            if s.get("state") == "closed":
+                lifecycle = "closed"
+            elif s.get("state") == "rotated":
+                lifecycle = "rotated"
+            else:
+                lifecycle = "active"
+
         formatted_sessions.append({
             "sid": s.get("sid"),
             "title": s.get("title") or s.get("sid"),
@@ -294,6 +303,7 @@ def build_project(slug):
             "role": s.get("role"),
             "owner": s.get("owner"),
             "state": s.get("state"),
+            "lifecycle": lifecycle,
             "state_age": age,
             "context_tokens": tokens,
             "context_level": lvl,
