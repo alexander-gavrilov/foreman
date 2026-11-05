@@ -147,3 +147,11 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   after install; the poller previously started only if configured at daemon start (review 3b).
 - D53 · The web Origin check compares scheme, host and port. — Same-site pages on another local port (e.g. a dev
   server showing untrusted content) could otherwise POST as the user; SameSite ignores the port.
+- D54 · Orchestrator launch writes a pending-orchestrator marker first; an unknown session's hook in that project
+  within 180 s binds as the pending orchestrator (guard active) and is absorbed into the real record. — Live test E2
+  showed the agent's first hooks arrive before foreman has its terminal handle, so the orchestrator briefly ran as an
+  unguarded worker (acceptance 3).
+- D55 · Antigravity orchestrator (revisits D36): the guard is proven for agy via workspace-level `.agents/hooks.json`
+  with the user's own Orca/Herdr hooks present and ~/.gemini untouched (live E3). agy becomes orchestrator-capable once
+  a live e2e also shows worker events reaching an agy orchestrator (Stop `continue` delivery / re-type fallback);
+  until then `orchestrator start --agent antigravity` stays refused.
