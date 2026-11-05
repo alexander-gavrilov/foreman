@@ -210,15 +210,18 @@ def _mirror(project, text, msg_id):
     """D51: the project's Telegram topic mirrors the project chat. Runs on a daemon thread AFTER the message was
     delivered, so an unreachable Telegram never delays the reply; failures are logged, never raised."""
     import threading
+    from foreman import paths
+    home = paths.home()  # captured now: the thread must not resolve the state root later (env may have changed)
 
     def work():
-        try:
-            from foreman import notify
-            res = notify.mirror_to_topic(project, text, msg_id=msg_id)
-            if isinstance(res, dict) and not res.get("ok") and res.get("error"):
-                _log_mirror_error(res["error"])
-        except Exception as exc:
-            _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
+        with paths.pinned_home(home):
+            try:
+                from foreman import notify
+                res = notify.mirror_to_topic(project, text, msg_id=msg_id)
+                if isinstance(res, dict) and not res.get("ok") and res.get("error"):
+                    _log_mirror_error(res["error"])
+            except Exception as exc:
+                _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
     t = threading.Thread(target=work, name="foreman-mirror", daemon=True)
     _mirror_threads[:] = [x for x in _mirror_threads if x.is_alive()]
     _mirror_threads.append(t)

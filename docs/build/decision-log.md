@@ -163,3 +163,11 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   spec §4.11 keeps `auto` at home.
 - D57 · An agy PreToolUse hook that blocks nothing answers `{"decision":"ask"}`, not `{}`. — Live E4: the interactive TUI
   denies every call on `{}`, which also stopped agy workers in any initialised project (`-p` mode does not show this).
+- D58 · The gate is the safety boundary, the scrubber only makes reports readable. `gate()` is an allow-style check on the
+  scrubbed text: after removing what is known to be harmless (foreman's own paths, slug and URLs, known placeholders,
+  plain version numbers) every remaining token must look like prose — a path separator, dotted name, host:port, IP
+  address, secret-like phrase (`is`/`was`/`:`/`=` after password/secret/token/key words, angle-bracket values too) or
+  random-looking token (mixed case or letter/digit flips, ≥ 16 characters) holds the finding as a local draft with the
+  reason. A false draft is cheap, a false public issue is not. Known limit: an unregistered project name in plain
+  prose cannot be recognised; registered names are scrubbed. — Review 5 found 18 spec §8.10 shapes that passed both
+  layers, and foreman's own paths/URLs that the old blacklist gate wrongly held.

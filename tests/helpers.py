@@ -26,12 +26,42 @@ exit 97
 """
 
 
+def real_default_homes():
+    """The state folders foreman would use without FOREMAN_HOME on this machine (computed from the account and the
+    environment the test process started with): no test may create or write them."""
+    homes = set()
+    try:
+        import pwd
+        homes.add(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".local", "state", "foreman"))
+    except Exception:
+        pass
+    homes.add(os.path.join(_START_STATE_HOME, "foreman"))
+    return sorted(homes)
+
+
+_START_STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+
+
+def _home_snapshot(path):
+    """None when the folder does not exist; else how many mirror_error rows its events.jsonl holds. A developer's
+    own foreman may legitimately write there while the suite runs, so only what a leaked test thread writes counts."""
+    if not os.path.isdir(path):
+        return None
+    try:
+        with open(os.path.join(path, "events.jsonl"), "r", encoding="utf-8", errors="replace") as f:
+            return sum(1 for line in f if '"mirror_error"' in line)
+    except OSError:
+        return 0
+
+
 class ForemanTestCase(unittest.TestCase):
     """Creates temp HOME/FOREMAN_HOME/FOREMAN_FAKE_TRANSPORT and points os.environ at them."""
 
     def setUp(self):
         super().setUp()
         self.addCleanup(os.chdir, os.getcwd())  # LIFO: restored after the temp tree is removed
+        before = {h: _home_snapshot(h) for h in real_default_homes()}
+        self.addCleanup(self._assert_default_home_untouched, before)
         self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="foreman-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = os.path.join(self.tmp, "home")
@@ -69,6 +99,18 @@ class ForemanTestCase(unittest.TestCase):
         self._gh_allowed = False
         self.addCleanup(self._check_gh_shim)
         self.addCleanup(self._reap_delivery_children)  # LIFO: runs before the temp tree goes
+        self.addCleanup(self._flush_mirrors)  # ... and before the environment is restored (mirror threads)
+
+    @staticmethod
+    def _flush_mirrors():
+        """Telegram mirror threads (messaging._mirror) must finish while the temp environment is still set."""
+        from foreman import messaging
+        messaging.flush_mirrors(15)
+
+    def _assert_default_home_untouched(self, before):
+        changed = [h for h, snap in before.items() if _home_snapshot(h) != snap]
+        if changed:
+            self.fail("the default foreman home was created or written by a test: " + ", ".join(changed))
 
     def allow_gh(self):
         """Opt out of the gh guard (the test supplies its own gh on PATH)."""
