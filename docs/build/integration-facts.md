@@ -62,7 +62,7 @@ Runtime status: operational (v1.4.239, verified via `orca status --json`).
   - Source: `orca terminal list --json`, `orca terminal list --help`.
 - **Launch agent**: `orca agent launch --agent <claude|antigravity|codex> --worktree <selector> --model <model> --effort <effort> --prompt "<prompt>" [--surface chat|terminal] [--focus] --json`
   (For new checkout: `orca worktree create --name <name> --agent <id> --model <model> --effort <effort> --prompt "<prompt>" --json`).
-  - Key fields in `result.launch`: `outcome.kind` (`"structured"` chat or `"terminal"`), `outcome.handle` (agent handle ID), `receipt.detail`, `prompt.outcome` (`"journaled"` or `"handed-to-terminal"`).
+  - Key fields (Orca 1.4.239, verified live): the launch handle is `result.outcome.handle` (e.g. `"term_..."`), next to `result.outcome.kind` (`"structured"` chat or `"terminal"`) and `result.outcome.paneKey`; `receipt.detail` and `prompt.outcome` (`"journaled"` or `"handed-to-terminal"`) are siblings of `outcome` under `result`, not under a `result.launch` wrapper. `OrcaTransport.launch` reads `result.outcome.handle` first and keeps `result.launch.*` / `result.terminal.handle` only as fallbacks for other versions. The agent starts working inside the launch call, so its first hooks can arrive before `foreman open` has recorded the session (see the pending-orchestrator marker, D54).
   - Source: `orca skills get orca-cli`, `orca agent launch --help`, `orca agent-context --json`.
 - **Rename tab**: `orca terminal rename --terminal <handle> --title "<new-title>" --json`
   - Key fields in `result.rename`: `handle`, `tabId`, `title`.

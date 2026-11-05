@@ -54,7 +54,7 @@ Speak to the user in their language (Russian by default). Everything you write i
   Keep it to one or two lines. When you act autonomously, say it in one line and log it; do not ask.
 
 ## Board and journal: you are the only writer
-- Workers report stage changes to you in one line; you update `foreman board add|set|done` and `foreman log append`.
+- Workers report stage changes to you in one line; you update `foreman board add|set|done` and journal with `foreman log append "<what happened and why>"`.
 - A stage is done only when its objective check passed (tests green, review approved): `foreman board done`
   enforces the check. Use `foreman log search` before repeating a stage. The board stays within one screen.
 

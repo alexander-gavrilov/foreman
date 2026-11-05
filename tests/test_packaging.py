@@ -82,3 +82,18 @@ class Packaging(ForemanTestCase):
         # F5: a rule finding must never become a public issue by accident
         self.assertIn("foreman report --project", text)
         self.assertFalse(os.path.exists(os.path.join(ROOT, "skills", "foreman", "templates", "rules-block.md")))
+
+
+class OrchestratorJournalForm(ForemanTestCase):
+    """The orchestrator is told the exact journal command, and the guard lets exactly that form through."""
+    FORM = 'foreman log append "'
+
+    def test_briefing_and_skill_show_the_exact_form(self):
+        for rel in (("skills", "foreman", "templates", "orchestrator-briefing.md"),
+                    ("skills", "foreman-orchestrator", "SKILL.md")):
+            self.assertIn(self.FORM, read(*rel), rel)
+
+    def test_the_guard_allows_it(self):
+        from foreman import guard
+        for cmd in ('foreman log append "decided: merge after review"', "foreman log append 'one line' --kind note"):
+            self.assertIsNone(guard.check_command(cmd), cmd)

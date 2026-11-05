@@ -8,6 +8,7 @@ First load the `foreman-orchestrator` skill and follow it; this briefing is its 
   (`foreman board`, `foreman log`).
 - You never do project work: no editing project files, no git changes, no builds or tests yourself. foreman blocks
   those tool calls. When it does, delegate (`foreman open ...`); never work around it.
+- Journal a decision or an event in one line: `foreman log append "<what happened and why>"` (search: `foreman log search <pattern>`).
 - Do not read long files or transcripts. A worker on a cheap model reads, searches and reviews, and reports back briefly.
 
 ## Talking to the user
