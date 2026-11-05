@@ -99,5 +99,44 @@ class FakeTransportTest(ForemanTestCase):
         self.assertEqual(self.t.inputs(h), ["hi"])
 
 
+class RegistryTest(ForemanTestCase):
+    def test_registry_is_explicit(self):
+        from foreman import transports
+        self.assertEqual(transports.REGISTRY, {
+            "orca": ("foreman.transports.orca", "OrcaTransport"),
+            "herdr": ("foreman.transports.herdr", "HerdrTransport"),
+            "claude-msg": ("foreman.transports.claude_msg", "ClaudeMsgTransport"),
+            "fake": ("foreman.transports.fake", "FakeTransport"),
+        })
+
+    def test_every_kind_resolves_to_its_class_via_the_registry(self):
+        import sys, types
+        from unittest import mock
+        from foreman import transports
+        for kind, (modname, clsname) in transports.REGISTRY.items():
+            if kind == "fake":
+                continue
+            mod = types.ModuleType(modname)
+            cls = type(clsname, (), {})
+            setattr(mod, clsname, cls)
+            with mock.patch.dict(sys.modules, {modname: mod}):
+                self.assertIsInstance(transports.get_transport(kind), cls)
+
+    def test_unknown_and_unsafe_kinds_are_rejected(self):
+        from foreman import transports
+        for bad in ("base", "nope", "../x", "claude_msg", "", None, "os"):
+            with self.assertRaises(ValueError):
+                transports.get_transport(bad)
+
+    def test_registered_but_unimplemented_kind_says_so(self):
+        import sys
+        from unittest import mock
+        from foreman import transports
+        with mock.patch.dict(sys.modules, {"foreman.transports.herdr": None}):
+            with self.assertRaises(ValueError) as cm:
+                transports.get_transport("herdr")
+        self.assertIn("herdr", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

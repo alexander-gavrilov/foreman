@@ -5,7 +5,22 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import tempfile
+
+from foreman import timeutil
+from foreman.errors import ForemanError
+
+
+class StateCorrupt(ForemanError):
+    """A state file could not be parsed (or has the wrong shape). It was moved aside, never overwritten."""
+    code = 1
+
+    def __init__(self, path, moved_to, reason=""):
+        super().__init__("state file %s is corrupt%s; moved aside to %s (nothing was overwritten)"
+                         % (path, " (%s)" % reason if reason else "", moved_to))
+        self.path = path
+        self.moved_to = moved_to
 
 
 @contextlib.contextmanager
@@ -23,12 +38,41 @@ def locked(path):
             os.close(fd)
 
 
-def _read_json(path, default):
+def _aside_name(path):
+    stamp = timeutil.now().strftime("%Y%m%dT%H%M%SZ")
+    candidate, n = "%s.corrupt-%s" % (path, stamp), 1
+    while os.path.exists(candidate):
+        n += 1
+        candidate = "%s.corrupt-%s-%d" % (path, stamp, n)
+    return candidate
+
+
+def quarantine(path, reason=""):
+    """Move a bad state file to <path>.corrupt-<ts> and raise StateCorrupt. Callers must hold the lock
+    when they can (the move itself is atomic)."""
+    target = _aside_name(path)
+    try:
+        os.replace(path, target)
+    except OSError:
+        target = "(could not move: %s)" % path
+    raise StateCorrupt(path, target, reason)
+
+
+def _read_json(path, default, have_lock=False):
+    """default when the file does not exist; StateCorrupt (file moved aside) when it exists but is bad.
+    A bad read is re-checked under the lock first, so a writer that fixes the file meanwhile is not hit."""
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
+            text = f.read()
+    except (FileNotFoundError, NotADirectoryError):
         return default
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        if not have_lock:
+            with locked(path):
+                return _read_json(path, default, True)
+        quarantine(path, str(exc))
 
 
 def _write_json(path, data, mode=None):
@@ -61,10 +105,40 @@ def write_json(path, data, mode=None):
         _write_json(path, data, mode)
 
 
+def write_json_exclusive(path, data, mode=None):
+    """Create `path` with complete content, atomically, failing with FileExistsError if it exists.
+    (Readers never see a partial file: the content is written to a temp file and hard-linked into place.)"""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        try:
+            os.link(tmp, path)  # atomic, fails with FileExistsError
+        except OSError as exc:
+            if isinstance(exc, FileExistsError):
+                raise
+            # filesystem without hard links: fall back to O_EXCL create + write
+            efd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode if mode is not None else 0o644)
+            with os.fdopen(efd, "w", encoding="utf-8") as out, open(tmp, encoding="utf-8") as src:
+                out.write(src.read())
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def update_json(path, fn, default=None, mode=None):
     """Read-modify-write under one lock: fn(current_or_default) -> new value (also returned)."""
     with locked(path):
-        new = fn(_read_json(path, default))
+        new = fn(_read_json(path, default, True))
         _write_json(path, new, mode)
         return new
 
@@ -97,7 +171,7 @@ def read_jsonl(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return _parse_lines(f.read())
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return []
 
 
@@ -128,9 +202,18 @@ def search_jsonl(path, pattern, field=None, limit=None):
 
 
 def rewrite_jsonl(path, fn):
-    """Replace the file with fn(rows) -> rows, atomically, under the lock."""
+    """Replace the file with fn(rows) -> rows, atomically, under the lock. If the file had unparseable
+    lines, a copy of the original is kept as <path>.corrupt-<ts> first."""
     with locked(path):
-        rows = fn(read_jsonl(path))
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except (FileNotFoundError, NotADirectoryError):
+            raw = ""
+        rows = _parse_lines(raw)
+        if len([l for l in raw.splitlines() if l.strip()]) != len(rows):
+            shutil.copy2(path, _aside_name(path))
+        rows = fn(rows)
         directory = os.path.dirname(os.path.abspath(path))
         fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=directory)
         try:
