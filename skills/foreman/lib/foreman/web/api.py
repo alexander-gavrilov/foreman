@@ -203,6 +203,11 @@ def handle_post_message(handler, slug):
         _send_json(handler, 404, {"ok": False, "error": "project not found: %s" % slug})
         return
 
+    if reply_to is not None:
+        if not isinstance(reply_to, str) or not any(r.get("id") == reply_to for r in projects.chat_list(slug)):
+            _send_json(handler, 400, {"ok": False, "error": "reply_to is not a message of this project"})
+            return
+
     from foreman import messaging
     res = messaging.user_reply(slug, text, reply_to=reply_to, channel="web")
     _send_json(handler, 200, dict(res, ok=True))

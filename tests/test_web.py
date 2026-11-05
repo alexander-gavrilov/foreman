@@ -622,6 +622,30 @@ class ServerHttpTest(ForemanTestCase):
             finally:
                 sock.close()
 
+    def test_reply_to_must_be_a_message_of_the_same_project(self):
+        from foreman import projects
+        from foreman.web import auth
+        code, _ = auth.create_pairing_code()
+        _, tok, _ = auth.exchange_pairing_code(code)
+        self.init_project("rt-a")
+        self.init_project("rt-b")
+        qa = projects.chat_append("rt-a", "orchestrator", "Q?", question=True, options=["Да"])
+        qb = projects.chat_append("rt-b", "orchestrator", "Other?", question=True, options=["Да"])
+        hdr = {"Authorization": "Bearer " + tok}
+
+        def post(reply_to):
+            return self._http("/api/projects/rt-a/messages", method="POST", headers=hdr,
+                              data={"text": "answer", "reply_to": reply_to})[0]
+
+        self.assertEqual(post({"a": 1}), 400)
+        self.assertEqual(post(["m-1"]), 400)
+        self.assertEqual(post(qb["id"]), 400)  # another project's message
+        self.assertEqual(post("m-nonexistent"), 400)
+        self.assertEqual(len([m for m in projects.chat_list("rt-a") if m["from"] == "user"]), 0)
+        self.assertEqual(post(qa["id"]), 200)
+        self.assertEqual(post(None), 200)
+        self.assertEqual(projects.chat_list("rt-a")[1]["reply_to"], qa["id"])
+
     def test_pairing_rate_limit_429(self):
         # 5 failed attempts per minute per client IP -> 429 on subsequent attempts
         for _ in range(5):
