@@ -14,9 +14,9 @@ ALLOWED = [
     "git status", "git log --oneline -5", "git diff HEAD~1", "git -C /repo show abc123", "git branch",
     "git branch -a", "git rev-parse HEAD", "git grep -n foo -- src",
     "git diff --stat --name-only", "git ls-files | wc -l", "git stash list",
-    "gh pr view 12", "gh pr list --state open", "gh pr create --title t --body b", "gh pr merge 12 --squash",
-    "gh pr checks 12", "gh pr comment 12 --body ok", "gh issue list",
-    "gh issue create --title t", "gh run list", "gh run view 5", "gh repo view",
+    "gh pr view 12", "gh pr list --state open", 
+    "gh pr checks 12", "gh issue list",
+    "gh run list", "gh run view 5", "gh repo view",
     "ls && git status", "git status; git log -1", "cat a.txt | grep x | wc -l", "ls || echo none",
     "echo 'line one' | foreman send s-1 -", "pwd", "which git", "tree -L 2", "stat README.md", "file README.md",
     "foreman board show", "foreman board add 'new task' --stage plan", "foreman board set t1 stage=review",
@@ -26,8 +26,7 @@ ALLOWED = [
     "orca terminal list --json", "orca terminal read --terminal t1", "orca terminal wait --terminal t1",
     "orca worktree ps --json", "herdr pane list", "herdr agent wait w1 --until idle", "herdr agent read w1",
     "git fetch", "git fetch origin", "git fetch --prune origin", "git fetch --all", "git fetch -q origin",
-    "gh pr merge 12 --merge --auto", "gh pr merge 12 --squash --subject 'x y'",
-    "gh issue create --title t --body 'plain text is fine'", "gh pr comment 12 --body hello",
+    
     "git -C /repo log -3", "git remote -v", "git blame README.md",
     "git diff --stat --name-only", "git grep -n foo -- src",
 ]
@@ -82,6 +81,10 @@ BLOCKED = [
     # review 2: fetch may only fetch, never move refs
     "git fetch . HEAD:other", "git fetch origin +HEAD:refs/heads/main", "git fetch origin main",
     "git fetch --tags origin", "git fetch origin:x", "git fetch ../other", "git fetch --prune . ",
+    # review 2c: gh without -R resolves to `upstream`, not origin, so writes must name the repo explicitly
+    "gh pr create --title t --body b", "gh pr merge 12 --squash", "gh pr comment 12 --body ok",
+    "gh issue create --title t", "gh issue comment 3 --body x", "gh pr merge 12 --merge --auto",
+    "gh issue create --title t --body 'plain text is fine'", "gh pr comment 12 --body hello",
     # review 2b N3: reviews come from a different instance
     "gh pr review 12 --approve", "gh pr review 12 --comment --body x", "gh pr review", "gh pr review 12 -a",
     # review 2b N2: only FOREMAN_ACTOR may be set
@@ -168,7 +171,7 @@ class GuardGhRepoTest(ForemanTestCase):
     def test_unknown_origin_denies_every_override(self):
         # no .git at all
         self.assertIsNotNone(self.check("gh pr list -R acme/widget"))
-        self.assertIsNone(self.check("gh pr list"))  # without an override gh uses the cwd's own repo
+        self.assertIsNone(self.check("gh pr list"))  # reading without an override is harmless
         # .git without an origin remote
         git = os.path.join(self.proj["path"], ".git")
         os.makedirs(git)
@@ -189,6 +192,23 @@ class GuardGhRepoTest(ForemanTestCase):
         with open(os.path.join(self.proj["path"], ".git"), "w") as f:
             f.write("gitdir: %s\n" % gitdir)
         self.assertIsNone(self.check("gh pr list -R acme/widget"))
+
+    def test_writing_commands_must_name_the_repo_explicitly(self):
+        """gh prefers a remote called `upstream` over `origin`, so an implicit repo may be a public fork parent."""
+        self.origin("https://github.com/acme/widget.git")
+        for cmd in ("gh issue create --title t", "gh issue comment 3 --body x", "gh pr create --title t --body b",
+                    "gh pr comment 3 --body x", "gh pr merge 3 --squash"):
+            self.assertIsNotNone(self.check(cmd), cmd)
+            self.assertIsNone(self.check(cmd + " -R acme/widget"), cmd)
+            self.assertIsNone(self.check(cmd + " --repo=acme/widget"), cmd)
+            self.assertIsNotNone(self.check(cmd + " -R other/fork"), cmd)
+        # a URL of the origin's own PR/issue names the repo too
+        self.assertIsNone(self.check("gh pr comment https://github.com/acme/widget/pull/3 --body hi"))
+        self.assertIsNotNone(self.check("gh pr comment 3 --body https://github.com/acme/widget/pull/3"))
+        # read-only and non-posting commands need nothing
+        for cmd in ("gh pr view 3", "gh pr list", "gh issue list", "gh issue view 3", "gh pr checks 3",
+                    "gh pr diff 3", "gh run list", "gh repo view"):
+            self.assertIsNone(self.check(cmd), cmd)
 
     def test_body_files_stay_denied_even_for_the_own_repo(self):
         self.origin("https://github.com/acme/widget.git")

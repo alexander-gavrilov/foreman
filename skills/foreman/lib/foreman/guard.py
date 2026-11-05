@@ -46,6 +46,10 @@ GIT_FORBIDDEN_OPTIONS = ("--output", "--upload-pack", "--receive-pack", "--exec"
                          "--open-files-in-pager", "--textconv", "--config-env")
 GIT_GLOBAL_OK = {"--no-pager", "--no-optional-locks", "-P"}
 # `pr review` is absent on purpose: reviews come from a different instance, never from the orchestrator
+# gh resolves "the repo" from the cwd with a remote named `upstream` before `origin`, so commands that post
+# somewhere must name the repo explicitly (-R/--repo or a URL), and it must be the project's own origin.
+GH_NEEDS_EXPLICIT_REPO = {("issue", "create"), ("issue", "comment"), ("pr", "create"), ("pr", "comment"),
+                          ("pr", "merge")}
 GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "checks", "comment", "diff", "status"},
               "issue": {"view", "list", "create", "comment", "status"},
               "run": {"view", "list", "watch"},
@@ -378,7 +382,7 @@ def project_origin(project):
     return None
 
 
-def _check_gh_arguments(args, project):
+def _check_gh_arguments(args, project, needs_repo=False):
     """Rules for every gh command: no body files, no @file bodies, and a repo override (-R/--repo, or a PR/
     issue URL) only for the project's own origin, otherwise project data could be published elsewhere."""
     origin = None
@@ -390,6 +394,7 @@ def _check_gh_arguments(args, project):
             origin, resolved = project_origin(project), True
         return origin is not None and _norm_repo(value) == origin
 
+    explicit = False  # the repo is named by a validated -R/--repo or a URL of the origin
     expect = None  # the flag whose value is the next word
     for a in args:
         name = a.split("=", 1)[0]
@@ -398,6 +403,7 @@ def _check_gh_arguments(args, project):
             if flag in ("-R", "--repo"):
                 if not same_repo(a):
                     raise _Reject("gh --repo %s is not this project's origin" % a)
+                explicit = True
             elif a.startswith("@"):
                 raise _Reject("gh %s @file reads a local file" % flag)
             continue
@@ -407,12 +413,14 @@ def _check_gh_arguments(args, project):
             if "=" in a:
                 if not same_repo(a.split("=", 1)[1]):
                     raise _Reject("gh --repo %s is not this project's origin" % a)
+                explicit = True
             else:
                 expect = name
             continue
         if a.startswith("-R") and not a.startswith("--"):
             if not same_repo(a[2:].lstrip("=")):
                 raise _Reject("gh %s is not this project's origin" % a)
+            explicit = True
             continue
         if name in ("--body", "-b"):
             if "=" in a:
@@ -430,13 +438,17 @@ def _check_gh_arguments(args, project):
             m = re.match(r"^https?://([^/]+)/([^/]+)/([^/]+)/(?:pull|issues)/\d+/?$", a)
             if not m or not same_repo("%s/%s/%s" % m.groups()):
                 raise _Reject("gh URL %s is not this project's origin" % a)
+            explicit = True
+    if needs_repo and not explicit:
+        raise _Reject("gh needs an explicit `-R <this project's origin>` here (without it gh may pick the "
+                      "`upstream` remote, often a public repository)")
     if expect in ("-R", "--repo"):
         raise _Reject("gh --repo without a value")
 
 
 def _check_gh(args, project=None):
     if len(args) >= 2 and args[0] in GH_ALLOWED and args[1] in GH_ALLOWED[args[0]]:
-        _check_gh_arguments(args[2:], project)
+        _check_gh_arguments(args[2:], project, tuple(args[:2]) in GH_NEEDS_EXPLICIT_REPO)
         if args[:2] == ["pr", "merge"]:
             _check_merge(args[2:])
         return
