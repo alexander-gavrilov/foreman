@@ -224,6 +224,16 @@ def _segments(toks):
 
 # ---------------------------------------------------------------- per-command rules
 
+def _git_dangerous_option(sub, arg):
+    """git accepts any unambiguous abbreviation of a long option (--out=f, --upload=cmd), so a forbidden
+    option is matched by prefix in both directions; `git grep` also takes -O inside a short-option cluster."""
+    if arg.startswith("--"):
+        name = arg.split("=", 1)[0]
+        return len(name) > 2 and any(opt.startswith(name) or name.startswith(opt)
+                                     for opt in GIT_FORBIDDEN_OPTIONS)
+    return sub == "grep" and re.match(r"^-[^-]*O", arg) is not None
+
+
 def _check_git(args):
     i = 0
     while i < len(args) and args[i].startswith("-"):
@@ -239,7 +249,9 @@ def _check_git(args):
     sub, rest = args[i], args[i + 1:]
     if sub in GIT_READONLY:
         for a in rest:
-            if a.startswith(GIT_FORBIDDEN_OPTIONS) or (sub == "grep" and a.startswith("-O")):
+            if a == "--":
+                break  # everything after is a path
+            if _git_dangerous_option(sub, a):
                 raise _Reject("git %s %s writes a file or runs a program" % (sub, a))
         return
     if sub in ("branch", "tag"):
