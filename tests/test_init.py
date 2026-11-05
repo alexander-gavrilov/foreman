@@ -266,3 +266,46 @@ class InitRemoveTest(ForemanTestCase):
         for root in (self.proj, other):
             self.assertFalse(os.path.exists(os.path.join(root, ".claude", "settings.local.json")), root)
         self.assertTrue(any("hooks" in c and "app" in c for c in changes), changes)
+
+
+def _git(cwd, *args):
+    import subprocess
+    return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t"] + list(args), cwd=cwd,
+                          capture_output=True, text=True, check=True).stdout
+
+
+class InitInGitSubfolder(ForemanTestCase):
+    """F6 (review 3c): init in a repo subfolder must keep the working tree clean too."""
+
+    def setUp(self):
+        super().setUp()
+        import shutil
+        if not shutil.which("git"):
+            self.skipTest("git not available")
+        self.repo = self.make_dir("mono")
+        _git(self.repo, "init", "-q")
+        self.sub = os.path.join(self.repo, "services", "billing")
+        os.makedirs(self.sub)
+        with open(os.path.join(self.sub, "main.py"), "w") as f:
+            f.write("x = 1\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "init")
+
+    def test_subfolder_init_leaves_the_tree_clean_and_remove_restores_exclude(self):
+        before = open(os.path.join(self.repo, ".git", "info", "exclude")).read()
+        initproj.init_project(self.sub, agents=["claude", "antigravity", "codex"], transports=[], fm=FM)
+        self.assertTrue(os.path.exists(os.path.join(self.sub, ".claude", "settings.local.json")))
+        self.assertEqual(_git(self.repo, "status", "--porcelain"), "")
+        exclude = open(os.path.join(self.repo, ".git", "info", "exclude")).read()
+        self.assertIn("/services/billing/.claude/settings.local.json", exclude)
+        # idempotent
+        changes, _ = initproj.init_project(self.sub, agents=["claude", "antigravity", "codex"], transports=[], fm=FM)
+        self.assertFalse([c for c in changes if "excluded" in c], changes)
+        initproj.remove_project(self.sub)
+        self.assertEqual(open(os.path.join(self.repo, ".git", "info", "exclude")).read(), before)
+        self.assertEqual(_git(self.repo, "status", "--porcelain"), "")
+
+    def test_repo_root_init_still_excludes_at_the_root(self):
+        initproj.init_project(self.repo, agents=["claude"], transports=[], fm=FM)
+        self.assertIn("/.claude/settings.local.json", open(os.path.join(self.repo, ".git", "info", "exclude")).read())
+        self.assertEqual(_git(self.repo, "status", "--porcelain"), "")

@@ -224,9 +224,27 @@ def _exclude_file(project_path):
     return None
 
 
+def _git_exclude(project_path):
+    """(exclude file, prefix) for a folder inside a git work tree: git knows where info/exclude lives (also for
+    worktrees) and how deep the folder is below the repo root, so entries can be anchored there. Falls back to
+    looking for `.git` in the folder itself when git cannot say. (None, "") outside a repository."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", project_path, "rev-parse", "--show-toplevel", "--show-prefix",
+                              "--git-path", "info/exclude"], capture_output=True, text=True, timeout=20)
+        lines = out.stdout.split("\n")
+        if out.returncode == 0 and len(lines) >= 3 and lines[2]:
+            target = lines[2] if os.path.isabs(lines[2]) else os.path.join(project_path, lines[2])
+            return os.path.normpath(target), lines[1]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return _exclude_file(project_path), ""
+
+
 def exclude_from_git(project_path, rel_paths):
-    """Append missing entries to .git/info/exclude (never .gitignore). Returns the entries added."""
-    target = _exclude_file(project_path)
+    """Append missing entries to .git/info/exclude (never .gitignore), anchored below the repo root when the
+    project is a subfolder. Returns the entries added (relative to the project)."""
+    target, prefix = _git_exclude(project_path)
     if not target:
         return []
     try:
@@ -235,7 +253,7 @@ def exclude_from_git(project_path, rel_paths):
     except OSError:
         text = ""
     have = {ln.strip() for ln in text.splitlines()}
-    missing = [r for r in rel_paths if "/" + r not in have and r not in have]
+    missing = [r for r in rel_paths if "/" + prefix + r not in have and not (not prefix and r in have)]
     if not missing:
         return []
     os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -243,13 +261,13 @@ def exclude_from_git(project_path, rel_paths):
         if text and not text.endswith("\n"):
             f.write("\n")
         for r in missing:
-            f.write("/" + r + "\n")
+            f.write("/" + prefix + r + "\n")
     return missing
 
 
 def unexclude_from_git(project_path, rel_paths):
     """Drop the lines exclude_from_git added. Returns the entries removed."""
-    target = _exclude_file(project_path)
+    target, prefix = _git_exclude(project_path)
     if not target:
         return []
     try:
@@ -257,8 +275,8 @@ def unexclude_from_git(project_path, rel_paths):
             lines = f.read().split("\n")
     except OSError:
         return []
-    drop = {"/" + r for r in rel_paths}
-    removed = [ln.strip()[1:] for ln in lines if ln.strip() in drop]
+    drop = {"/" + prefix + r for r in rel_paths}
+    removed = [ln.strip()[1 + len(prefix):] for ln in lines if ln.strip() in drop]
     if removed:
         with open(target, "w", encoding="utf-8") as f:
             f.write("\n".join(ln for ln in lines if ln.strip() not in drop))
