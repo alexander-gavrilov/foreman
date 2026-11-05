@@ -5,6 +5,7 @@ message that is shown to the agent.
 Shell commands are allowed only if every pipeline segment starts with an allowlisted read-only or
 coordination command and nothing writes to a file or runs nested code. The command line is scanned with a
 small quote-aware scanner (not plain shlex: shlex cannot tell a quoted ">" from a redirection)."""
+import os
 import re
 
 SHELL_TOOLS = {"bash", "run_command", "shell", "local_shell", "exec_command", "shell_command",
@@ -44,11 +45,12 @@ GIT_READONLY = {"status", "log", "diff", "show", "rev-parse", "rev-list", "ls-fi
 GIT_FORBIDDEN_OPTIONS = ("--output", "--upload-pack", "--receive-pack", "--exec", "--ext-diff",
                          "--open-files-in-pager", "--textconv", "--config-env")
 GIT_GLOBAL_OK = {"--no-pager", "--no-optional-locks", "-P"}
-GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "review", "checks", "comment", "diff", "status"},
+# `pr review` is absent on purpose: reviews come from a different instance, never from the orchestrator
+GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "checks", "comment", "diff", "status"},
               "issue": {"view", "list", "create", "comment", "status"},
               "run": {"view", "list", "watch"},
               "repo": {"view", "list"}}
-ENV_ASSIGN = re.compile(r"^FOREMAN_[A-Z0-9_]*=")
+ENV_ASSIGN = re.compile(r"^FOREMAN_ACTOR=")  # the only variable an orchestrator may set
 
 SEPARATORS = {"|", "||", "&&", ";", "&"}
 WRITE_REDIRECTS = {">", ">>", ">|", "&>", "&>>", "<>"}
@@ -319,8 +321,119 @@ def _check_merge(rest):
             raise _Reject("gh pr merge %s" % a)
 
 
-def _check_gh(args):
+def _norm_repo(value):
+    """'host/owner/repo' (lowercase, no .git) for OWNER/REPO, HOST/OWNER/REPO, https/ssh URLs and scp-style
+    remotes; None if it is none of these."""
+    v = (value or "").strip()
+    m = (re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+?)/?$", v, re.I) or
+         re.match(r"^(?:[^@/\s]+@)?([^/:\s]+):(?!//)(.+?)/?$", v))
+    if m:
+        host, path = m.group(1), m.group(2)
+    elif v.count("/") == 1 and not v.startswith("/"):
+        host, path = "github.com", v
+    elif v.count("/") == 2 and not v.startswith("/"):
+        host, _, path = v.partition("/")
+    else:
+        return None
+    path = re.sub(r"\.git$", "", path)
+    return "%s/%s" % (host.lower(), path.lower()) if path.count("/") == 1 else None
+
+
+def _git_config_file(folder):
+    """The config file of the repository at `folder` (follows a worktree's .git pointer file)."""
+    dot = os.path.join(folder, ".git")
+    if os.path.isfile(dot):
+        with open(dot, "r", encoding="utf-8") as f:
+            first = f.readline().strip()
+        if not first.startswith("gitdir:"):
+            return None
+        gitdir = os.path.join(folder, first[len("gitdir:"):].strip())
+        common = os.path.join(gitdir, "commondir")
+        if os.path.isfile(common):
+            with open(common, "r", encoding="utf-8") as f:
+                gitdir = os.path.join(gitdir, f.readline().strip())
+        return os.path.join(gitdir, "config")
+    return os.path.join(dot, "config")
+
+
+def project_origin(project):
+    """Normalised origin remote of the project's repository, read from its .git/config without running
+    git. None when anything is unknown (the caller then denies)."""
+    try:
+        from foreman import projects
+        proj = projects.load_project(project) if project else None
+        cfg = _git_config_file(proj["path"]) if proj and proj.get("path") else None
+        if not cfg:
+            return None
+        in_origin = False
+        with open(cfg, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    in_origin = re.match(r'^\[remote\s+"origin"\]$', line, re.I) is not None
+                elif in_origin and re.match(r"^url\s*=", line, re.I):
+                    return _norm_repo(line.split("=", 1)[1])
+    except Exception:
+        return None
+    return None
+
+
+def _check_gh_arguments(args, project):
+    """Rules for every gh command: no body files, no @file bodies, and a repo override (-R/--repo, or a PR/
+    issue URL) only for the project's own origin, otherwise project data could be published elsewhere."""
+    origin = None
+    resolved = False
+
+    def same_repo(value):
+        nonlocal origin, resolved
+        if not resolved:
+            origin, resolved = project_origin(project), True
+        return origin is not None and _norm_repo(value) == origin
+
+    expect = None  # the flag whose value is the next word
+    for a in args:
+        name = a.split("=", 1)[0]
+        if expect:
+            flag, expect = expect, None
+            if flag in ("-R", "--repo"):
+                if not same_repo(a):
+                    raise _Reject("gh --repo %s is not this project's origin" % a)
+            elif a.startswith("@"):
+                raise _Reject("gh %s @file reads a local file" % flag)
+            continue
+        if name == "--body-file" or re.match(r"^-[^-]*F", a):
+            raise _Reject("gh body files are not allowed")
+        if name in ("-R", "--repo"):
+            if "=" in a:
+                if not same_repo(a.split("=", 1)[1]):
+                    raise _Reject("gh --repo %s is not this project's origin" % a)
+            else:
+                expect = name
+            continue
+        if a.startswith("-R") and not a.startswith("--"):
+            if not same_repo(a[2:].lstrip("=")):
+                raise _Reject("gh %s is not this project's origin" % a)
+            continue
+        if name in ("--body", "-b"):
+            if "=" in a:
+                if a.split("=", 1)[1].startswith("@"):
+                    raise _Reject("gh --body @file reads a local file")
+            else:
+                expect = name
+            continue
+        if a.startswith("-b") and not a.startswith("--") and a[2:].lstrip("=").startswith("@"):
+            raise _Reject("gh -b @file reads a local file")
+        if "://" in a and not a.startswith("-"):
+            m = re.match(r"^https?://([^/]+)/([^/]+)/([^/]+)/(?:pull|issues)/\d+/?$", a)
+            if not m or not same_repo("%s/%s/%s" % m.groups()):
+                raise _Reject("gh URL %s is not this project's origin" % a)
+    if expect in ("-R", "--repo"):
+        raise _Reject("gh --repo without a value")
+
+
+def _check_gh(args, project=None):
     if len(args) >= 2 and args[0] in GH_ALLOWED and args[1] in GH_ALLOWED[args[0]]:
+        _check_gh_arguments(args[2:], project)
         if args[:2] == ["pr", "merge"]:
             _check_merge(args[2:])
         return
@@ -368,7 +481,7 @@ def _check_coordination(cmd, args):
         raise _Reject("`%s %s` is not a read-only subcommand" % (cmd, " ".join(args[:2])))
 
 
-def _check_segment(words):
+def _check_segment(words, project=None):
     while words and ENV_ASSIGN.match(words[0]):
         words = words[1:]
     if not words:
@@ -381,7 +494,7 @@ def _check_segment(words):
     if cmd == "git":
         return _check_git(args)
     if cmd == "gh":
-        return _check_gh(args)
+        return _check_gh(args, project)
     if cmd not in SIMPLE_COMMANDS:
         raise _Reject("`%s` is not an allowed command" % cmd)
     if cmd == "find" and any(a in FIND_FORBIDDEN for a in args):
@@ -406,7 +519,7 @@ def check_command(cmd, project=None):
         if not segments:
             raise _Reject("empty command")
         for words in segments:
-            _check_segment(words)
+            _check_segment(words, project)
     except _Reject as why:
         return _block(str(why), project)
     except Exception as exc:  # fail closed

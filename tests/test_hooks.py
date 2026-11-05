@@ -339,7 +339,9 @@ class GuardHookTest(HookCase):
         run = lambda cmd: self.hook("claude", "PreToolUse", claude(  # noqa: E731
             "PreToolUse", cwd=self.proj["path"], tool_name="Bash", tool_input={"command": cmd}), env)
         self.assertEqual(run("foreman compact s-1 keep it"), {})
-        for bad in ("foreman board set t1 check='rm -rf /'", "foreman init", "orca terminal send --text x"):
+        for bad in ("foreman board set t1 check='rm -rf /'", "foreman init", "orca terminal send --text x",
+                    "gh pr review 3 --approve", "gh issue create --title t --body-file .env",
+                    "gh issue create -R someone/else --title t", "FOREMAN_HOME=. foreman status"):
             self.assertEqual(run(bad)["hookSpecificOutput"]["permissionDecision"], "deny", bad)
 
     def test_workers_and_user_sessions_are_never_guarded(self):
