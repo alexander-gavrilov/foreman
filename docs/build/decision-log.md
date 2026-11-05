@@ -107,3 +107,59 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   and work repos must stay clean; the rule still reaches every agent on every session start.
 - D42 · At ≥ 90 % the orchestrator is not wound down (it is informed); only workers are. — With Claude at ≥ 90 %
   and Codex not orchestrator-capable, there may be nowhere to hand off.
+
+## Build process (lead decisions during the build)
+
+- D43 · The seven parallel PRs (#4 #6 #7 #8 #9 #10 #11) are merged into one branch `build/integration`, cross-package
+  mismatches fixed there, and the combined code reviewed by area by three independent reviewers (transports/lifecycle/
+  limits/watch/guard; web/Telegram/notify + frontend vs §5.2; init/install/findings/skills/packaging). Merging the
+  integration PR marks the individual PRs merged. — The PRs were built against one contract but in parallel; reviewing
+  them one by one would review code that changes again during integration.
+- D44 · Live Telegram setup and verification go through the control panel relay: foreman-ac → "WIN-TASK <id>:" →
+  foreman-win (Windows, Chrome with web.telegram.org); results return as "WIN-RESULT <id>:". No secrets in a WIN-TASK;
+  the bot token reaches this server by foreman-win running `foreman telegram set-token` on ghome through its Orca env,
+  token on stdin. foreman-win asks the user before any Telegram change. — The build lead must not ask the user, and the
+  Telegram account lives in a browser on another machine.
+- D45 · Windows is not in this build (user decision via the control panel, 13:28); Linux and macOS only. foreman-win is
+  used only for Telegram work and remote-access checks (web UI from another machine over the VPN).
+- D46 · Spec §4.4 (limits) applies to the build itself: at ≥ 90 % of a provider window no new sessions are started there;
+  reviews moved to another provider/instance while Claude was exhausted (14:15–16:30 UTC), and Antigravity's Claude
+  models (exhausted 14:47) were replaced by Gemini 4 Argon in the same worktrees with a handoff message. The lead also
+  rotated at ~290k context (handoff file, old lead kept idle and answerable within the warm-cache window, as in §4.5).
+- D47 · Upstream findings stay `auto` at home (spec §4.11), made safe instead of switched off: the scrubber removes any
+  absolute path, remote, host/IP, token pattern and key=value secret, and keeps only allowed foreman issue/PR URLs;
+  `install` prints the upstream mode and how to change it; the project rule says `--project` for rule findings; the
+  test base class forces draft mode and fails on any unexpected `gh` call. — Review 3c showed leaks through the old
+  scrubber and that any Linux install would file to the public repo by default.
+- D48 · Inbox senders are taken from the calling session's record, never from the environment; the label "user" is
+  reserved for web/Telegram replies and rendered distinctly in the digest. — Review 3a forged user consent with
+  `FOREMAN_ACTOR=user foreman send …` (spec §7: gates must not be forgeable by sessions that read untrusted data).
+- D49 · A transport listing failure is not evidence that terminals are gone: a session is marked gone only after two
+  consecutive passes where the handle is missing and `alive()` is false, and reappearing handles are restored. Limit
+  windows past their reset time count as unknown. Antigravity's 3p windows only gate its Claude models.
+- D50 · The integration branch keeps the original PR commits (incl. two "wip" commits from a worker handover) so that
+  merging #12 marks #4 #6–#11 merged; pushed history is not rewritten.
+- D51 · The project's Telegram topic mirrors the project chat (spec §5.2 "the same conversation"): orchestrator
+  messages and web replies are posted there (web replies marked "user (web):"), Telegram replies are not echoed back,
+  and a "terminal closed" notice reaches every channel. — Architecture §7 had narrowed the topic to questions only,
+  so a Telegram reply to a closed orchestrator vanished silently (review 3b).
+- D52 · `foreman serve` always runs the Telegram poller and re-reads the configuration each pass. — Telegram is set up
+  after install; the poller previously started only if configured at daemon start (review 3b).
+- D53 · The web Origin check compares scheme, host and port. — Same-site pages on another local port (e.g. a dev
+  server showing untrusted content) could otherwise POST as the user; SameSite ignores the port.
+- D54 · Orchestrator launch writes a pending-orchestrator marker first; an unknown session's hook in that project
+  within 180 s binds as the pending orchestrator (guard active) and is absorbed into the real record. — Live test E2
+  showed the agent's first hooks arrive before foreman has its terminal handle, so the orchestrator briefly ran as an
+  unguarded worker (acceptance 3).
+- D55 · Antigravity orchestrators are allowed (closes D36). Live E3/E4 with the user's own Orca/Herdr hooks present and
+  no change to agy's hook config: the guard denies writes in `-p` and in the interactive TUI, a worker's Stop reaches an
+  idle agy orchestrator (typed), an event during a busy turn arrives once through Stop `continue`, and a user reply
+  arrives. Not exercised live: the continuation cap and its re-type fallback (tests only). Workspace trust stays a
+  one-time user step.
+- D56 · Upstream `auto` is two layers: the scrubber, then a fail-safe gate. If the scrubbed text still looks suspicious
+  (high-entropy token, secret-like residue) or too little useful text survives, the finding stays a local draft with
+  the reason and is never sent automatically. — Review 4 showed one pattern list both leaks (PEM, quoted passwords,
+  unknown token prefixes) and over-scrubs (empty issues filed); a blacklist cannot alone guarantee spec §8.10, while
+  spec §4.11 keeps `auto` at home.
+- D57 · An agy PreToolUse hook that blocks nothing answers `{"decision":"ask"}`, not `{}`. — Live E4: the interactive TUI
+  denies every call on `{}`, which also stopped agy workers in any initialised project (`-p` mode does not show this).
