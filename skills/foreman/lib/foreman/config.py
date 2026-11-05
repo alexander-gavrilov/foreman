@@ -10,7 +10,7 @@ DEFAULTS = {
     "web": {"bind": ["127.0.0.1"], "port": 8765, "base_url": None},
     # channels / mode=None -> derived from machine.kind
     "notify": {"channels": None},
-    "telegram": {"chat_id": None, "api_base": "https://api.telegram.org"},
+    "telegram": {"chat_id": None, "api_base": "https://api.telegram.org", "allowed_user_ids": []},
     "upstream": {"mode": None, "repo": "alexander-gavrilov/foreman"},
     "thresholds": {"context_soft": 150000, "context_hard": 250000, "stuck_after_s": 1200,
                    "waiting_after_s": 900, "limit_warn": 70, "limit_stop": 90, "work_ttl_days": 14},

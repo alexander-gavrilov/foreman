@@ -16,6 +16,8 @@ def normalise(event, payload):
     n["transcript_path"] = as_text(payload.get("transcriptPath"))
     n["model"] = as_text(payload.get("modelName"))
     n["prompt"] = as_text(payload.get("lastUserInput"))
+    num = payload.get("invocationNum")
+    n["invocation_num"] = num if isinstance(num, int) and not isinstance(num, bool) else None
     call = payload.get("toolCall")
     if isinstance(call, dict):
         n["tool_name"] = as_text(call.get("name"))
@@ -37,3 +39,10 @@ def render_continue(digest):
 
 def render_context(text):
     return {"injectSteps": [{"ephemeralMessage": text}]}
+
+
+def render_pass(event):
+    """The answer to a hook that blocks nothing. agy's interactive TUI treats `{}` from a PreToolUse hook as a
+    denial with an empty reason (live E4), so an unblocked tool call is handed back to agy's own permission flow
+    with `ask`, as Orca's hook does. Foreman never grants permissions, it only denies."""
+    return {"decision": "ask"} if event == "PreToolUse" else {}

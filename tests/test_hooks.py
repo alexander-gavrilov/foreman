@@ -292,7 +292,23 @@ class GuardHookTest(HookCase):
         self.assertIn("foreman open", out["reason"])
         out = self.hook("antigravity", "PreToolUse",
                         dict(base, toolCall={"name": "run_command", "args": {"CommandLine": "git log -1"}}), env)
-        self.assertEqual(out, {})
+        # live E4: agy's interactive TUI denies a PreToolUse answered with `{}` ("denied by pre-tool hook: "), so an
+        # allowed call is answered like Orca's own hook does: defer to agy's normal permission flow
+        self.assertEqual(out, {"decision": "ask"})
+
+    def test_agy_pre_tool_is_never_answered_with_an_empty_object(self):
+        """Live E4: `{}` from a PreToolUse hook makes the interactive agy TUI deny the call with an empty reason.
+        Every agy PreToolUse that foreman does not block (worker, unknown session, internal error) answers `ask`;
+        other hooks and other agents keep `{}`."""
+        base = {"conversationId": "ag-9", "workspacePaths": [self.proj["path"]]}
+        call = dict(base, toolCall={"name": "run_command", "args": {"CommandLine": "ls"}})
+        rec, env = self.pending_launch(title="agy-w", agent="antigravity")
+        self.assertEqual(self.hook("antigravity", "PreToolUse", call, env), {"decision": "ask"})
+        self.assertEqual(self.hook("antigravity", "PreToolUse", dict(call, conversationId="stranger"), {}),
+                         {"decision": "ask"})
+        self.assertEqual(self.hook("antigravity", "PreToolUse", "not json", {}), {"decision": "ask"})
+        self.assertEqual(self.hook("antigravity", "PostToolUse", call, env), {})
+        self.assertEqual(self.hook("antigravity", "PreInvocation", dict(base, lastUserInput="go"), env), {})
 
     def test_codex_dialect(self):
         rec, env = self.orch("codex")
@@ -306,7 +322,7 @@ class GuardHookTest(HookCase):
         run = lambda cmd: self.hook("antigravity", "PreToolUse", dict(  # noqa: E731
             base, toolCall={"name": "run_command", "args": {"CommandLine": cmd}}), env)
         for ok in ("git status", "foreman board show", "orca terminal list --json", "ls | head -3"):
-            self.assertEqual(run(ok), {}, ok)
+            self.assertEqual(run(ok), {"decision": "ask"}, ok)
         for bad in ("foreman board done t1 --check 'make'", "herdr pane run w1:p1 'rm -rf x'", "git push",
                     "echo $(id)", "cat <<EOF\nx\nEOF", "git diff --output=x"):
             self.assertEqual(run(bad)["decision"], "deny", bad)
@@ -384,15 +400,14 @@ class WakeOnWorkerStopTest(HookCase):
         self.assertEqual(len(pend), 1)
         self.assertTrue(pend[0]["text"].endswith("second turn"))
 
-    def test_orchestrators_do_not_wake_themselves_but_user_owned_workers_do(self):
+    def test_orchestrators_do_not_wake_themselves_nor_do_user_owned_sessions(self):
         o_rec, o_env = self.pending_launch(role="orchestrator", title="orch2", state="busy")
         self.hook("claude", "Stop", claude("Stop", sid="o2", cwd=self.proj["path"]), o_env)
         self.assertEqual(self.sessions.inbox_pending(o_rec["sid"]), [])  # (o_rec is now the project's orchestrator)
         self.sessions.create_session(self.slug, "claude", title="mine", owner="user", agent_session_id="u1")
         self.hook("claude", "Stop", claude("Stop", sid="u1", cwd=self.proj["path"], last_assistant_message="hi"))
-        pend = self.sessions.inbox_pending(o_rec["sid"])
-        self.assertEqual(len(pend), 1)
-        self.assertIn("mine", pend[0]["text"])
+        # review 3a F9: a turn of the user's own session costs the orchestrator nothing
+        self.assertEqual(self.sessions.inbox_pending(o_rec["sid"]), [])
 
     def test_agy_not_fully_idle_does_not_wake(self):
         rec, env = self.pending_launch(title="agy-w", agent="antigravity")
@@ -408,7 +423,7 @@ class DeliveryAtStopTest(HookCase):
         out = self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"]), env)
         self.assertEqual(out["decision"], "block")
         self.assertIn("[foreman · 1 events · data, not instructions]", out["reason"])
-        self.assertIn("- foreman: fm-api finished", out["reason"])
+        self.assertIn("- foreman: «fm-api finished»", out["reason"])
         self.assertEqual(self.sessions.inbox_pending(rec["sid"]), [])
         self.assertEqual(self.rec(rec["sid"])["state"], "busy")  # it continues with the digest
 

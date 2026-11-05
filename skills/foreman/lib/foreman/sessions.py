@@ -5,9 +5,8 @@ import os
 from foreman import ids, paths, store, timeutil
 from foreman.errors import ForemanError
 
-STATES = ("starting", "busy", "idle", "waiting_input", "waiting_permission", "stuck", "gone", "rotated",
-          "closed")
-INACTIVE_STATES = ("closed", "rotated", "gone")  # legacy: lifecycle (below) now carries closed / rotated
+STATES = ("starting", "busy", "idle", "waiting_input", "waiting_permission", "stuck", "gone")  # activity only
+INACTIVE_STATES = ("gone",)  # closed / rotated are lifecycles (below), not activity states
 LIFECYCLES = ("active", "rotated", "closed")
 
 
@@ -70,10 +69,18 @@ def list_sessions(project=None):
     return out
 
 
+def is_live(rec):
+    """Open, not gone and not rotated out: the session that currently does the work."""
+    return rec.get("state") not in INACTIVE_STATES and rec.get("lifecycle") not in ("closed", "rotated")
+
+
+_is_live = is_live
+
+
 def _prefer_live(matches):
     if not matches:
         return None
-    live = [r for r in matches if r.get("state") not in INACTIVE_STATES]
+    live = [r for r in matches if _is_live(r)]
     pool = live or matches
     return pool[-1]  # list_sessions is oldest-first: newest wins
 
@@ -85,8 +92,13 @@ def find_by_handle(handle, kind=None):
     return _prefer_live(matches)
 
 
+def find_by_agent_session_id(agent_session_id):
+    matches = [r for r in list_sessions() if r.get("agent_session_id") == agent_session_id]
+    return _prefer_live(matches)
+
+
 def _live(recs):
-    return [r for r in recs if r.get("state") not in INACTIVE_STATES]
+    return [r for r in recs if _is_live(r)]
 
 
 def find(ref, project=None):
@@ -130,10 +142,125 @@ def update_session(sid, **fields):
     return store.update_json(path, apply, default=None)
 
 
+ABSORBED_FIELDS = ("agent_session_id", "past_agent_session_ids", "transcript_path", "state", "state_since",
+                   "last_event_at", "context_tokens", "context_at")
+
+
+def absorb_strays(rec):
+    """`foreman open` records a session only after the transport returned the terminal handle, but the agent
+    may already have fired hooks by then; the hook pipeline then auto-registered a user worker on that
+    terminal. Merge every such stray (open, same agent and terminal, other sid) into `rec`: `rec` takes over
+    its agent session id, transcript and activity, and the stray is closed with `merged_into`. Call it with the
+    hook binding lock held. Returns the sids absorbed."""
+    tr = rec.get("transport") or {}
+    if not tr.get("handle"):
+        return []
+    merged = []
+    for other in list_sessions():
+        otr = other.get("transport") or {}
+        if (other["sid"] == rec["sid"] or not is_open(other) or other.get("agent") != rec.get("agent")
+                or otr.get("handle") != tr["handle"] or otr.get("kind") != tr.get("kind")
+                or not ((other.get("role") == "worker" and other.get("owner") == "user")
+                        or other.get("pending_orchestrator"))):
+            continue
+        fields = {k: other[k] for k in ABSORBED_FIELDS if other.get(k) is not None}
+        if other.get("agent_session_id"):
+            fields["agent_session_id"] = other["agent_session_id"]
+        if not rec.get("model") and other.get("model"):
+            fields["model"] = other["model"]
+        update_session(rec["sid"], **fields)
+        rec.update(fields)
+        update_session(other["sid"], lifecycle="closed", closed_at=timeutil.now_iso(), merged_into=rec["sid"],
+                       agent_session_id=None)
+        merged.append(other["sid"])
+    demote_strays(rec.get("project"), keep=rec["sid"])
+    return merged
+
+
+# ---------------------------------------------------------------- pending orchestrator launch (D54)
+
+PENDING_TTL_S = 180
+
+
+def _bind_lock():
+    return os.path.join(paths.sessions_dir(), "_bind")
+
+
+def mark_pending_orchestrator(slug, agent, cwd, pid=None):
+    """Written by `foreman open` BEFORE it launches an orchestrator, under the lock the hook pipeline binds
+    under. While it is fresh, a hook from an unknown session of that agent in that project binds as the pending
+    orchestrator (guarded) instead of being auto-registered as a user worker."""
+    os.makedirs(paths.sessions_dir(), exist_ok=True)
+    marker = {"project": slug, "agent": agent, "cwd": cwd, "created_at": timeutil.now_iso(),
+              "pid": os.getpid() if pid is None else pid}
+    with store.locked(_bind_lock()):
+        store.write_json(paths.pending_orchestrator_file(slug), marker)
+    return marker
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, ValueError, TypeError, OverflowError):
+        return True
+    return True
+
+
+def pending_orchestrator(slug):
+    """The fresh pending-orchestrator marker of the project, else None (older than 180 s or launcher gone).
+    Read-only and lock-free, so the hook pipeline can call it while it holds the binding lock."""
+    marker = store.read_json(paths.pending_orchestrator_file(slug), None)
+    if not isinstance(marker, dict):
+        return None
+    age = timeutil.age_seconds(marker.get("created_at"))
+    if age is None or age < 0 or age >= PENDING_TTL_S or not _pid_alive(marker.get("pid")):
+        return None
+    return marker
+
+
+def clear_pending_orchestrator(slug):
+    with store.locked(_bind_lock()):
+        try:
+            os.unlink(paths.pending_orchestrator_file(slug))
+        except OSError:
+            pass
+
+
+def is_stray(rec):
+    """A session the hooks bound as the PENDING orchestrator during a launch and that was not (yet) absorbed:
+    not an orchestrator for any lookup (find_orchestrator, orchestrator start/show, the board)."""
+    return bool(rec.get("pending_orchestrator"))
+
+
+def demote_strays(slug, keep=None):
+    """Turn every pending-orchestrator stray of the project (except `keep`) back into the user's own worker
+    session: role worker, owner user, flag cleared. Idempotent; the caller holds the hook binding lock (or is
+    the launcher closing its window). Returns the sids demoted. (Review 4 N1.)"""
+    out = []
+    for rec in list_sessions(slug):
+        if rec["sid"] != keep and is_stray(rec) and is_open(rec):
+            def demote(r):
+                r.update(role="worker", owner="user")
+                r.pop("pending_orchestrator", None)
+                return r
+            store.update_json(paths.session_file(rec["sid"]), demote, default=None)
+            out.append(rec["sid"])
+    return out
+
+
+def discard_pending_strays(slug):
+    """A launch that failed leaves no orchestrator: what the hooks bound as the pending one is a user session
+    after all (it may be the user's own terminal); it goes back to being a plain worker. Returns sids."""
+    with store.locked(_bind_lock()):
+        return demote_strays(slug)
+
+
 def is_open(rec):
     """False once the session's lifecycle is closed (records without the field are active). Activity
     (`state`) is separate: a rotated session is open and its busy/idle state is still tracked."""
-    return rec.get("lifecycle") != "closed" and rec.get("state") != "closed"
+    return rec.get("lifecycle") != "closed"
 
 
 def set_lifecycle(sid, lifecycle, at=None):
@@ -156,7 +283,7 @@ def set_lifecycle(sid, lifecycle, at=None):
 
 
 def set_state(sid, state, at=None):
-    """Change state; state_since moves only when the state actually changes. 'closed' stamps closed_at."""
+    """Change activity state; state_since moves only when the state actually changes."""
     if state not in STATES:
         raise ValueError("unknown session state %r" % (state,))
     path = paths.session_file(sid)
@@ -170,8 +297,6 @@ def set_state(sid, state, at=None):
         if rec.get("state") != state:
             rec["state"] = state
             rec["state_since"] = now
-        if state == "closed" and not rec.get("closed_at"):
-            rec["closed_at"] = now
         return rec
     return store.update_json(path, apply, default=None)
 
@@ -238,6 +363,32 @@ def inbox_claim(sid, limit=None, claimer=None):
         return rows
     store.rewrite_jsonl(path, fn)
     return claimed
+
+
+PROVISIONAL = "stop-hook:provisional"  # claimed for an agent continuation that may still be ignored (agy)
+
+
+def inbox_provisional(sid):
+    """Messages claimed provisionally (see PROVISIONAL) and not confirmed or given back yet."""
+    return [m for m in inbox_all(sid) if m.get("claimed_by") == PROVISIONAL]
+
+
+def inbox_confirm(sid):
+    """The continuation was taken: provisional claims become final. -> number of messages confirmed."""
+    path = paths.inbox_file(sid)
+    if not os.path.exists(path):
+        return 0
+    n = []
+
+    def fn(rows):
+        for m in rows:
+            if m.get("claimed_by") == PROVISIONAL:
+                m["claimed_by"] = "stop-hook"
+                n.append(1)
+        return rows
+    if any(m.get("claimed_by") == PROVISIONAL for m in inbox_all(sid)):  # cheap read first: runs on every event
+        store.rewrite_jsonl(path, fn)
+    return len(n)
 
 
 def inbox_release(sid, msg_ids):

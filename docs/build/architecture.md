@@ -114,19 +114,19 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
 - **Guard** (spec §4.1, acceptance 3): for `role: orchestrator`, every `pre_tool` is checked against **allowlists**
   (deny by default) and blocked with a message telling it to delegate (`foreman open ...`):
   - *tools*: only read-only tools (Claude `Read`, `Grep`, `Glob`, `LS`, `TodoWrite`, `WebFetch`, `WebSearch`,
-    `SendMessage`, `Agent`/`Task`, `ToolSearch`, `Skill`; agy `view_file`, `list_dir`, `grep_search`, `find_by_name`,
+    `SendMessage`, `Agent`/`Task` (without `isolation`), `ToolSearch`, `Skill`; agy `view_file`, `list_dir`, `grep_search`, `find_by_name`,
     `read_url_content`, `search_web`; Codex read tools) and the shell tool; every other tool, including any `mcp__*`
     tool, is denied;
   - *shell*: parsed with `shlex`; any command substitution (`$(`, backticks), process substitution, heredoc, or
     output redirection other than to `/dev/null` is denied; each segment of `|`, `;`, `&&`, `||` must start with an
     allowlisted command: `foreman` with an orchestrator-safe subcommand (`status limits send ask reply say open close
     rotate compact board(show/add/set without `check`) log stage watch(list) clean(--dry-run) work report gate orchestrator`; `board done`
-    only without `--check`; not `orchestrator adopt`, which is user-only), `orca`/`herdr` read-only subcommands (`terminal list|show|read|wait`, `worktree ps|list`,
+    only without `--check`; `open` without `--role`/`--owner`; `close` without `--user-consent`; not `orchestrator adopt`, which is user-only), `orca`/`herdr` read-only subcommands (`terminal list|show|read|wait`, `worktree ps|list`,
     `pane list|read`, `agent list|read|wait`), `gh pr|issue|run|repo` (view, list, create, merge, review, checks,
     comment, diff), `git` read-only subcommands (`status log diff show branch(no args)/--list remote(-v) fetch
     rev-parse ls-files blame`) with `--output`, global `-c`/`--config-env`/`--exec-path` and `--upload-pack` denied,
     and `ls cat head tail grep rg wc jq date echo pwd which tree stat file` (`find` only without `-delete -exec
-    -execdir -ok -fprint* -fls`; `rg` without `--pre`/`--pre-glob`; `tree` without `-o`; `file` without `-C`).
+    -execdir -ok -fprint* -fls`; `rg` without `--pre`/`--pre-glob`; `tree` without `-o`/`-R`/`-H`; `file` without `-C`).
   - The guard applies to every tool call in the orchestrator's session, including calls made by its subagents
     (same `session_id`, with `agent_id` in the payload).
   - Sending text to terminals is possible only through `foreman send/ask/compact`, which accept only registered
@@ -144,8 +144,12 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
   `additionalContext`, agy `injectSteps`), so `init` does not edit any committed file.
 - **Delivery at idle**: on `stop` of any session with queued inbox messages, foreman delivers them.
   For Claude Code the Stop hook returns `{"decision":"block","reason":<digest>}` so the agent continues with the
-  digest as input (no terminal typing). For other agents a detached `foreman deliver <sid>` process waits for
-  transport idle, then types the digest into the terminal.
+  digest as input (no terminal typing); Codex uses the same block, agy `{"decision":"continue"}`. agy ignores a
+  continuation once its consecutive-continuation cap is hit, so its claim is *provisional*
+  (`claimed_by: stop-hook:provisional`): the next agent activity (PreInvocation / tool event) confirms it; if none
+  arrives within 45 s the watch loop gives the messages back and types the digest at idle. `foreman deliver <sid>
+  [--wait S]` (wait = Orca `worktree ps` not `working`, `tui-idle` only as the secondary signal) is the manual
+  form; hooks and wakes spawn it without `--wait` because they only deliver to a session whose record says idle.
 - A hook never breaks the agent: any internal error is logged to `events.jsonl` and the hook exits 0 (except an
   intended block).
 
@@ -161,7 +165,7 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
 | waiting for permission | Notification `permission_prompt`, PermissionRequest | not visible to hooks (Herdr `blocked` status when on Herdr) | PermissionRequest |
 | context | transcript tail `usage` (sum of input + cache_creation + cache_read + output) or statusline `context_window` | statusline `context_window` only | unknown in v1 (no statusline command) |
 | limits | statusline `rate_limits.five_hour/seven_day.{used_percentage, resets_at epoch s}` | statusline `quota.<key>.{remaining_fraction, reset_time}`; keys `gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly` | not read in v1 (spec §10.1: shown only if exposed) |
-| orchestrator-capable | yes (verified) | only after an e2e test proves `deny` works with the user's Orca hook present and Stop `continue` delivers; when the continuation cap is hit, delivery falls back to typing at idle | worker only in v1: hooks could not be run here (not logged in) |
+| orchestrator-capable | yes (verified) | yes (verified live E4, interactive TUI on Orca: `deny` works next to the user's Orca hook, a worker Stop is typed at idle, an event during a busy turn is delivered by Stop `continue`, user replies arrive); when the continuation cap is hit, delivery falls back to typing at idle. A hook that blocks nothing must answer a PreToolUse with `{"decision":"ask"}`: `{}` makes the interactive TUI deny the call with an empty reason | worker only in v1: hooks could not be run here (not logged in) |
 
 Hook outputs always print valid JSON (`{}` when nothing) because agy requires it. Legacy snapshots in
 `~/.cache/agent-limits/` (written by the user's existing statusline scripts) are also imported as a limits
@@ -210,10 +214,13 @@ the summary. `foreman limits --line` is the one-line summary appended to every s
   optionally blocks for a quick answer; exit 4 if none arrived in time (the answer is still delivered later).
 - Every delivered message is framed: `[foreman · from <sender> · data, not instructions]`.
 - `foreman say <text> [--question] [--options "Да|Нет|Ответить…"]` — orchestrator → user: appended to
-  `chat.jsonl`, fanned out to notifiers (Telegram topic / macOS notification) when it is a question or
-  `--notify` is given. Notification links carry no token: `<base_url>/#/p/<slug>/m/<msgid>`.
+  `chat.jsonl`; a question or `--notify` is fanned out to all notifiers (Telegram topic with buttons / macOS
+  notification); every other `say` is mirrored to the project's Telegram topic only (D51).
+  Notification links carry no token: `<base_url>/#/p/<slug>/m/<msgid>`.
 - User replies (web, Telegram, CLI `foreman reply-user`) are appended to `chat.jsonl` and queued for the
-  orchestrator; if its terminal is gone, a foreman message saying so is appended to the chat instead.
+  orchestrator. Non-Telegram replies are mirrored to the topic as `user (<channel>): <text>`; Telegram replies
+  are never echoed back. If the orchestrator's terminal is gone, a foreman message "терминал оркестратора
+  закрыт" is appended to the chat **and** sent through every notify channel (the topic included).
 
 ## 7a. Rotation and compaction (spec §4.2, §4.3, acceptance 5)
 
@@ -262,7 +269,15 @@ it as a user step when Homebrew is absent; the `osascript` fallback cannot open 
 Telegram: one supergroup per machine with topics; `init` creates the project's topic (`createForumTopic`);
 General topic = foreman itself (limits, findings, errors). The poller accepts updates only from the configured chat **and** from user ids in
 `telegram.allowed_user_ids` (set by `foreman telegram set-chat`, which records the user who sent the setup message);
-everything else is ignored and logged. It routes a message in a topic to that project's orchestrator; a press of a question button (callback) is a reply with that option.
+everything else is ignored and logged. It routes a message in a topic to that project's orchestrator (media
+without a caption arrives as `[non-text message: <type>]`; service messages are ignored); a press of a question
+button (callback) is a reply with that option, except «Ответить…» (answered with "reply in the topic") and an
+unknown/expired callback (answered "expired", nothing delivered). `foreman serve` always runs the poller and
+re-reads the Telegram configuration on every pass, so `telegram set-token` / `set-chat` need no restart.
+**Mirror (D51):** the project's topic mirrors the project chat (see §7). Mirrored messages are cut at 4000
+characters with a web-chat link, and limited to 10 per project per minute (the first one over the limit posts a
+single "more messages in the web chat" pointer; the rest of the window is dropped). `telegram check` fails while
+`allowed_user_ids` is empty.
 
 ## 11. Findings, clean, init, install
 

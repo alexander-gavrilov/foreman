@@ -1,0 +1,3014 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
+<title>foreman — Диспетчерская</title>
+<style>
+  :root {
+    --bg-page: #0b0e14;
+    --bg-canvas: #0f141d;
+    --bg-panel: #151b26;
+    --bg-elevated: #1c2433;
+    --bg-hover: #212b3d;
+    --border: #232d3f;
+    --border-subtle: #1a2230;
+    --text-main: #e6edf3;
+    --text-muted: #8b98ad;
+    --text-dim: #5a667a;
+
+    /* Strict Direction 3 colour discipline:
+       - blue accent only for "needs you" (Ждёт вас)
+       - amber only for warnings (context > soft target, limit warn >= 70%)
+       - red only for stuck sessions and limit stop >= 90% */
+    --accent: #3b82f6;
+    --accent-bright: #60a5fa;
+    --accent-soft: rgba(59, 130, 246, 0.12);
+    --accent-border: rgba(59, 130, 246, 0.38);
+
+    --amber: #f59e0b;
+    --amber-soft: rgba(245, 158, 11, 0.12);
+    --amber-border: rgba(245, 158, 11, 0.35);
+
+    --red: #ef4444;
+    --red-soft: rgba(239, 68, 68, 0.12);
+    --red-border: rgba(239, 68, 68, 0.4);
+
+    --green: #10b981;
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Ubuntu, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg-page);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  a:focus-visible {
+    outline: 2px solid var(--accent-bright);
+    outline-offset: 2px;
+  }
+
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    width: 100%;
+    background: var(--bg-canvas);
+  }
+
+  /* =========================================================
+     TOP BAR
+     ========================================================= */
+  .topbar {
+    min-height: 52px;
+    background: #0c1018;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-shrink: 0;
+    z-index: 20;
+  }
+
+  .brand-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .mobile-back-btn {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    min-height: 40px;
+    padding: 0 10px;
+    margin-left: -8px;
+    border-radius: 6px;
+    color: var(--accent-bright);
+    font-weight: 600;
+    font-size: 13.5px;
+  }
+  .mobile-back-btn:hover {
+    background: var(--bg-panel);
+  }
+
+  .brand-name {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .brand-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+  .brand-dot.offline {
+    background: var(--text-dim);
+  }
+
+  .host-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .mobile-proj-title {
+    display: none;
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .offline-pill {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .offline-pill.visible {
+    display: inline-flex;
+  }
+
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .limits-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .limit-meter-wrap {
+    position: relative;
+  }
+
+  .limit-meter {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 40px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    transition: background 0.15s;
+  }
+  .limit-meter:hover,
+  .limit-meter[aria-expanded="true"] {
+    background: var(--bg-panel);
+  }
+
+  .limit-name {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .limit-name-short {
+    display: none;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+
+  .limit-bar {
+    width: 68px;
+    height: 5px;
+    background: #1b2230;
+    border-radius: 3px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .limit-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.2s ease;
+  }
+  .limit-fill.ok { background: var(--green); }
+  .limit-fill.warn { background: var(--amber); }
+  .limit-fill.stop { background: var(--red); }
+  .limit-fill.unknown { background: var(--text-dim); }
+
+  .limit-pct {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-main);
+    white-space: nowrap;
+  }
+  .limit-pct.warn { color: var(--amber); }
+  .limit-pct.stop { color: var(--red); }
+  .limit-pct.unknown { color: var(--text-muted); }
+
+  /* 5-hour windows + thresholds popover on hover or tap */
+  .limit-popover {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 260px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 13px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+    z-index: 50;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .limit-meter-wrap:hover .limit-popover,
+  .limit-meter-wrap.open .limit-popover {
+    display: block;
+  }
+
+  .pop-title {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .pop-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--font-mono);
+    margin-bottom: 4px;
+    color: var(--text-main);
+  }
+  .pop-row .pop-label {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+  .pop-note {
+    margin-top: 7px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .pop-note.warn { color: var(--amber); }
+  .pop-note.stop { color: var(--red); }
+
+  /* Findings button in topbar */
+  .findings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 40px;
+    padding: 6px 11px;
+    border-radius: 6px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-main);
+    transition: background 0.15s;
+  }
+  .findings-btn:hover {
+    background: var(--bg-hover);
+  }
+  .findings-badge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+  }
+
+  /* =========================================================
+     MAIN WORKSPACE (TRIAGE RAIL + CHAT + DRAWER)
+     ========================================================= */
+  .main-layout {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    min-height: 0;
+    position: relative;
+  }
+  .main-layout.drawer-open {
+    grid-template-columns: 280px minmax(0, 1fr) 360px;
+  }
+
+  /* Left Triage Rail */
+  .triage-rail {
+    background: #111620;
+    border-right: 1px solid var(--border-subtle);
+    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .triage-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .triage-group-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    padding: 0 10px 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .triage-row {
+    width: 100%;
+    min-height: 48px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .triage-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .triage-row.selected {
+    background: var(--bg-elevated);
+  }
+  .triage-row.needs-you {
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .triage-row.needs-you.selected {
+    background: rgba(59, 130, 246, 0.2);
+    box-shadow: inset 3px 0 0 var(--accent-bright);
+  }
+
+  .triage-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .triage-proj {
+    font-weight: 600;
+    font-size: 13.5px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .triage-proj-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .triage-row.quiet-row .triage-proj {
+    color: var(--text-muted);
+  }
+
+  .s-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .s-dot.accent { background: var(--accent-bright); box-shadow: 0 0 8px var(--accent); }
+  .s-dot.red { background: var(--red); }
+  .s-dot.green { background: var(--green); }
+  .s-dot.grey { background: transparent; border: 1.5px solid var(--text-muted); }
+
+  .triage-time {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .triage-line {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-left: 15px;
+    width: 100%;
+  }
+  .triage-row.needs-you .triage-line {
+    color: #dbeafe;
+  }
+  .triage-row.stuck-row .triage-line {
+    color: #fca5a5;
+  }
+
+  /* =========================================================
+     CENTER CHAT COLUMN & PINNED STRIP
+     ========================================================= */
+  .chat-column {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-canvas);
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .pinned-status-strip {
+    width: 100%;
+    min-height: 46px;
+    padding: 10px 22px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .pinned-status-strip:hover,
+  .pinned-status-strip[aria-expanded="true"] {
+    background: var(--bg-elevated);
+  }
+
+  .strip-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .strip-proj-name {
+    font-weight: 700;
+    font-size: 14.5px;
+    color: #fff;
+  }
+
+  .strip-sep {
+    color: var(--text-dim);
+  }
+
+  .strip-item {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .strip-item strong {
+    color: var(--text-main);
+    font-weight: 500;
+  }
+
+  .strip-ctx {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-main);
+    font-weight: 600;
+  }
+  .strip-ctx.warn {
+    color: var(--amber);
+  }
+  .strip-ctx.unknown {
+    color: var(--text-muted);
+  }
+
+  .strip-action {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Chat stream */
+  .chat-messages {
+    padding: 24px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .chat-stream-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 860px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .event-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .event-note::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex-shrink: 0;
+    transform: translateY(-2px);
+  }
+  .event-note.error-note {
+    color: #fca5a5;
+  }
+  .event-note.error-note::before {
+    background: var(--red);
+  }
+
+  .msg-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 15px 18px;
+    transition: box-shadow 0.25s, border-color 0.25s;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .msg-card.question {
+    border-color: var(--accent-border);
+    background: linear-gradient(180deg, rgba(59, 130, 246, 0.09), var(--bg-panel));
+  }
+  .msg-card.from-user {
+    background: #131c2e;
+    border-color: #22324d;
+  }
+  .msg-card.highlighted {
+    border-color: var(--accent-bright);
+    box-shadow: 0 0 0 2px var(--accent-bright), 0 8px 24px rgba(59, 130, 246, 0.25);
+  }
+
+  .msg-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .msg-meta strong {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .msg-body {
+    font-size: 14px;
+    color: var(--text-main);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .decision-actions {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    font-weight: 500;
+    min-height: 40px;
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .btn:hover {
+    background: var(--bg-hover);
+  }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent-bright);
+    color: #fff;
+    font-weight: 600;
+  }
+  .btn-primary:hover {
+    background: #2563eb;
+  }
+
+  .answered-pill {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  /* Composer */
+  .chat-composer-wrap {
+    border-top: 1px solid var(--border-subtle);
+    padding: 12px 28px 16px;
+    background: var(--bg-canvas);
+    flex-shrink: 0;
+  }
+  .reply-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    max-width: 860px;
+    margin-bottom: 8px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    font-size: 12px;
+    color: #dbeafe;
+  }
+  .reply-banner.visible {
+    display: flex;
+  }
+  .reply-cancel-btn {
+    min-height: 28px;
+    min-width: 28px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--text-main);
+    font-size: 12px;
+  }
+  .reply-cancel-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .chat-composer {
+    display: flex;
+    gap: 10px;
+    max-width: 860px;
+  }
+  .composer-input {
+    flex: 1;
+    min-height: 42px;
+    background: #0b0e14;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 14px;
+    color: #fff;
+    font-size: 13.5px;
+    font-family: var(--font-sans);
+  }
+  .composer-input::placeholder {
+    color: var(--text-Muted, #7b889e);
+  }
+
+  /* =========================================================
+     RIGHT DRAWER (DESKTOP) / BOTTOM SHEET (PHONE)
+     ========================================================= */
+  .drawer-backdrop {
+    display: none;
+  }
+
+  .drawer-pane {
+    display: none;
+    width: 360px;
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    flex-direction: column;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.45);
+    min-height: 0;
+    z-index: 25;
+  }
+  .main-layout.drawer-open .drawer-pane {
+    display: flex;
+  }
+
+  .sheet-handle {
+    display: none;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #3b475e;
+    margin: 8px auto 4px;
+    flex-shrink: 0;
+  }
+
+  .drawer-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .drawer-title {
+    font-weight: 600;
+    font-size: 13.5px;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .drawer-close {
+    min-height: 40px;
+    min-width: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 15px;
+  }
+  .drawer-close:hover {
+    background: var(--bg-hover);
+    color: #fff;
+  }
+
+  .drawer-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: var(--bg-canvas);
+    padding: 4px;
+    margin: 12px 16px 0;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  .drawer-tab {
+    min-height: 40px;
+    text-align: center;
+    padding: 6px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: 6px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .drawer-tab.active {
+    background: var(--bg-elevated);
+    color: #fff;
+  }
+
+  .drawer-body {
+    padding: 14px 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .drawer-sec-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .d-card {
+    background: var(--bg-canvas);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 11px 12px;
+    margin-bottom: 8px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .d-card:last-child {
+    margin-bottom: 0;
+  }
+  .d-card.warn {
+    border-color: var(--amber-border);
+  }
+  .d-card.stuck {
+    border-color: var(--red-border);
+  }
+
+  .d-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+  .d-card-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: #fff;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .d-card-badge {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .d-card-badge.ok { color: var(--green); }
+  .d-card-badge.warn { color: var(--amber); }
+  .d-card-badge.stuck { color: var(--red); }
+  .d-card-badge.muted { color: var(--text-muted); }
+
+  .d-card-sub {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .d-card-rotation {
+    margin-top: 6px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .d-card-links {
+    margin-top: 7px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .d-card-link {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-bright);
+    text-decoration: none;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  a.d-card-link:hover {
+    text-decoration: underline;
+  }
+  .d-card-link-plain {
+    color: var(--text-muted);
+    background: var(--bg-panel);
+    border-color: var(--border-subtle);
+  }
+
+  /* =========================================================
+     MODALS: FINDINGS INBOX & 401 PAIRING SCREEN
+     ========================================================= */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 9, 14, 0.76);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-overlay.visible {
+    display: flex;
+  }
+
+  .modal-card {
+    width: 100%;
+    max-width: 520px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 85vh;
+  }
+  .modal-head {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-title {
+    font-weight: 700;
+    font-size: 15px;
+    color: #fff;
+  }
+  .modal-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .pair-form {
+    display: flex;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .pair-error {
+    color: #fca5a5;
+    font-size: 12.5px;
+    display: none;
+  }
+  .pair-error.visible {
+    display: block;
+  }
+
+  /* =========================================================
+     PHONE RESPONSIVE (<= 640px)
+     ========================================================= */
+  @media (max-width: 640px) {
+    .topbar {
+      padding: 0 10px;
+      min-height: 48px;
+      gap: 6px;
+    }
+    .brand-group {
+      gap: 6px;
+    }
+    .host-label {
+      display: none;
+    }
+    .topbar-right {
+      gap: 6px;
+    }
+    /* N12: the project title keeps a readable minimum width; unknown limits give up their text first */
+    .brand-group {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .mobile-proj-title {
+      min-width: 9ch;
+      flex-shrink: 0;
+      max-width: 40vw;
+    }
+    .limit-pct.unknown {
+      font-size: 0;
+    }
+    .limit-pct.unknown::after {
+      content: "?";
+      font-size: 12px;
+    }
+    .limits-group {
+      gap: 4px;
+    }
+
+    .limit-name {
+      display: none;
+    }
+    .limit-name-short {
+      display: inline;
+    }
+    .limit-bar {
+      width: 28px;
+      height: 4px;
+    }
+    .limit-meter {
+      gap: 4px;
+      padding: 4px 5px;
+    }
+    .findings-label {
+      display: none;
+    }
+    .findings-btn {
+      padding: 4px 7px;
+      min-width: 40px;
+      justify-content: center;
+    }
+
+    .main-layout,
+    .main-layout.drawer-open {
+      grid-template-columns: 1fr;
+    }
+
+    /* Screen 1: Triage List vs Screen 2: Project Chat */
+    .app-shell[data-mobile-screen="triage"] .chat-column {
+      display: none;
+    }
+    .app-shell[data-mobile-screen="triage"] .triage-rail {
+      border-right: none;
+      padding: 14px 12px;
+    }
+
+    .app-shell[data-mobile-screen="chat"] .triage-rail {
+      display: none;
+    }
+    .app-shell[data-mobile-screen="chat"] .mobile-back-btn {
+      display: inline-flex;
+      white-space: nowrap;
+      flex-shrink: 0;
+      padding: 0 6px;
+      margin-left: -4px;
+      font-size: 13px;
+    }
+    .app-shell[data-mobile-screen="chat"] .brand-name {
+      display: none;
+    }
+    .app-shell[data-mobile-screen="chat"] .mobile-proj-title {
+      display: block;
+      font-size: 13.5px;
+    }
+    .app-shell[data-mobile-screen="chat"] .limit-bar {
+      display: none;
+    }
+
+    .pinned-status-strip {
+      padding: 8px 12px;
+      gap: 8px;
+    }
+    .strip-left {
+      gap: 6px;
+      font-size: 12px;
+    }
+    .strip-item {
+      font-size: 12px;
+    }
+    .strip-proj-name,
+    .strip-sep-first,
+    .strip-ctx-prefix {
+      display: none;
+    }
+
+    .chat-messages {
+      padding: 14px;
+      gap: 14px;
+    }
+    .chat-composer-wrap {
+      padding: 10px 14px 14px;
+    }
+    .decision-actions .btn-primary {
+      width: 100%;
+    }
+    .decision-actions .btn:not(.btn-primary) {
+      flex: 1;
+    }
+
+    /* Bottom sheet on phone */
+    .main-layout.drawer-open .drawer-backdrop {
+      display: block;
+      position: fixed;
+      inset: 48px 0 0 0;
+      background: rgba(6, 9, 14, 0.68);
+      z-index: 30;
+    }
+    .main-layout.drawer-open .drawer-pane {
+      display: flex;
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      max-height: 78vh;
+      border-left: none;
+      border-top: 1px solid var(--border);
+      border-radius: 18px 18px 0 0;
+      box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.65);
+      z-index: 35;
+    }
+    .sheet-handle {
+      display: block;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="app-shell" id="appShell" data-mobile-screen="triage">
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="brand-group">
+      <button type="button" class="mobile-back-btn" id="mobileBackBtn" aria-label="Все проекты">‹ Все</button>
+      <div class="brand-name">
+        <span class="brand-dot" id="brandDot"></span>
+        <span>foreman</span>
+      </div>
+      <span class="host-label" id="hostLabel">ghome</span>
+      <span class="mobile-proj-title" id="mobileProjTitle">shopping-list</span>
+      <span class="offline-pill" id="offlinePill" role="status">офлайн</span>
+    </div>
+
+    <div class="topbar-right">
+      <div class="limits-group" id="limitsGroup" aria-label="Лимиты провайдеров"></div>
+      <button type="button" class="findings-btn" id="findingsBtn" aria-label="Инбокс находок">
+        <span class="findings-label">Находки</span>
+        <span class="findings-badge" id="findingsBadge">0</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="main-layout" id="mainLayout">
+    <!-- Left Triage Rail -->
+    <aside class="triage-rail" id="triageRail" aria-label="Очередь проектов"></aside>
+
+    <!-- Centre Chat Column -->
+    <main class="chat-column" id="chatColumn">
+      <button type="button" class="pinned-status-strip" id="statusStripBtn" aria-expanded="false">
+        <div class="strip-left" id="stripLeft"></div>
+        <div class="strip-action" id="stripActionLabel">Доска и сессии ▸</div>
+      </button>
+
+      <div class="chat-messages" id="chatMessages" role="log" aria-live="polite">
+        <div class="chat-stream-inner" id="chatStreamInner"></div>
+      </div>
+
+      <div class="chat-composer-wrap">
+        <div class="reply-banner" id="replyBanner">
+          <span id="replyBannerText">Ответ на вопрос</span>
+          <button type="button" class="reply-cancel-btn" id="replyCancelBtn" aria-label="Отменить привязку к сообщению">✕</button>
+        </div>
+        <form class="chat-composer" id="composerForm">
+          <input
+            class="composer-input"
+            id="composerInput"
+            type="text"
+            autocomplete="off"
+            placeholder="Написать оркестратору…"
+            aria-label="Сообщение оркестратору"
+          >
+          <button type="submit" class="btn" id="composerSubmitBtn">Отправить</button>
+        </form>
+      </div>
+    </main>
+
+    <!-- Backdrop for phone bottom sheet -->
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+    <!-- Right Drawer / Phone Bottom Sheet -->
+    <aside class="drawer-pane" id="drawerPane" aria-label="Доска и сессии проекта">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <span class="drawer-title" id="drawerTitle">Доска и сессии</span>
+        <button type="button" class="drawer-close" id="drawerCloseBtn" aria-label="Закрыть панель">✕</button>
+      </div>
+
+      <div class="drawer-tabs" role="tablist" aria-label="Разделы деталей проекта">
+        <button type="button" role="tab" class="drawer-tab active" id="tabBtnBoard" aria-selected="true" aria-controls="tabPanelBoard">
+          Доска <span id="tabCountBoard">(0)</span>
+        </button>
+        <button type="button" role="tab" class="drawer-tab" id="tabBtnSessions" aria-selected="false" aria-controls="tabPanelSessions">
+          Сессии <span id="tabCountSessions">(0)</span>
+        </button>
+      </div>
+
+      <div class="drawer-body">
+        <div id="tabPanelBoard" role="tabpanel" aria-labelledby="tabBtnBoard"></div>
+        <div id="tabPanelSessions" role="tabpanel" aria-labelledby="tabBtnSessions" hidden></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- Findings Inbox Modal -->
+<div class="modal-overlay" id="findingsModal" role="dialog" aria-modal="true" aria-labelledby="findingsModalTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="modal-title" id="findingsModalTitle">Инбокс находок foreman</span>
+      <button type="button" class="drawer-close" id="findingsCloseBtn" aria-label="Закрыть инбокс находок">✕</button>
+    </div>
+    <div class="modal-body" id="findingsModalBody"></div>
+  </div>
+</div>
+
+<!-- 401 Pairing Screen Modal -->
+<div class="modal-overlay" id="pairModal" role="dialog" aria-modal="true" aria-labelledby="pairModalTitle">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="modal-title" id="pairModalTitle">Привязка устройства</span>
+    </div>
+    <div class="modal-body">
+      <p style="color:var(--text-muted);font-size:13px">
+        Для доступа к диспетчерской требуется токен устройства. Выполните на машине команду
+        <code style="font-family:var(--font-mono);color:#fff">foreman web pair</code> и введите полученный одноразовый код:
+      </p>
+      <form class="pair-form" id="pairForm">
+        <input
+          type="text"
+          class="composer-input"
+          id="pairCodeInput"
+          placeholder="Код привязки…"
+          autocomplete="one-time-code"
+          required
+          aria-label="Код привязки устройства"
+        >
+        <button type="submit" class="btn btn-primary">Подключить</button>
+      </form>
+      <div class="pair-error" id="pairError">Неверный или просроченный код привязки. Попробуйте снова.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Embedded Demo Mode Fixtures (?demo=1) -->
+<script type="application/json" id="demo-data">
+{
+  "state": {
+    "version": 42,
+    "machine": {"name": "ghome", "kind": "home"},
+    "limits": {
+      "claude": {
+        "label": "Claude",
+        "level": "ok",
+        "windows": [
+          {"key": "weekly", "label": "неделя", "used_pct": 34, "resets_at": "2026-11-09T00:00:00Z", "observed_at": "2026-11-05T12:55:00Z", "age": "4м", "level": "ok"},
+          {"key": "five_hour", "label": "5 ч", "used_pct": 18, "resets_at": "2026-11-05T16:00:00Z", "observed_at": "2026-11-05T12:55:00Z", "age": "4м", "level": "ok"}
+        ]
+      },
+      "antigravity": {
+        "label": "Antigravity",
+        "level": "warn",
+        "windows": [
+          {"key": "weekly", "label": "неделя", "used_pct": 75, "resets_at": "2026-11-09T00:00:00Z", "observed_at": "2026-11-05T12:53:00Z", "age": "6м", "level": "warn"},
+          {"key": "five_hour", "label": "5 ч", "used_pct": 29, "resets_at": "2026-11-05T17:00:00Z", "observed_at": "2026-11-05T12:53:00Z", "age": "6м", "level": "ok"},
+          {"key": "3p_five_hour", "label": "3p 5 ч", "used_pct": null, "resets_at": null, "observed_at": "2026-11-05T12:41:00Z", "age": "18м", "level": "unknown"}
+        ]
+      }
+    },
+    "thresholds": {"limit_warn": 70, "limit_stop": 90, "context_soft": 150000},
+    "projects": [
+      {
+        "slug": "shopping-list",
+        "name": "shopping-list",
+        "group": "needs_you",
+        "line": "Ротировать ревью-сессию 220k на Sonnet?",
+        "dot": "accent",
+        "updated_at": "2026-11-05T12:57:00Z",
+        "unanswered": 1
+      },
+      {
+        "slug": "photo-qualifier",
+        "name": "photo-qualifier",
+        "group": "stuck",
+        "line": "codex-exif не отвечает, авто-рестарт",
+        "dot": "red",
+        "updated_at": "2026-11-05T12:45:00Z",
+        "unanswered": 0
+      },
+      {
+        "slug": "foreman",
+        "name": "foreman",
+        "group": "working",
+        "line": "Мокапы веб-панели и спецификация SSE",
+        "dot": "green",
+        "updated_at": "2026-11-05T12:59:00Z",
+        "unanswered": 0
+      },
+      {
+        "slug": "home-infra",
+        "name": "home-infra",
+        "group": "working",
+        "line": "Проверка WireGuard-маршрутов для телефона",
+        "dot": "green",
+        "updated_at": "2026-11-05T12:51:00Z",
+        "unanswered": 0
+      },
+      {
+        "slug": "obsidian-personal",
+        "name": "obsidian-personal",
+        "group": "quiet",
+        "line": "Инбокс недели 44 разобран",
+        "dot": "grey",
+        "updated_at": "2026-11-04T19:20:00Z",
+        "unanswered": 0
+      }
+    ],
+    "findings_count": 2
+  },
+  "projects": {
+    "shopping-list": {
+      "slug": "shopping-list",
+      "name": "shopping-list",
+      "path": "~/projects/shopping-list",
+      "strip": {
+        "stage": "ревью PR #48 → гейт",
+        "sessions": 4,
+        "heaviest": {"title": "review v2", "context_tokens": 220000, "level": "warn"}
+      },
+      "chat": [
+        {
+          "id": "m-1a2b-pre1",
+          "ts": "2026-11-05T13:10:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Начинаю подготовку релиза оффлайн-синка v2. План разбит на миграцию схемы SQLite, дедупликацию весовых позиций чеков и финальное ревью PR #48.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre2",
+          "ts": "2026-11-05T13:24:00Z",
+          "from": "user",
+          "channel": "web",
+          "text": "Ок, особое внимание удели обратному откату индекса в миграции и проверке конфликтов по полю updated_at.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre3",
+          "ts": "2026-11-05T13:40:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Открыта сессия impl-sync (claude / sonnet-4-5) для задачи t-1",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre4",
+          "ts": "2026-11-05T14:05:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Промежуточный отчёт по миграции:\nФайл: ~/projects/shopping-list/backend/storage/migrations/20261105_v2_offline_sync_composite_receipt_index.sql\nДифф PR: https://github.com/example/shopping-list/pull/48/files#diff-8f4e2a9b1c3d5e7f9a0b2c4d6e8f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre5",
+          "ts": "2026-11-05T14:18:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Сессия review v1 ротирована → открыта review v2 (s-b88f56)",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre6",
+          "ts": "2026-11-05T14:30:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Ревьюер проверил идемпотентность триггеров синхронизации и сценарий частичной потери сети при фоновой догрузке батчей.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre7",
+          "ts": "2026-11-05T14:34:00Z",
+          "from": "user",
+          "channel": "telegram",
+          "text": "Отлично. Проверь также лимит размера батча (не более 250 позиций за один POST) и корректность дедупликации весовых штрихкодов EAN-13 с префиксом 20..29.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre8",
+          "ts": "2026-11-05T14:38:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Проверил: батчи разбиваются ровно по 250 записей в модуле ~/projects/shopping-list/backend/sync/batch_uploader_v2.py, тесты весовых позиций (EAN-13 префиксы 20–29) проходят без коллизий.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre9",
+          "ts": "2026-11-05T14:40:00Z",
+          "from": "user",
+          "channel": "web",
+          "text": "Принято, ждём завершения прогона всей матрицы миграций и отчёта от ревью-сессии.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b01",
+          "ts": "2026-11-05T14:42:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Воркер impl-sync завершил миграцию схемы v2 (18/18 тестов прошли)",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b02",
+          "ts": "2026-11-05T15:08:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Сессия review v2 превысила мягкий ориентир контекста (220k)",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b3c",
+          "ts": "2026-11-05T15:09:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Сессия review v2 (Opus) выросла до 220k. Ревью PR #48 закончено, осталось внести две правки по составному индексу.\n\nЗаморозить старую сессию, открыть свежий Sonnet 4.5 и передать handoff сообщением?",
+          "question": true,
+          "options": ["Да, ротировать на Sonnet", "Нет, оставить в 220k", "Ответить…"],
+          "answered_by": null
+        }
+      ],
+      "board": {
+        "tasks": [
+          {
+            "id": "t-1",
+            "title": "v2 оффлайн-синк (PR #48)",
+            "stage": "ревью → гейт",
+            "owner": "review v2 (s-b88f56)",
+            "next": "Фикс составного индекса после ротации ревьюера",
+            "links": [
+              {"label": "PR #48", "url": "https://github.com/example/shopping-list/pull/48"}
+            ],
+            "status": "active"
+          },
+          {
+            "id": "t-2",
+            "title": "Дедупликация чеков",
+            "stage": "имплементация",
+            "owner": "impl-sync (s-c19a04)",
+            "next": "Прогон pytest весовых позиций",
+            "links": [
+              {"label": "Issue #39", "url": "https://github.com/example/shopping-list/issues/39"}
+            ],
+            "status": "active"
+          }
+        ]
+      },
+      "sessions": [
+        {
+          "sid": "s-b88f56",
+          "title": "review v2",
+          "agent": "claude",
+          "model": "opus-4",
+          "role": "worker",
+          "owner": "orchestrator",
+          "state": "idle",
+          "state_age": "3м",
+          "context_tokens": 220000,
+          "context_level": "warn",
+          "replaces": "s-4d11a0",
+          "replaced_by": null
+        },
+        {
+          "sid": "s-4d11a0",
+          "title": "review v1",
+          "agent": "claude",
+          "model": "opus-4",
+          "role": "worker",
+          "owner": "orchestrator",
+          "state": "rotated",
+          "state_age": "24м",
+          "context_tokens": 176000,
+          "context_level": "warn",
+          "replaces": null,
+          "replaced_by": "s-b88f56"
+        },
+        {
+          "sid": "s-c19a04",
+          "title": "impl-sync",
+          "agent": "claude",
+          "model": "sonnet-4-5",
+          "role": "worker",
+          "owner": "orchestrator",
+          "state": "busy",
+          "state_age": "1м",
+          "context_tokens": 64000,
+          "context_level": "ok",
+          "replaces": null,
+          "replaced_by": null
+        },
+        {
+          "sid": "s-90ef12",
+          "title": "agy-audit",
+          "agent": "antigravity",
+          "model": "gemini-4-argon",
+          "role": "worker",
+          "owner": "user",
+          "state": "idle",
+          "state_age": "9м",
+          "context_tokens": null,
+          "context_level": "unknown",
+          "replaces": null,
+          "replaced_by": null
+        },
+        {
+          "sid": "s-a0172d",
+          "title": "orchestrator",
+          "agent": "claude",
+          "model": "sonnet-4-5",
+          "role": "orchestrator",
+          "owner": "orchestrator",
+          "state": "waiting_input",
+          "state_age": "2м",
+          "context_tokens": 68000,
+          "context_level": "ok",
+          "replaces": null,
+          "replaced_by": null
+        }
+      ],
+      "watches": [
+        {"what": "watch loop", "status": "работает, проверка 18с назад"},
+        {"what": "review v2 (s-b88f56)", "status": "контекст 220k > 150k"}
+      ]
+    },
+    "photo-qualifier": {
+      "slug": "photo-qualifier",
+      "name": "photo-qualifier",
+      "path": "~/projects/photo-qualifier",
+      "strip": {
+        "stage": "разбор EXIF-пакета",
+        "sessions": 2,
+        "heaviest": {"title": "codex-exif", "context_tokens": null, "level": "unknown"}
+      },
+      "chat": [
+        {
+          "id": "m-pq01",
+          "ts": "2026-11-05T14:55:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Сессия codex-exif не присылает событий более 14 минут (stuck)",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-pq02",
+          "ts": "2026-11-05T14:56:00Z",
+          "from": "orchestrator",
+          "channel": "telegram",
+          "text": "Воркер codex-exif завис на чтении RAW-архива. Перезапускаю задачу в новой сессии с сохранением прогресса.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        }
+      ],
+      "board": {
+        "tasks": [
+          {
+            "id": "t-pq1",
+            "title": "Пакетный парсинг EXIF / Геотегов",
+            "stage": "застряла",
+            "owner": "codex-exif (s-77c001)",
+            "next": "Перезапуск воркера с батчем #4",
+            "links": [],
+            "status": "active"
+          }
+        ]
+      },
+      "sessions": [
+        {
+          "sid": "s-77c001",
+          "title": "codex-exif",
+          "agent": "codex",
+          "model": "codex-mini",
+          "role": "worker",
+          "owner": "orchestrator",
+          "state": "stuck",
+          "state_age": "14м",
+          "context_tokens": null,
+          "context_level": "unknown",
+          "replaces": null,
+          "replaced_by": null
+        },
+        {
+          "sid": "s-77c002",
+          "title": "orchestrator",
+          "agent": "claude",
+          "model": "sonnet-4-5",
+          "role": "orchestrator",
+          "owner": "orchestrator",
+          "state": "idle",
+          "state_age": "4м",
+          "context_tokens": 41000,
+          "context_level": "ok",
+          "replaces": null,
+          "replaced_by": null
+        }
+      ],
+      "watches": [
+        {"what": "watch loop", "status": "работает, проверка 18с назад"}
+      ]
+    },
+    "foreman": {
+      "slug": "foreman",
+      "name": "foreman",
+      "path": "~/projects/foreman",
+      "strip": {
+        "stage": "сборка веб-панели",
+        "sessions": 3,
+        "heaviest": {"title": "fm-web-frontend", "context_tokens": 92000, "level": "ok"}
+      },
+      "chat": [
+        {
+          "id": "m-fm01",
+          "ts": "2026-11-05T15:01:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Воркеры fm-core и fm-web-frontend выполняют сборку по спецификации v1.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        }
+      ],
+      "board": {
+        "tasks": [
+          {
+            "id": "t-fm1",
+            "title": "Веб-интерфейс Direction 3",
+            "stage": "имплементация",
+            "owner": "fm-web-frontend (s-3301aa)",
+            "next": "Скриншоты 1440x900 и 390x844, открытие PR",
+            "links": [],
+            "status": "active"
+          }
+        ]
+      },
+      "sessions": [
+        {
+          "sid": "s-3301aa",
+          "title": "fm-web-frontend",
+          "agent": "antigravity",
+          "model": "gemini-4-argon",
+          "role": "worker",
+          "owner": "orchestrator",
+          "state": "busy",
+          "state_age": "сейчас",
+          "context_tokens": 92000,
+          "context_level": "ok",
+          "replaces": null,
+          "replaced_by": null
+        }
+      ],
+      "watches": [
+        {"what": "watch loop", "status": "работает, проверка 18с назад"}
+      ]
+    },
+    "home-infra": {
+      "slug": "home-infra",
+      "name": "home-infra",
+      "path": "~/projects/home-infra",
+      "strip": {
+        "stage": "проверка туннелей WireGuard",
+        "sessions": 2,
+        "heaviest": {"title": "wg-check", "context_tokens": 54000, "level": "ok"}
+      },
+      "chat": [
+        {
+          "id": "m-hi01",
+          "ts": "2026-11-05T14:50:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Проверяю маршрутизацию до ghome.lan:8765 через мобильный профиль WireGuard.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        }
+      ],
+      "board": {
+        "tasks": [
+          {
+            "id": "t-hi1",
+            "title": "Проверка DNS и профилей WireGuard",
+            "stage": "проверка",
+            "owner": "wg-check (s-5510bb)",
+            "next": "Отчёт о доступности подсети",
+            "links": [],
+            "status": "active"
+          }
+        ]
+      },
+      "sessions": [
+        {
+          "sid": "s-5510bb",
+          "title": "wg-check",
+          "agent": "claude",
+          "model": "sonnet-4-5",
+          "role": "worker",
+          "owner": "orchestrator",
+          "state": "busy",
+          "state_age": "2м",
+          "context_tokens": 54000,
+          "context_level": "ok",
+          "replaces": null,
+          "replaced_by": null
+        }
+      ],
+      "watches": [
+        {"what": "watch loop", "status": "работает, проверка 18с назад"}
+      ]
+    },
+    "obsidian-personal": {
+      "slug": "obsidian-personal",
+      "name": "obsidian-personal",
+      "path": "~/vaults/personal",
+      "strip": {
+        "stage": "ожидание новых заметок",
+        "sessions": 1,
+        "heaviest": {"title": "orchestrator", "context_tokens": 38000, "level": "ok"}
+      },
+      "chat": [
+        {
+          "id": "m-ob01",
+          "ts": "2026-11-04T19:20:00Z",
+          "from": "orchestrator",
+          "channel": "telegram",
+          "text": "Инбокс недели 44 полностью разобран, все ссылки индекса проверены.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        }
+      ],
+      "board": {
+        "tasks": [
+          {
+            "id": "t-ob1",
+            "title": "Разбор входящих заметок недели 44",
+            "stage": "готово",
+            "owner": "orchestrator (s-1190cc)",
+            "next": "Нет активных задач",
+            "links": [],
+            "status": "done"
+          }
+        ]
+      },
+      "sessions": [
+        {
+          "sid": "s-1190cc",
+          "title": "orchestrator",
+          "agent": "claude",
+          "model": "sonnet-4-5",
+          "role": "orchestrator",
+          "owner": "orchestrator",
+          "state": "idle",
+          "state_age": "вчера",
+          "context_tokens": 38000,
+          "context_level": "ok",
+          "replaces": null,
+          "replaced_by": null
+        }
+      ],
+      "watches": [
+        {"what": "watch loop", "status": "работает, проверка 18с назад"}
+      ]
+    }
+  },
+  "findings": [
+    {
+      "id": "f-101",
+      "ts": "2026-11-05T11:20:00Z",
+      "title": "Статуслайн Antigravity не возвращает used_pct для окна 3p при холодном старте",
+      "status": "draft",
+      "url": null
+    },
+    {
+      "id": "f-102",
+      "ts": "2026-11-04T18:05:00Z",
+      "title": "Фильтрация пустых хуков Stop при быстром завершении субагента",
+      "status": "sent",
+      "url": "https://github.com/alexander-gavrilov/foreman/issues/14"
+    }
+  ]
+}
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  const params = new URLSearchParams(window.location.search);
+  const isDemo = params.get('demo') === '1';
+
+  const GROUP_ORDER = [
+    { key: 'needs_you', label: 'Ждёт вас' },
+    { key: 'stuck', label: 'Застряла' },
+    { key: 'working', label: 'Работают' },
+    { key: 'quiet', label: 'Тихо' }
+  ];
+
+  const appState = {
+    state: null,
+    projectsBySlug: {},
+    projectFingerprints: {},
+    chatFingerprints: {},
+    renderedSlug: null,
+    findings: null,
+    selectedSlug: null,
+    highlightMsgId: null,
+    highlightedMsgId: null,
+    replyToMsgId: null,
+    draftsBySlug: {},
+    drawerOpen: false,
+    activeDrawerTab: 'board',
+    offline: false
+  };
+
+  let demoStore = null;
+  if (isDemo) {
+    try {
+      demoStore = JSON.parse(document.getElementById('demo-data').textContent);
+    } catch (err) {
+      console.error('Failed to parse demo-data:', err);
+    }
+  }
+
+  // DOM Elements
+  const appShell = document.getElementById('appShell');
+  const brandDot = document.getElementById('brandDot');
+  const hostLabel = document.getElementById('hostLabel');
+  const mobileProjTitle = document.getElementById('mobileProjTitle');
+  const mobileBackBtn = document.getElementById('mobileBackBtn');
+  const offlinePill = document.getElementById('offlinePill');
+  const limitsGroup = document.getElementById('limitsGroup');
+  const findingsBtn = document.getElementById('findingsBtn');
+  const findingsBadge = document.getElementById('findingsBadge');
+
+  const mainLayout = document.getElementById('mainLayout');
+  const triageRail = document.getElementById('triageRail');
+  const statusStripBtn = document.getElementById('statusStripBtn');
+  const stripLeft = document.getElementById('stripLeft');
+  const stripActionLabel = document.getElementById('stripActionLabel');
+  const chatMessages = document.getElementById('chatMessages');
+  const chatStreamInner = document.getElementById('chatStreamInner');
+
+  const replyBanner = document.getElementById('replyBanner');
+  const replyBannerText = document.getElementById('replyBannerText');
+  const replyCancelBtn = document.getElementById('replyCancelBtn');
+  const composerForm = document.getElementById('composerForm');
+  const composerInput = document.getElementById('composerInput');
+
+  const drawerBackdrop = document.getElementById('drawerBackdrop');
+  const drawerTitle = document.getElementById('drawerTitle');
+  const drawerCloseBtn = document.getElementById('drawerCloseBtn');
+  const tabBtnBoard = document.getElementById('tabBtnBoard');
+  const tabBtnSessions = document.getElementById('tabBtnSessions');
+  const tabCountBoard = document.getElementById('tabCountBoard');
+  const tabCountSessions = document.getElementById('tabCountSessions');
+  const tabPanelBoard = document.getElementById('tabPanelBoard');
+  const tabPanelSessions = document.getElementById('tabPanelSessions');
+
+  const findingsModal = document.getElementById('findingsModal');
+  const findingsCloseBtn = document.getElementById('findingsCloseBtn');
+  const findingsModalBody = document.getElementById('findingsModalBody');
+
+  const pairModal = document.getElementById('pairModal');
+  const pairForm = document.getElementById('pairForm');
+  const pairCodeInput = document.getElementById('pairCodeInput');
+  const pairError = document.getElementById('pairError');
+
+  // Helpers
+  function escapeHtml(val) {
+    if (val === null || val === undefined) return '';
+    return String(val)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatContextTokens(tokens) {
+    if (tokens === null || tokens === undefined) {
+      return 'unknown';
+    }
+    const num = Number(tokens);
+    if (Number.isNaN(num)) return 'unknown';
+    return Math.round(num / 1000) + 'k';
+  }
+
+  function formatRelativeTime(iso) {
+    if (!iso) return '';
+    if (isDemo) {
+      if (iso.includes('12:57') || iso.includes('15:09')) return '2м';
+      if (iso.includes('12:45')) return '14м';
+      if (iso.includes('12:59')) return 'сейчас';
+      if (iso.includes('12:51')) return '8м';
+      if (iso.includes('11-04')) return 'вчера';
+    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (diffSec < 60) return 'сейчас';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return diffMin + 'м';
+    const diffHours = Math.floor(diffMin / 60);
+    if (diffHours < 24) return diffHours + 'ч';
+    return Math.floor(diffHours / 24) + 'д';
+  }
+
+  function formatClockTime(iso) {
+    if (!iso) return '';
+    const m = String(iso).match(/T(\d{2}:\d{2})/);
+    if (m) return m[1];
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function russianPluralSessions(n) {
+    const abs = Math.abs(Number(n) || 0);
+    const mod10 = abs % 10;
+    const mod100 = abs % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'сессия';
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'сессии';
+    return 'сессий';
+  }
+
+  function safeHttpUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return null;
+    const trimmed = rawUrl.trim();
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return trimmed;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function computeChatFingerprint(proj) {
+    if (!proj) return '';
+    return JSON.stringify(Array.isArray(proj.chat) ? proj.chat : []);
+  }
+
+  function computeProjectFingerprint(proj) {
+    if (!proj) return '';
+    const sessions = Array.isArray(proj.sessions)
+      ? proj.sessions.map((s) => ({
+          sid: s.sid,
+          title: s.title,
+          agent: s.agent,
+          model: s.model,
+          role: s.role,
+          owner: s.owner,
+          state: s.state,
+          lifecycle: s.lifecycle,
+          context_tokens: s.context_tokens,
+          context_level: s.context_level,
+          replaces: s.replaces,
+          replaced_by: s.replaced_by
+        }))
+      : [];
+    return JSON.stringify({
+      slug: proj.slug,
+      name: proj.name,
+      strip: proj.strip || null,
+      chat: Array.isArray(proj.chat) ? proj.chat : [],
+      board: proj.board || null,
+      sessions: sessions
+    });
+  }
+
+  function setOfflineState(isOffline) {
+    appState.offline = isOffline;
+    offlinePill.classList.toggle('visible', isOffline);
+    brandDot.classList.toggle('offline', isOffline);
+  }
+
+  function showPairingScreen() {
+    pairModal.classList.add('visible');
+    setTimeout(() => pairCodeInput.focus(), 50);
+  }
+
+  // Network layer
+  async function apiGet(url) {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (res.status === 401) {
+      showPairingScreen();
+      throw new Error('Unauthorized (401)');
+    }
+    if (!res.ok) {
+      throw new Error('HTTP ' + res.status);
+    }
+    return res.json();
+  }
+
+  async function apiPost(url, body) {
+    const res = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.status === 401) {
+      showPairingScreen();
+      throw new Error('Unauthorized (401)');
+    }
+    if (!res.ok) {
+      throw new Error('HTTP ' + res.status);
+    }
+    return res.json();
+  }
+
+  async function loadState(opts) {
+    const options = opts || {};
+    const fromEvent = Boolean(options.fromEvent);
+    const changedProject = options.changedProject || null;
+
+    if (isDemo) {
+      appState.state = demoStore.state;
+      let isInitialSelect = false;
+      if (!appState.selectedSlug && appState.state.projects.length > 0) {
+        appState.selectedSlug = appState.state.projects[0].slug;
+        isInitialSelect = true;
+      }
+      renderTopBar();
+      renderTriageRail();
+      if (appState.selectedSlug) {
+        if (fromEvent && changedProject && changedProject !== appState.selectedSlug) {
+          return;
+        }
+        await loadProject(appState.selectedSlug, {
+          isProjectSwitch: isInitialSelect || Boolean(options.isProjectSwitch),
+          fromEvent: fromEvent
+        });
+      }
+      return;
+    }
+
+    try {
+      const data = await apiGet('/api/state');
+      appState.state = data;
+      let isInitialSelect = false;
+      if (!appState.selectedSlug && data.projects && data.projects.length > 0) {
+        appState.selectedSlug = data.projects[0].slug;
+        isInitialSelect = true;
+      }
+      renderTopBar();
+      renderTriageRail();
+      if (appState.selectedSlug) {
+        if (fromEvent && changedProject && changedProject !== appState.selectedSlug) {
+          return;
+        }
+        await loadProject(appState.selectedSlug, {
+          isProjectSwitch: isInitialSelect || Boolean(options.isProjectSwitch),
+          fromEvent: fromEvent
+        });
+      }
+    } catch (err) {
+      if (!String(err.message).includes('401')) {
+        setOfflineState(true);
+      }
+    }
+  }
+
+  async function loadProject(slug, opts) {
+    if (!slug) return;
+    const options = opts || {};
+    const isProjectSwitch = Boolean(options.isProjectSwitch) || appState.renderedSlug !== slug;
+
+    let proj = null;
+    if (isDemo) {
+      proj = demoStore.projects[slug] || null;
+    } else {
+      try {
+        proj = await apiGet('/api/projects/' + encodeURIComponent(slug));
+      } catch (err) {
+        console.error('Failed to load project:', err);
+        return;
+      }
+    }
+    if (!proj) return;
+
+    appState.projectsBySlug[slug] = proj;
+    const newProjFp = computeProjectFingerprint(proj);
+    const prevProjFp = appState.projectFingerprints[slug];
+
+    if (!isProjectSwitch && !appState.highlightMsgId && prevProjFp === newProjFp) {
+      return;
+    }
+
+    renderProjectView({ isProjectSwitch: isProjectSwitch });
+  }
+
+  // Rendering: Top bar
+  function renderTopBar() {
+    const st = appState.state;
+    if (!st) return;
+
+    hostLabel.textContent = (st.machine && st.machine.name) ? st.machine.name : '';
+    findingsBadge.textContent = String(st.findings_count || 0);
+
+    const thresholds = st.thresholds || { limit_warn: 70, limit_stop: 90, context_soft: 150000 };
+    const limits = st.limits || {};
+    limitsGroup.innerHTML = '';
+
+    Object.keys(limits).forEach((provKey) => {
+      const prov = limits[provKey];
+      if (!prov || !Array.isArray(prov.windows) || prov.windows.length === 0) return;
+
+      const weekly = prov.windows[0];
+      const isUnknown = weekly.used_pct === null || weekly.used_pct === undefined;
+      const pctNum = isUnknown ? 0 : Math.min(100, Math.max(0, Number(weekly.used_pct)));
+
+      let level = weekly.level || prov.level || 'ok';
+      if (isUnknown) {
+        level = 'unknown';
+      } else if (pctNum >= thresholds.limit_stop) {
+        level = 'stop';
+      } else if (pctNum >= thresholds.limit_warn) {
+        level = 'warn';
+      }
+
+      let pctDisplay = '';
+      if (isUnknown) {
+        pctDisplay = '?' + (weekly.age ? ' (' + weekly.age + ')' : '');
+      } else {
+        pctDisplay = pctNum + '%' + (level === 'warn' ? ' ⚠' : level === 'stop' ? ' ⛔' : '');
+      }
+
+      const shortName = prov.label === 'Antigravity' ? 'Agy' : prov.label;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'limit-meter-wrap';
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'limit-meter';
+      btn.setAttribute('aria-expanded', 'false');
+      btn.innerHTML =
+        '<span class="limit-name">' + escapeHtml(prov.label + ' ' + (weekly.label || 'неделя')) + '</span>' +
+        '<span class="limit-name-short">' + escapeHtml(shortName) + '</span>' +
+        '<div class="limit-bar"><div class="limit-fill ' + escapeHtml(level) + '" style="width:' + (isUnknown ? 0 : pctNum) + '%"></div></div>' +
+        '<span class="limit-pct ' + escapeHtml(level) + '">' + escapeHtml(pctDisplay) + '</span>';
+
+      const pop = document.createElement('div');
+      pop.className = 'limit-popover';
+
+      const rowsHtml = prov.windows.map((w) => {
+        const wUnknown = w.used_pct === null || w.used_pct === undefined;
+        let wLevel = w.level || 'ok';
+        if (wUnknown) wLevel = 'unknown';
+        else if (w.used_pct >= thresholds.limit_stop) wLevel = 'stop';
+        else if (w.used_pct >= thresholds.limit_warn) wLevel = 'warn';
+
+        let wVal = '';
+        if (wUnknown) {
+          wVal = '?' + (w.age ? ' (' + w.age + ')' : '');
+        } else {
+          wVal = w.used_pct + '%' + (wLevel === 'warn' ? ' ⚠' : wLevel === 'stop' ? ' ⛔' : '') + (w.age ? ' · ' + w.age : '');
+        }
+
+        const colorStyle = wLevel === 'warn'
+          ? 'color:var(--amber)'
+          : wLevel === 'stop'
+            ? 'color:var(--red)'
+            : wUnknown
+              ? 'color:var(--text-muted)'
+              : '';
+
+        return '<div class="pop-row">' +
+          '<span class="pop-label">' + escapeHtml(w.label || w.key) + '</span>' +
+          '<strong style="' + colorStyle + '">' + escapeHtml(wVal) + '</strong>' +
+          '</div>';
+      }).join('');
+
+      let noteClass = '';
+      let noteText = 'Резерв в норме (порог смены ≥' + thresholds.limit_warn + '%, стоп ≥' + thresholds.limit_stop + '%)';
+      if (prov.level === 'stop' || level === 'stop') {
+        noteClass = 'stop';
+        noteText = '≥' + thresholds.limit_stop + '%: запуск новых сессий остановлен';
+      } else if (prov.level === 'warn' || level === 'warn') {
+        noteClass = 'warn';
+        noteText = '≥' + thresholds.limit_warn + '%: новые сессии направляются в другой провайдер';
+      }
+
+      pop.innerHTML =
+        '<div class="pop-title"><span>' + escapeHtml(prov.label) + '</span><span>Пороги ' + thresholds.limit_warn + '% / ' + thresholds.limit_stop + '%</span></div>' +
+        rowsHtml +
+        '<div class="pop-note ' + noteClass + '">' + escapeHtml(noteText) + '</div>';
+
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = wrap.classList.contains('open');
+        document.querySelectorAll('.limit-meter-wrap.open').forEach((el) => {
+          el.classList.remove('open');
+          const b = el.querySelector('.limit-meter');
+          if (b) b.setAttribute('aria-expanded', 'false');
+        });
+        if (!isOpen) {
+          wrap.classList.add('open');
+          btn.setAttribute('aria-expanded', 'true');
+        }
+      });
+
+      wrap.appendChild(btn);
+      wrap.appendChild(pop);
+      limitsGroup.appendChild(wrap);
+    });
+  }
+
+  // Rendering: Left Triage Rail
+  function renderTriageRail() {
+    const st = appState.state;
+    if (!st || !Array.isArray(st.projects)) return;
+
+    triageRail.innerHTML = '';
+
+    GROUP_ORDER.forEach((grp) => {
+      const items = st.projects.filter((p) => p.group === grp.key);
+      if (items.length === 0) return;
+
+      const section = document.createElement('div');
+      section.className = 'triage-group';
+
+      const header = document.createElement('div');
+      header.className = 'triage-group-label';
+      header.innerHTML = '<span>' + escapeHtml(grp.label) + '</span><span>' + items.length + '</span>';
+      section.appendChild(header);
+
+      items.forEach((proj) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const classes = ['triage-row'];
+        if (proj.slug === appState.selectedSlug) classes.push('selected');
+        if (proj.group === 'needs_you') classes.push('needs-you');
+        if (proj.group === 'stuck') classes.push('stuck-row');
+        if (proj.group === 'quiet') classes.push('quiet-row');
+        btn.className = classes.join(' ');
+
+        const dotColor = proj.dot || (
+          proj.group === 'needs_you' ? 'accent' :
+          proj.group === 'stuck' ? 'red' :
+          proj.group === 'working' ? 'green' : 'grey'
+        );
+
+        btn.innerHTML =
+          '<div class="triage-row-head">' +
+            '<span class="triage-proj">' +
+              '<span class="s-dot ' + escapeHtml(dotColor) + '"></span>' +
+              '<span class="triage-proj-name">' + escapeHtml(proj.name) + '</span>' +
+            '</span>' +
+            '<span class="triage-time">' + escapeHtml(formatRelativeTime(proj.updated_at)) + '</span>' +
+          '</div>' +
+          '<div class="triage-line">' + escapeHtml(proj.line || '') + '</div>';
+
+        btn.addEventListener('click', () => {
+          selectProject(proj.slug, true);
+        });
+
+        section.appendChild(btn);
+      });
+
+      triageRail.appendChild(section);
+    });
+  }
+
+  // Rendering: Selected Project View (Strip + Chat + Drawer)
+  function renderProjectView(opts) {
+    const options = opts || {};
+    const slug = appState.selectedSlug;
+    const proj = appState.projectsBySlug[slug];
+    if (!proj) return;
+
+    const isProjectSwitch = Boolean(options.isProjectSwitch) || appState.renderedSlug !== slug;
+    const hadComposerFocus = document.activeElement === composerInput;
+    const savedDraft = isProjectSwitch
+      ? (appState.draftsBySlug[slug] !== undefined ? appState.draftsBySlug[slug] : '')
+      : composerInput.value;
+    const selStart = isProjectSwitch ? savedDraft.length : composerInput.selectionStart;
+    const selEnd = isProjectSwitch ? savedDraft.length : composerInput.selectionEnd;
+
+    const prevScrollTop = chatMessages.scrollTop;
+    const distanceFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+    const wasNearBottom = distanceFromBottom <= 80;
+
+    mobileProjTitle.textContent = proj.name || proj.slug;
+    const targetPlaceholder = 'Написать оркестратору ' + (proj.name || proj.slug) + '…';
+    if (composerInput.placeholder !== targetPlaceholder) {
+      composerInput.placeholder = targetPlaceholder;
+    }
+
+    // Pinned Status Strip
+    const strip = proj.strip || {};
+    const sessionsCount = strip.sessions !== undefined ? strip.sessions : (proj.sessions ? proj.sessions.length : 0);
+    const heaviest = strip.heaviest || {};
+    const ctxText = formatContextTokens(heaviest.context_tokens);
+    const softTarget = (appState.state && appState.state.thresholds && appState.state.thresholds.context_soft) || 150000;
+    const isWarnCtx = heaviest.level === 'warn' || (typeof heaviest.context_tokens === 'number' && heaviest.context_tokens >= softTarget);
+    const isUnknownCtx = ctxText === 'unknown';
+
+    const ctxClass = isUnknownCtx ? 'unknown' : (isWarnCtx ? 'warn' : '');
+    const ctxValDisplay = isUnknownCtx
+      ? 'unknown'
+      : ctxText + (isWarnCtx ? ' ⚠' : '');
+
+    stripLeft.innerHTML =
+      '<span class="strip-proj-name">' + escapeHtml(proj.name || proj.slug) + '</span>' +
+      '<span class="strip-sep strip-sep-first">·</span>' +
+      '<span class="strip-item">Этап: <strong>' + escapeHtml(strip.stage || '—') + '</strong></span>' +
+      '<span class="strip-sep">·</span>' +
+      '<span class="strip-item"><strong>' + escapeHtml(sessionsCount) + '</strong> ' + russianPluralSessions(sessionsCount) + '</span>' +
+      '<span class="strip-sep">·</span>' +
+      '<span class="strip-ctx ' + ctxClass + '"><span class="strip-ctx-prefix">макс. контекст: </span>' + escapeHtml(ctxValDisplay) + '</span>';
+
+    updateDrawerChrome();
+
+    // Chat Messages
+    const newChatFp = computeChatFingerprint(proj);
+    const prevChatFp = appState.chatFingerprints[slug];
+    const shouldRebuildChat = isProjectSwitch || Boolean(appState.highlightMsgId) || prevChatFp !== newChatFp;
+
+    if (shouldRebuildChat) {
+      chatStreamInner.innerHTML = '';
+      const messages = Array.isArray(proj.chat) ? proj.chat : [];
+      const activeHighlightId = appState.highlightMsgId || appState.highlightedMsgId;
+
+      messages.forEach((msg) => {
+        if (msg.from === 'foreman' || msg.channel === 'system') {
+          const note = document.createElement('div');
+          note.id = 'msg-' + msg.id;
+          note.className = 'event-note' + (msg.error ? ' error-note' : '');
+          const timeStr = formatClockTime(msg.ts);
+          note.textContent = (timeStr ? timeStr + ' · ' : '') + (msg.text || '');
+          if (activeHighlightId === msg.id) {
+            note.classList.add('highlighted');
+          }
+          chatStreamInner.appendChild(note);
+          return;
+        }
+
+        const card = document.createElement('article');
+        card.id = 'msg-' + msg.id;
+        const isQuestion = Boolean(msg.question);
+        const isUser = msg.from === 'user';
+        card.className = 'msg-card' +
+          (isQuestion ? ' question' : '') +
+          (isUser ? ' from-user' : '') +
+          (activeHighlightId === msg.id ? ' highlighted' : '');
+
+        const authorLabel = isUser
+          ? 'Вы'
+          : ('Оркестратор ' + (proj.name || proj.slug));
+        const timeStr = formatClockTime(msg.ts);
+        const rightMeta = isQuestion && !msg.answered_by
+          ? (timeStr ? timeStr + ' · ждёт вашего решения' : 'ждёт вашего решения')
+          : timeStr;
+
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'msg-meta';
+        metaDiv.innerHTML =
+          '<strong>' + escapeHtml(authorLabel) + '</strong>' +
+          '<span>' + escapeHtml(rightMeta) + '</span>';
+        card.appendChild(metaDiv);
+
+        const bodyDiv = document.createElement('div');
+        bodyDiv.className = 'msg-body';
+        bodyDiv.textContent = msg.text || '';
+        card.appendChild(bodyDiv);
+
+        // Strictly ONLY messages with question: true show one-tap option buttons
+        if (msg.question === true && Array.isArray(msg.options) && msg.options.length > 0) {
+          const actionsDiv = document.createElement('div');
+          actionsDiv.className = 'decision-actions';
+
+          msg.options.forEach((optText, idx) => {
+            const optBtn = document.createElement('button');
+            optBtn.type = 'button';
+            optBtn.className = 'btn' + (idx === 0 ? ' btn-primary' : '');
+            optBtn.textContent = optText;
+
+            optBtn.addEventListener('click', () => {
+              if (optText === 'Ответить…' || optText.startsWith('Ответить')) {
+                setReplyTarget(msg.id, msg.text);
+              } else {
+                sendOptionReply(slug, msg.id, optText);
+              }
+            });
+
+            actionsDiv.appendChild(optBtn);
+          });
+
+          card.appendChild(actionsDiv);
+
+          if (msg.answered_by) {
+            const ansDiv = document.createElement('div');
+            ansDiv.className = 'answered-pill';
+            ansDiv.textContent = '✓ Ответ отправлен';
+            card.appendChild(ansDiv);
+          }
+        }
+
+        chatStreamInner.appendChild(card);
+      });
+
+      appState.chatFingerprints[slug] = newChatFp;
+
+      if (appState.highlightMsgId) {
+        const targetEl = document.getElementById('msg-' + appState.highlightMsgId);
+        appState.highlightMsgId = null;
+        if (targetEl) {
+          targetEl.scrollIntoView({ block: 'center' });
+        } else if (isProjectSwitch || wasNearBottom) {
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        } else {
+          chatMessages.scrollTop = prevScrollTop;
+        }
+      } else if (isProjectSwitch || wasNearBottom) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      } else {
+        chatMessages.scrollTop = prevScrollTop;
+      }
+    }
+
+    appState.renderedSlug = slug;
+    appState.projectFingerprints[slug] = computeProjectFingerprint(proj);
+
+    renderDrawerContents(proj);
+
+    if (composerInput.value !== savedDraft) {
+      composerInput.value = savedDraft;
+    }
+    appState.draftsBySlug[slug] = composerInput.value;
+    if (hadComposerFocus) {
+      if (document.activeElement !== composerInput) {
+        composerInput.focus({ preventScroll: true });
+      }
+      try {
+        if (typeof selStart === 'number' && typeof selEnd === 'number') {
+          composerInput.setSelectionRange(selStart, selEnd);
+        }
+      } catch (_) {}
+    }
+  }
+
+  // Rendering: Right Drawer / Bottom Sheet (Board & Sessions tabs)
+  function renderDrawerContents(proj) {
+    drawerTitle.textContent = 'Доска и сессии · ' + (proj.name || proj.slug);
+
+    const tasks = (proj.board && Array.isArray(proj.board.tasks)) ? proj.board.tasks : [];
+    const sessions = Array.isArray(proj.sessions) ? proj.sessions : [];
+    const watches = Array.isArray(proj.watches) ? proj.watches : [];
+
+    tabCountBoard.textContent = '(' + tasks.length + ')';
+    tabCountSessions.textContent = '(' + sessions.length + ')';
+
+    // Board Tab
+    let boardHtml = '<div class="drawer-sec-label"><span>Доска задач (' + tasks.length + ')</span><span>Этап</span></div>';
+    if (tasks.length === 0) {
+      boardHtml += '<div class="d-card"><div class="d-card-sub">Задач на доске пока нет.</div></div>';
+    } else {
+      boardHtml += tasks.map((t) => {
+        const isDone = t.status === 'done';
+        const isStuck = String(t.stage || '').toLowerCase().includes('застрял');
+        const isGate = String(t.stage || '').toLowerCase().includes('гейт') || String(t.stage || '').toLowerCase().includes('ревью');
+        const cardClass = isStuck ? 'stuck' : (isGate ? 'warn' : '');
+        const badgeClass = isStuck ? 'stuck' : (isGate ? 'warn' : (isDone ? 'muted' : 'ok'));
+
+        const linksHtml = Array.isArray(t.links) && t.links.length > 0
+          ? '<div class="d-card-links">' + t.links.map((lnk) => {
+              const safeUrl = safeHttpUrl(lnk && lnk.url);
+              const labelText = (lnk && lnk.label) ? lnk.label : ((lnk && lnk.url) || '');
+              if (safeUrl) {
+                return '<a class="d-card-link" href="' + escapeHtml(safeUrl) + '" target="_blank" rel="noopener noreferrer">' +
+                  escapeHtml(labelText) +
+                '</a>';
+              }
+              return '<span class="d-card-link d-card-link-plain">' + escapeHtml(labelText) + '</span>';
+            }).join('') + '</div>'
+          : '';
+
+        return '<div class="d-card ' + cardClass + '">' +
+          '<div class="d-card-top">' +
+            '<span class="d-card-title">' + escapeHtml(t.title) + '</span>' +
+            '<span class="d-card-badge ' + badgeClass + '">' + escapeHtml(t.stage || t.status || '') + '</span>' +
+          '</div>' +
+          '<div class="d-card-sub">' +
+            'Владелец: ' + escapeHtml(t.owner || '—') + '<br>' +
+            'След. шаг: ' + escapeHtml(t.next || '—') +
+          '</div>' +
+          linksHtml +
+        '</div>';
+      }).join('');
+    }
+    tabPanelBoard.innerHTML = boardHtml;
+
+    // Sessions Tab
+    const bySid = {};
+    sessions.forEach((s) => { bySid[s.sid] = s; });
+
+    const softTarget = (appState.state && appState.state.thresholds && appState.state.thresholds.context_soft) || 150000;
+    const softLabel = Math.round(softTarget / 1000) + 'k';
+
+    let sessHtml = '<div class="drawer-sec-label"><span>Сессии (' + sessions.length + ')</span><span>Ориентир ~' + softLabel + '</span></div>';
+    if (sessions.length === 0) {
+      sessHtml += '<div class="d-card"><div class="d-card-sub">Активных сессий нет.</div></div>';
+    } else {
+      sessHtml += sessions.map((s) => {
+        const ctxStr = formatContextTokens(s.context_tokens);
+        const isWarn = s.context_level === 'warn' || (typeof s.context_tokens === 'number' && s.context_tokens >= softTarget);
+        const isStuck = s.state === 'stuck' || s.state === 'gone';
+        const cardClass = isStuck ? 'stuck' : (isWarn ? 'warn' : '');
+
+        let badgeClass = 'muted';
+        if (isStuck) badgeClass = 'stuck';
+        else if (isWarn) badgeClass = 'warn';
+        else if (s.state === 'busy') badgeClass = 'ok';
+
+        const stateLabel = s.state + (s.state_age ? ' · ' + s.state_age : '');
+        const badgeText = ctxStr + (isWarn ? ' ⚠' : '') + ' · ' + stateLabel;
+
+        const ownerLabel = s.owner === 'user' ? 'пользователь (user)' : 'оркестратор (orchestrator)';
+
+        let rotationHtml = '';
+        if (s.replaces) {
+          const oldSess = bySid[s.replaces];
+          const oldName = oldSess ? (oldSess.title + ' (' + s.replaces + ')') : s.replaces;
+          rotationHtml += '<div class="d-card-rotation">↻ Заменила сессию: ' + escapeHtml(oldName) + '</div>';
+        }
+        if (s.replaced_by) {
+          const newSess = bySid[s.replaced_by];
+          const newName = newSess ? (newSess.title + ' (' + s.replaced_by + ')') : s.replaced_by;
+          rotationHtml += '<div class="d-card-rotation">↷ Ротирована → заменена на: ' + escapeHtml(newName) + '</div>';
+        }
+
+        return '<div class="d-card ' + cardClass + '">' +
+          '<div class="d-card-top">' +
+            '<span class="d-card-title">' + escapeHtml(s.title) + ' · ' + escapeHtml(s.agent) + ' / ' + escapeHtml(s.model) + '</span>' +
+            '<span class="d-card-badge ' + badgeClass + '">' + escapeHtml(badgeText) + '</span>' +
+          '</div>' +
+          '<div class="d-card-sub">' +
+            'ID: ' + escapeHtml(s.sid) + ' · роль: ' + escapeHtml(s.role || 'worker') + '<br>' +
+            'Владелец: ' + escapeHtml(ownerLabel) + ' · состояние: ' + escapeHtml(stateLabel) +
+          '</div>' +
+          rotationHtml +
+        '</div>';
+      }).join('');
+    }
+
+    if (watches.length > 0) {
+      sessHtml += '<div class="drawer-sec-label" style="margin-top:16px"><span>Активные наблюдения (' + watches.length + ')</span><span>Статус</span></div>';
+      sessHtml += watches.map((w) =>
+        '<div class="d-card">' +
+          '<div class="d-card-top">' +
+            '<span class="d-card-title">' + escapeHtml(w.what) + '</span>' +
+          '</div>' +
+          '<div class="d-card-sub">' + escapeHtml(w.status) + '</div>' +
+        '</div>'
+      ).join('');
+    }
+
+    tabPanelSessions.innerHTML = sessHtml;
+  }
+
+  function setReplyTarget(msgId, msgText) {
+    appState.replyToMsgId = msgId;
+    const excerpt = String(msgText || '').replace(/\s+/g, ' ').slice(0, 64);
+    replyBannerText.textContent = 'Ответ на сообщение: «' + excerpt + (excerpt.length >= 64 ? '…' : '') + '»';
+    replyBanner.classList.add('visible');
+    composerInput.focus();
+  }
+
+  function clearReplyTarget() {
+    appState.replyToMsgId = null;
+    replyBanner.classList.remove('visible');
+  }
+
+  async function sendOptionReply(slug, replyToId, optionText) {
+    const payload = { option: optionText, reply_to: replyToId };
+    await submitMessagePayload(slug, payload, optionText, replyToId);
+  }
+
+  async function submitMessagePayload(slug, payload, displayText, answeredMsgId) {
+    if (isDemo) {
+      const proj = appState.projectsBySlug[slug];
+      if (!proj) return;
+      const newId = 'm-demo-' + Date.now();
+      proj.chat.push({
+        id: newId,
+        ts: new Date().toISOString(),
+        from: 'user',
+        channel: 'web',
+        text: displayText,
+        question: false,
+        options: [],
+        answered_by: null
+      });
+      if (answeredMsgId) {
+        const qMsg = proj.chat.find((m) => m.id === answeredMsgId);
+        if (qMsg) qMsg.answered_by = newId;
+      }
+      clearReplyTarget();
+      renderProjectView({ isProjectSwitch: false });
+      return;
+    }
+
+    try {
+      const res = await apiPost('/api/projects/' + encodeURIComponent(slug) + '/messages', payload);
+      clearReplyTarget();
+      if (res && res.delivery === 'terminal_gone') {
+        const proj = appState.projectsBySlug[slug];
+        if (proj && Array.isArray(proj.chat)) {
+          proj.chat.push({
+            id: 'm-err-' + Date.now(),
+            ts: new Date().toISOString(),
+            from: 'foreman',
+            channel: 'system',
+            text: 'Терминал оркестратора недоступен (terminal gone) — сообщение не доставлено.',
+            error: true
+          });
+          renderProjectView({ isProjectSwitch: false });
+        }
+      }
+      await loadState({ fromEvent: true });
+    } catch (err) {
+      console.error('Failed to send message:', err);
+    }
+  }
+
+  // Drawer controls
+  function updateDrawerChrome() {
+    mainLayout.classList.toggle('drawer-open', appState.drawerOpen);
+    statusStripBtn.setAttribute('aria-expanded', appState.drawerOpen ? 'true' : 'false');
+    stripActionLabel.textContent = appState.drawerOpen ? 'Скрыть шторку ✕' : 'Доска и сессии ▸';
+
+    const isBoard = appState.activeDrawerTab === 'board';
+    tabBtnBoard.classList.toggle('active', isBoard);
+    tabBtnBoard.setAttribute('aria-selected', isBoard ? 'true' : 'false');
+    tabPanelBoard.hidden = !isBoard;
+
+    tabBtnSessions.classList.toggle('active', !isBoard);
+    tabBtnSessions.setAttribute('aria-selected', !isBoard ? 'true' : 'false');
+    tabPanelSessions.hidden = isBoard;
+  }
+
+  function toggleDrawer(forceState) {
+    appState.drawerOpen = typeof forceState === 'boolean' ? forceState : !appState.drawerOpen;
+    updateDrawerChrome();
+  }
+
+  function switchDrawerTab(tabName) {
+    appState.activeDrawerTab = tabName;
+    updateDrawerChrome();
+  }
+
+  // Project selection & hash routing
+  function selectProject(slug, updateHash) {
+    if (appState.selectedSlug) {
+      appState.draftsBySlug[appState.selectedSlug] = composerInput.value;
+    }
+    appState.selectedSlug = slug;
+    appState.highlightMsgId = null;
+    appState.highlightedMsgId = null;
+    clearReplyTarget();
+    appShell.setAttribute('data-mobile-screen', 'chat');
+
+    if (updateHash) {
+      const targetHash = '#/p/' + encodeURIComponent(slug);
+      if (window.location.hash !== targetHash) {
+        history.pushState(null, '', targetHash);
+      }
+    }
+
+    renderTriageRail();
+    loadProject(slug, { isProjectSwitch: true });
+  }
+
+  function parseHashRoute() {
+    const rawHash = window.location.hash || '';
+    const matchMsg = rawHash.match(/^#\/p\/([^/]+)\/m\/([^/]+)$/);
+    const matchProj = rawHash.match(/^#\/p\/([^/]+)$/);
+
+    if (matchMsg) {
+      return {
+        screen: 'chat',
+        slug: decodeURIComponent(matchMsg[1]),
+        msgId: decodeURIComponent(matchMsg[2])
+      };
+    }
+    if (matchProj) {
+      return {
+        screen: 'chat',
+        slug: decodeURIComponent(matchProj[1]),
+        msgId: null
+      };
+    }
+    return {
+      screen: 'triage',
+      slug: null,
+      msgId: null
+    };
+  }
+
+  function applyHashRoute() {
+    const route = parseHashRoute();
+    if (route.slug) {
+      if (appState.selectedSlug && appState.selectedSlug !== route.slug) {
+        appState.draftsBySlug[appState.selectedSlug] = composerInput.value;
+      }
+      appState.selectedSlug = route.slug;
+      appState.highlightMsgId = route.msgId;
+      appState.highlightedMsgId = route.msgId;
+      appShell.setAttribute('data-mobile-screen', 'chat');
+      renderTriageRail();
+      loadProject(route.slug, { isProjectSwitch: true });
+    } else {
+      appState.highlightMsgId = null;
+      appState.highlightedMsgId = null;
+      appShell.setAttribute('data-mobile-screen', 'triage');
+      if (appState.selectedSlug) {
+        renderTriageRail();
+        loadProject(appState.selectedSlug, { isProjectSwitch: true });
+      }
+    }
+  }
+
+  // Findings Inbox Modal
+  async function openFindingsModal() {
+    findingsModal.classList.add('visible');
+    findingsModalBody.innerHTML = '<div class="d-card"><div class="d-card-sub">Загрузка…</div></div>';
+
+    let list = [];
+    if (isDemo) {
+      list = demoStore.findings || [];
+    } else {
+      try {
+        const res = await apiGet('/api/findings');
+        list = (res && Array.isArray(res.findings)) ? res.findings : [];
+      } catch (err) {
+        findingsModalBody.innerHTML = '<div class="d-card"><div class="d-card-sub">Не удалось загрузить список находок.</div></div>';
+        return;
+      }
+    }
+
+    if (list.length === 0) {
+      findingsModalBody.innerHTML = '<div class="d-card"><div class="d-card-sub">Инбокс находок пуст.</div></div>';
+      return;
+    }
+
+    const statusMap = {
+      draft: { label: 'черновик', cls: 'warn' },
+      sent: { label: 'отправлено', cls: 'ok' },
+      failed: { label: 'ошибка отправки', cls: 'stuck' }
+    };
+
+    findingsModalBody.innerHTML = list.map((f) => {
+      const st = statusMap[f.status] || { label: f.status || 'черновик', cls: 'muted' };
+      const safeUrl = safeHttpUrl(f.url);
+      const linkHtml = f.url
+        ? (safeUrl
+            ? '<div class="d-card-links"><a class="d-card-link" href="' + escapeHtml(safeUrl) + '" target="_blank" rel="noopener noreferrer">Открыть Issue ↗</a></div>'
+            : '<div class="d-card-links"><span class="d-card-link d-card-link-plain">' + escapeHtml(f.url) + '</span></div>')
+        : '';
+      return '<div class="d-card">' +
+        '<div class="d-card-top">' +
+          '<span class="d-card-title">' + escapeHtml(f.title) + '</span>' +
+          '<span class="d-card-badge ' + st.cls + '">' + escapeHtml(st.label) + '</span>' +
+        '</div>' +
+        '<div class="d-card-sub">' + escapeHtml(f.id) + ' · ' + escapeHtml(formatRelativeTime(f.ts)) + '</div>' +
+        (f.reason ? '<div class="d-card-sub">Не отправлено автоматически: ' + escapeHtml(f.reason) + '</div>' : '') +
+        linkHtml +
+      '</div>';
+    }).join('');
+  }
+
+  // Event Listeners
+  statusStripBtn.addEventListener('click', () => toggleDrawer());
+  drawerCloseBtn.addEventListener('click', () => toggleDrawer(false));
+  drawerBackdrop.addEventListener('click', () => toggleDrawer(false));
+
+  tabBtnBoard.addEventListener('click', () => switchDrawerTab('board'));
+  tabBtnSessions.addEventListener('click', () => switchDrawerTab('sessions'));
+
+  mobileBackBtn.addEventListener('click', () => {
+    toggleDrawer(false);
+    appShell.setAttribute('data-mobile-screen', 'triage');
+    if (window.location.hash) {
+      history.pushState(null, '', '#/');
+    }
+  });
+
+  replyCancelBtn.addEventListener('click', () => clearReplyTarget());
+
+  composerInput.addEventListener('input', () => {
+    if (appState.selectedSlug) {
+      appState.draftsBySlug[appState.selectedSlug] = composerInput.value;
+    }
+  });
+
+  composerForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = composerInput.value.trim();
+    if (!text || !appState.selectedSlug) return;
+
+    const payload = { text: text };
+    if (appState.replyToMsgId) {
+      payload.reply_to = appState.replyToMsgId;
+    }
+    const replyId = appState.replyToMsgId;
+    composerInput.value = '';
+    appState.draftsBySlug[appState.selectedSlug] = '';
+    await submitMessagePayload(appState.selectedSlug, payload, text, replyId);
+  });
+
+  findingsBtn.addEventListener('click', () => openFindingsModal());
+  findingsCloseBtn.addEventListener('click', () => findingsModal.classList.remove('visible'));
+  findingsModal.addEventListener('click', (e) => {
+    if (e.target === findingsModal) findingsModal.classList.remove('visible');
+  });
+
+  pairForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = pairCodeInput.value.trim();
+    if (!code) return;
+    pairError.classList.remove('visible');
+    try {
+      const res = await fetch('/pair?code=' + encodeURIComponent(code) + '&json=1', {
+        credentials: 'same-origin'
+      });
+      if (!res.ok) throw new Error('Pair failed');
+      const data = await res.json();
+      if (data && data.ok) {
+        window.location.reload();
+      } else {
+        pairError.classList.add('visible');
+      }
+    } catch (err) {
+      pairError.classList.add('visible');
+    }
+  });
+
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.limit-meter-wrap.open').forEach((el) => {
+      el.classList.remove('open');
+      const b = el.querySelector('.limit-meter');
+      if (b) b.setAttribute('aria-expanded', 'false');
+    });
+  });
+
+  window.addEventListener('hashchange', () => applyHashRoute());
+
+  function handleEventPayload(raw) {
+    if (!raw) return;
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (parsed && parsed.type === 'changed') {
+        loadState({
+          fromEvent: true,
+          changedProject: parsed.project || parsed.slug || null
+        });
+      }
+    } catch (_) {}
+  }
+
+  window.addEventListener('foreman:changed', (ev) => {
+    handleEventPayload((ev && ev.detail) || { type: 'changed' });
+  });
+
+  window.__foreman = {
+    appState: appState,
+    demoStore: demoStore,
+    emitChanged: (payload) => handleEventPayload(payload || { type: 'changed' }),
+    loadState: loadState,
+    loadProject: loadProject,
+    renderProjectView: renderProjectView
+  };
+
+  // Live SSE subscription (/api/events) with exponential backoff
+  function connectEvents() {
+    if (isDemo || typeof EventSource === 'undefined') return;
+
+    let backoffMs = 1000;
+    let es = null;
+    let reconnectTimer = null;
+
+    function openStream() {
+      if (es) {
+        try { es.close(); } catch (_) {}
+      }
+      es = new EventSource('/api/events');
+
+      es.onopen = () => {
+        backoffMs = 1000;
+        setOfflineState(false);
+      };
+
+      es.onmessage = (ev) => handleEventPayload(ev.data);
+      es.addEventListener('changed', (ev) => handleEventPayload(ev.data || '{"type":"changed"}'));
+
+      es.onerror = () => {
+        setOfflineState(true);
+        try { es.close(); } catch (_) {}
+        if (!reconnectTimer) {
+          const delay = backoffMs;
+          backoffMs = Math.min(30000, backoffMs * 2);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            openStream();
+          }, delay);
+        }
+      };
+    }
+
+    openStream();
+  }
+
+  // Init
+  const initDrawer = params.get('drawer');
+  if (initDrawer === '1' || initDrawer === 'board' || initDrawer === 'sessions') {
+    appState.drawerOpen = true;
+    if (initDrawer === 'sessions') {
+      appState.activeDrawerTab = 'sessions';
+    }
+  }
+  const initialRoute = parseHashRoute();
+  if (initialRoute.slug) {
+    appState.selectedSlug = initialRoute.slug;
+    appState.highlightMsgId = initialRoute.msgId;
+    appState.highlightedMsgId = initialRoute.msgId;
+    appShell.setAttribute('data-mobile-screen', 'chat');
+  } else {
+    appShell.setAttribute('data-mobile-screen', 'triage');
+  }
+  loadState({ isProjectSwitch: true }).then(() => {
+    connectEvents();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 """foreman ask <sid|title> <text> [--wait S]: send a question; the answer arrives in your inbox (spec 4.7)."""
-from foreman import messaging
+import sys
+
+from foreman import messaging, routing
 from foreman.cliutil import CliError, add_project_arg, read_text_arg
 
 
@@ -17,6 +19,9 @@ def run(args):
     if args.wait < 0 or args.wait > messaging.MAX_WAIT_S:
         raise CliError("--wait must be between 0 and %d seconds (agent tool calls time out)" % messaging.MAX_WAIT_S)
     rec = messaging.find_target(args.target, args.project)
+    warn = routing.cold_cache_warning(rec)
+    if warn:
+        sys.stderr.write("foreman: %s\n" % warn)
     status, msg_id = messaging.ask(rec, read_text_arg(args.text))
     if status == "terminal_gone":
         raise CliError("terminal gone: %s (%s)" % (rec.get("title") or rec["sid"], rec["sid"]), code=3)

@@ -8,7 +8,8 @@ ALL_COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "clos
                 "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
                 "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact"]
 # implemented commands (each work package removes its own from the stub list)
-IMPLEMENTED = ("board", "log", "status", "gate", "hook", "deliver", "send", "ask", "reply", "say", "stage", "compact")
+IMPLEMENTED = ("board", "log", "status", "gate", "hook", "deliver", "send", "ask", "reply", "say", "stage", "compact",
+               "limits", "tap", "watch", "clean", "work", "telegram", "web", "serve", "open", "close", "rotate", "orchestrator", "report", "init", "install", "uninstall")
 STUBS = [c for c in ALL_COMMANDS if c not in IMPLEMENTED]
 
 
@@ -47,10 +48,8 @@ class LauncherTest(ForemanTestCase):
             self.assertEqual(code, 2, c)
             self.assertIn("foreman %s: not implemented yet" % c, out + err)
 
-    def test_stubs_accept_arbitrary_arguments(self):
-        code, out, err = run_cli("web", "s-123456", "hello", "--flag", "x")
-        self.assertEqual(code, 2)
-        self.assertIn("not implemented yet", out + err)
+    def test_no_stub_commands_remain(self):
+        self.assertEqual(STUBS, [])
 
 
 def run_cli_path(path, *args, cwd=None):
@@ -125,6 +124,19 @@ class BoardCliTest(ForemanTestCase):
         code, out, err = self.cli("board", "add", "A", "--link", "nolabel")
         self.assertEqual(code, 2)
         self.assertIn("label=url", err)
+
+    def test_link_must_be_http_or_https(self):
+        for bad in ("x=javascript:alert(1)", "x=data:text/html,hi", "x=file:///etc/passwd", "x=ftp://h/f",
+                    "x=//host/path", "x=http://", "x= javascript:alert(1)"):
+            code, out, err = self.cli("board", "add", "A", "--link", bad)
+            self.assertEqual(code, 2, bad)
+            self.assertIn("http(s)", err)
+        self.assertEqual(self.cli("board", "add", "A", "--link", "pr=HTTPS://github.com/o/r/pull/1")[0], 0)
+        self.cli("board", "add", "B")
+        code, out, err = self.cli("board", "set", "t2", "link=bad=javascript:alert(1)")
+        self.assertEqual(code, 2)
+        self.assertIn("http(s)", err)
+        self.assertEqual(self.cli("board", "set", "t2", "link=ok=http://x/2")[0], 0)
 
     def test_set(self):
         self.cli("board", "add", "A")
@@ -363,10 +375,10 @@ class StatusCliTest(ForemanTestCase):
         self.assertNotIn("⚠", row_a)
 
     def test_closed_hidden_rotated_shown(self):
-        self.s.set_state(self.b, "rotated")
+        self.s.set_lifecycle(self.b, "rotated")
         self.s.update_session(self.b, replaced_by="s-abcdef")
         c = self.s.create_session("demo", "claude", title="old-one")
-        self.s.set_state(c["sid"], "closed")
+        self.s.set_lifecycle(c["sid"], "closed")
         out = self.cli("status")[1]
         self.assertNotIn("old-one", out)
         row_b = [l for l in out.splitlines() if "research" in l][0]

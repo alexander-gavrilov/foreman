@@ -10,6 +10,7 @@ A normalised event is a dict with these keys (all may be None except `kind`/`nat
 session_end, or None for an event foreman does not track.
 """
 import importlib
+import shlex
 
 NAMES = ("claude", "antigravity", "codex")
 
@@ -24,7 +25,7 @@ def blank(native_event):
     return {"kind": None, "native_event": native_event, "agent_session_id": None, "cwd": None,
             "transcript_path": None, "model": None, "prompt": None, "tool_name": None, "tool_input": None,
             "command": None, "last_assistant_message": None, "stop_hook_active": False, "fully_idle": None,
-            "reason": None, "source": None, "agent_id": None}
+            "reason": None, "source": None, "agent_id": None, "invocation_num": None}
 
 
 def as_text(value):
@@ -42,9 +43,13 @@ def shell_command(tool_input):
             return value
         if isinstance(value, list) and value and all(isinstance(x, str) for x in value):
             argv = list(value)
-            # ["bash", "-lc", "<script>"] -> the script itself
-            if len(argv) >= 3 and argv[0] in ("bash", "sh", "zsh", "/bin/bash", "/bin/sh", "/bin/zsh") \
-                    and argv[1] in ("-c", "-lc", "-ic", "-l", "-i") and argv[2:]:
-                return " ".join(argv[2:])
-            return " ".join(argv)
+            shells = ("bash", "sh", "zsh", "/bin/bash", "/bin/sh", "/bin/zsh")
+            # exactly [shell, -c|-lc|-ic, script] -> the script itself
+            if len(argv) == 3 and argv[0] in shells and argv[1] in ("-c", "-lc", "-ic"):
+                return argv[2]
+            if argv[0] in shells:
+                # any other shell-wrapper shape (script file, extra positionals): fail closed
+                return "$(foreman-guard-unknown-shell-form)"
+            # keep argv boundaries: quote every element exactly as it will be passed
+            return shlex.join(argv)
     return None

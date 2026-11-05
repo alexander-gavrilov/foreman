@@ -1,15 +1,38 @@
 """All filesystem locations (architecture §2). Every function reads the environment at call time,
 so tests can point FOREMAN_HOME / HOME at temporary directories."""
+import contextlib
 import os
+import threading
+
+_pinned = threading.local()
+
+
+@contextlib.contextmanager
+def pinned_home(path):
+    """Resolve home() to `path` on this thread: a background thread keeps the state root it was started for even
+    if the process environment changes meanwhile."""
+    before = getattr(_pinned, "path", None)
+    _pinned.path = path
+    try:
+        yield
+    finally:
+        _pinned.path = before
+
+
+def default_home():
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "foreman")
 
 
 def home():
     """$FOREMAN_HOME, else ${XDG_STATE_HOME:-~/.local/state}/foreman."""
+    pinned = getattr(_pinned, "path", None)
+    if pinned:
+        return pinned
     explicit = os.environ.get("FOREMAN_HOME")
     if explicit:
         return os.path.abspath(os.path.expanduser(explicit))
-    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    return os.path.join(state, "foreman")
+    return default_home()
 
 
 def _name(value):
@@ -62,6 +85,10 @@ def lessons_file(slug):
 
 def sessions_dir():
     return _join("sessions")
+
+
+def pending_orchestrator_file(slug):
+    return _join("sessions", "pending", _name(slug) + ".json")
 
 
 def session_file(sid):

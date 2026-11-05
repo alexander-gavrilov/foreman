@@ -9,7 +9,6 @@ ALLOWED = [
     "grep -rn foo src", "rg foo", "wc -l file", "find . -name '*.py'", "jq .tasks board.json", "date",
     "date -u +%FT%T", "echo hello", "echo 'a > b' ", "echo hi > /dev/null", "ls 2>&1", "ls 2>/dev/null",
     "foreman status", "foreman send s-1 'hello world'", "foreman log append 'x > y'",
-    "FOREMAN_ACTOR=orchestrator foreman log append done",
     "orca terminal list --json", "herdr pane list",
     "git status", "git log --oneline -5", "git diff HEAD~1", "git -C /repo show abc123", "git branch",
     "git branch -a", "git rev-parse HEAD", "git grep -n foo -- src",
@@ -87,7 +86,8 @@ BLOCKED = [
     "gh issue create --title t --body 'plain text is fine'", "gh pr comment 12 --body hello",
     # review 2b N3: reviews come from a different instance
     "gh pr review 12 --approve", "gh pr review 12 --comment --body x", "gh pr review", "gh pr review 12 -a",
-    # review 2b N2: only FOREMAN_ACTOR may be set
+    # review 2b N2: no variable may be set (review 3a F3: not even FOREMAN_ACTOR, it forged the sender)
+    "FOREMAN_ACTOR=user foreman send s-1 ok", "FOREMAN_ACTOR=orchestrator foreman log append done",
     "FOREMAN_HOME=. foreman status", "FOREMAN_SESSION=s-1 foreman reply m-1 x", "FOREMAN_TRANSPORT=fake foreman status",
     "FOREMAN_FAKE_TRANSPORT=. foreman status", "FOREMAN_ACTOR=x FOREMAN_HOME=. foreman status", "GH_REPO=o/r gh pr list",
     "PATH=. ls", "FOREMAN_ACTOR=$X foreman status",

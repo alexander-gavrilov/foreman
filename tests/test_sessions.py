@@ -63,7 +63,7 @@ class SessionsTest(ForemanTestCase):
 
     def test_find_title_prefers_live_session_and_project_scope(self):
         old = self.s.create_session("p", "claude", title="dup")
-        self.s.set_state(old["sid"], "closed")
+        self.s.set_lifecycle(old["sid"], "closed")
         new = self.s.create_session("p", "claude", title="dup")
         other = self.s.create_session("q", "claude", title="dup")
         self.assertEqual(self.s.find("dup", project="p")["sid"], new["sid"])
@@ -83,11 +83,12 @@ class SessionsTest(ForemanTestCase):
         self.assertEqual(r3["state_since"], "2026-01-01T00:20:00Z")
         self.assertEqual(self.s.load_session(rec["sid"])["state"], "idle")
 
-    def test_set_state_closed_sets_closed_at_and_rejects_unknown_state(self):
+    def test_set_lifecycle_closed_sets_closed_at_and_set_state_rejects_unknown_state(self):
         rec = self.s.create_session("p", "claude")
-        self.assertTrue(self.s.set_state(rec["sid"], "closed")["closed_at"])
-        with self.assertRaises(ValueError):
-            self.s.set_state(rec["sid"], "weird")
+        self.assertTrue(self.s.set_lifecycle(rec["sid"], "closed")["closed_at"])
+        for bad in ("weird", "closed", "rotated"):  # closed / rotated are lifecycles, not activity states
+            with self.assertRaises(ValueError):
+                self.s.set_state(rec["sid"], bad)
         with self.assertRaises(KeyError):
             self.s.set_state("s-ffffff", "idle")
 
@@ -174,7 +175,7 @@ class SessionsTest(ForemanTestCase):
     def test_find_ignores_inactive_duplicates_for_ambiguity(self):
         a = self.s.create_session("p1", "claude", title="api")
         old = self.s.create_session("p2", "claude", title="api")
-        self.s.set_state(old["sid"], "closed")
+        self.s.set_lifecycle(old["sid"], "closed")
         self.assertEqual(self.s.find("api")["sid"], a["sid"])
 
     def test_find_sid_and_handle_are_global_even_with_project(self):

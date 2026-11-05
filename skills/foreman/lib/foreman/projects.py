@@ -161,6 +161,13 @@ def _mutate_board(slug, fn):
     return result["value"]
 
 
+def append_backlog(slug, summary):
+    def fn(board):
+        board["backlog"].append(summary)
+        return board
+    return _mutate_board(slug, fn)
+
+
 def add_task(slug, title, stage=None, owner=None, next=None, links=None):
     def fn(board):
         n = _next_task_id(board)

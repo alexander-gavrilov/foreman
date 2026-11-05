@@ -1,0 +1,13 @@
+[Unit]
+Description=foreman orchestration daemon (web UI, Telegram, watch loop)
+After=network.target
+
+[Service]
+ExecStart=@FOREMAN@ serve
+Restart=always
+RestartSec=5
+Environment="FOREMAN_HOME=@FOREMAN_HOME@"
+Environment="PATH=@PATH@"
+
+[Install]
+WantedBy=default.target

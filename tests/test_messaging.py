@@ -60,7 +60,7 @@ class SendTest(RuntimeCase):
         foreman("send", "fm-api", "-", stdin="from stdin\n")
         self.assertEqual(self.sessions.inbox_pending(w["sid"])[0]["text"], "from stdin")
 
-    def test_sender_from_actor_env_or_session(self):
+    def test_sender_from_session_or_cli_never_from_actor_env(self):
         w = self.session(title="fm-api", idle=False, state="busy")
         sender = self.session(title="orch", role="orchestrator", handle=self.term("o"))
         with mock.patch.dict(os.environ, {"FOREMAN_ACTOR": "alice"}):
@@ -68,7 +68,7 @@ class SendTest(RuntimeCase):
         with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": sender["transport"]["handle"]}):
             foreman("send", "fm-api", "b")
         foreman("send", "fm-api", "c")
-        self.assertEqual([m["from"] for m in self.sessions.inbox_pending(w["sid"])], ["alice", "orch", "cli"])
+        self.assertEqual([m["from"] for m in self.sessions.inbox_pending(w["sid"])], ["cli", "orch", "cli"])
 
 
 class AskReplyTest(RuntimeCase):

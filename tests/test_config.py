@@ -27,6 +27,7 @@ class ConfigTest(ForemanTestCase):
             self.assertIn(k, cfg["routing"])
 
     def test_linux_is_home(self):
+        self.write_config({})  # ForemanTestCase starts with upstream.mode=draft; this test wants the defaults
         cfg = self.c.load(platform="linux")
         self.assertEqual(cfg["machine"]["kind"], "home")
         self.assertEqual(cfg["upstream"]["mode"], "auto")
