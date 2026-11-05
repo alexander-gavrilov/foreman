@@ -18,6 +18,17 @@ SECRET_FORMS = (  # (the credential as pasted, the part that must not survive)
     ("sk-ant-api03-Zk3Qw9TnRv5LpXc2HbYd8UeA", "Zk3Qw9TnRv5LpXc2HbYd8UeA"),               # Anthropic API key
     ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.dBjftJeZ4CVPmB92K27u", "dBjftJeZ4CVPmB92K27u"),  # bearer JWT
     ("123456789:AAFh3kLmNoPqRsTuVwXyZ-abcdefghijk", "AAFh3kLmNoPqRsTuVwXyZ-abcdefghijk"),  # Telegram bot token
+    # review 4 (N4): forms the first pattern list let through
+    ("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0t\n-----END RSA PRIVATE KEY-----",
+     "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0t"),                                   # PEM block
+    ('{"password": "hunter2"}', "hunter2"),                                                 # quoted JSON key
+    ("Authorization: Basic dXNlcjpodW50ZXIy", "dXNlcjpodW50ZXIy"),                           # Basic auth
+    ("sk_" "live_4eC39HqLyjWDarjtT1zdp7dc", "4eC39HqLyjWDarjtT1zdp7dc"),                       # Stripe
+    ("AIzaSyA-1234567890abcdefghijklmnopqrstuv", "1234567890abcdefghijklmnopqrstuv"),        # Google API key
+    ("glpat-xxxxxxxxxxxxxxxxxxxx", "xxxxxxxxxxxxxxxxxxxx"),                                 # GitLab
+    ("npm_abcdefghijklmnopqrstuvwxyz0123456789", "abcdefghijklmnopqrstuvwxyz0123456789"),   # npm
+    ("zx_Qw3rTy9uIo5pAs7dFg1hJk4lZx8cVb2", "Qw3rTy9uIo5pAs7dFg1hJk4lZx8cVb2"),              # unknown prefix
+    ("the password is hunter2", "hunter2"),                                                 # in prose
 )
 
 
@@ -148,6 +159,43 @@ class FindingsTest(AcceptanceCase):
             with self.subTest(secret=secret[:12]):
                 argv = self.build_public_issue("the hook failed while using %s for the call" % secret)
                 self.assertNotIn(essential, " ".join(argv))
+
+    # Review 4 (N3, D56): over-scrubbing must not file an empty public issue, and a suspicious result stays a draft.
+    def run_auto(self, text):
+        from foreman import findings
+        self.update_config(upstream={"mode": "auto"})
+        calls = []
+
+        def runner(argv):
+            calls.append(list(argv))
+            return 0, "https://github.com/alexander-gavrilov/foreman/issues/8\n", ""
+
+        with mock.patch.object(findings, "default_runner", side_effect=AssertionError("a real gh was run")):
+            return findings.report_foreman(text, runner=runner), calls
+
+    def test_an_empty_scrub_result_stays_a_draft(self):
+        for text in ("```\nonly code here\n```", "    x = secret()\n    y = 2", "/home/a/b.py /home/a/c.py s-aaaaaa"):
+            with self.subTest(text=text[:20]):
+                finding, calls = self.run_auto(text)
+                self.assertEqual((finding["status"], calls), ("draft", []))
+                self.assertIn("too little", finding["reason"])
+                self.assertIn("too little", self.fm_ok("report", "--list"))
+
+    def test_a_plain_paragraph_is_filed_with_a_real_title_and_body(self):
+        para = ("The orchestrator did not wake after the worker finished, although the hook fired; the terminal stayed "
+                "idle for several minutes and the board kept showing the session as busy, twice in a row.")
+        finding, calls = self.run_auto(para)
+        self.assertEqual(finding["status"], "sent")
+        argv = calls[0]
+        self.assertTrue(argv[argv.index("--title") + 1].startswith("The orchestrator did not wake"))
+        self.assertIn("kept showing the session as busy", argv[argv.index("--body") + 1])
+
+    def test_a_secret_the_scrubber_does_not_know_is_caught_by_the_gate(self):
+        from foreman import scrub
+        with mock.patch.object(scrub, "scrub", return_value="digest failed with Zq9Xw3Er7Ty1Ui5Op2As6Df8Gh4Jk0Lm"):
+            finding, calls = self.run_auto("anything at all")
+        self.assertEqual((finding["status"], calls), ("draft", []))
+        self.assertIn("high-entropy", finding["reason"])
 
 
 if __name__ == "__main__":

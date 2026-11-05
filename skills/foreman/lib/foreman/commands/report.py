@@ -20,7 +20,8 @@ def register(subparsers):
 def run(args, runner=None):
     if args.list:
         for f in findings.list_findings():
-            print("%s  %-6s  %s%s" % (f["id"], f["status"], f["title"], "  " + f["url"] if f.get("url") else ""))
+            print("%s  %-6s  %s%s%s" % (f["id"], f["status"], f["title"], "  " + f["url"] if f.get("url") else "",
+                                      "  [held: %s]" % f["reason"] if f.get("reason") else ""))
         return 0
     if args.send:
         f = findings.send(args.send, runner=runner)
@@ -41,7 +42,8 @@ def run(args, runner=None):
     if f["status"] == "sent":
         print("reported: %s" % f["url"])
     elif f["status"] == "draft":
-        print("saved as draft %s (send it with: foreman report --send %s)" % (f["id"], f["id"]))
+        why = " - held back from auto-send: %s" % f["reason"] if f.get("reason") else ""
+        print("saved as draft %s%s (send it with: foreman report --send %s)" % (f["id"], why, f["id"]))
     elif f["status"] == "failed":
         print("could not send (%s); saved as draft %s" % (f.get("error"), f["id"]))
     else:

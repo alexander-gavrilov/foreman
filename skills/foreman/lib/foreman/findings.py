@@ -73,7 +73,11 @@ def report_foreman(text, runner=None, ctx=None):
     finding = {"id": "f-" + secrets.token_hex(4), "ts": timeutil.now_iso(), "title": _title(body), "body": body,
                "status": {"draft": "draft", "off": "off"}.get(mode, "draft"), "url": None, "kind": "foreman"}
     if mode == "auto":
-        _gh_create(finding, cfg["upstream"].get("repo") or DEFAULT_REPO, runner)
+        reason = scrub.gate(body)
+        if reason:  # D56: auto never sends what still looks suspicious or says too little; the user decides
+            finding.update(status="draft", reason=reason)
+        else:
+            _gh_create(finding, cfg["upstream"].get("repo") or DEFAULT_REPO, runner)
     return save(finding)
 
 

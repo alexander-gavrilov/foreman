@@ -33,7 +33,7 @@ class ReportModes(ForemanTestCase):
 
     def test_auto_failure_is_failed_draft(self):
         self.write_config({"upstream": {"mode": "auto"}})
-        f = findings.report_foreman("x problem", runner=FakeGh(rc=1, err="gh: not logged in"))
+        f = findings.report_foreman("the hook exits 1 on an empty stdin", runner=FakeGh(rc=1, err="gh: not logged in"))
         self.assertEqual(f["status"], "failed")
         self.assertIsNone(f["url"])
         self.assertTrue(os.path.exists(paths.finding_file(f["id"])))

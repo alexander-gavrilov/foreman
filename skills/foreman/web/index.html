@@ -2824,6 +2824,7 @@
           '<span class="d-card-badge ' + st.cls + '">' + escapeHtml(st.label) + '</span>' +
         '</div>' +
         '<div class="d-card-sub">' + escapeHtml(f.id) + ' · ' + escapeHtml(formatRelativeTime(f.ts)) + '</div>' +
+        (f.reason ? '<div class="d-card-sub">Не отправлено автоматически: ' + escapeHtml(f.reason) + '</div>' : '') +
         linkHtml +
       '</div>';
     }).join('');
