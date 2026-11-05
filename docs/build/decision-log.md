@@ -70,3 +70,40 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
 - D26 · "Waiting for permission" of an Antigravity session is known only on Herdr (`blocked`); on Orca such a session
   shows as busy and becomes "stuck" after the threshold. — agy has no permission hook event.
 - D27 · Orca `terminal wait --for tui-idle` timed out on idle Antigravity tabs (observed while closing research workers). foreman's idle signal for agy is its own Stop hook (`fullyIdle`), with Orca `worktree ps` as a fallback, not tui-idle alone.
+
+## After review 1 (independent Opus reviewer, PRs #2 and #3)
+
+- D28 · The orchestrator guard is deny-by-default for tools (including all `mcp__*`) and shell commands, restricts
+  `foreman` to orchestrator-safe subcommands, allows `orca`/`herdr` only read-only, and **fails closed** for the
+  orchestrator. — Reviewer showed bypasses via `board done --check`, `herdr pane run`, MCP write tools, `git diff --output`.
+- D29 · `board done` runs only the stored objective check. — The override let a done-marking skip the real check.
+- D30 · `foreman ask` is asynchronous (answer arrives as an inbox message) with an optional `--wait ≤ 100 s`.
+  — Agent tool calls time out (Claude Bash ≤ 600 s) and a blocked orchestrator receives no wakes.
+- D31 · Binding rule 1b: a hook from a known transport handle re-binds to that record and keeps its role.
+  Orchestrators are registered explicitly (`orchestrator start` / `orchestrator adopt`). — `/clear` changes the
+  Claude session id and would otherwise demote the orchestrator to a worker with no guard.
+- D32 · Rotation flow and compaction are specified (architecture §7a); rotated sessions are never closed by
+  automation.
+- D33 · Limit enforcement lives in `foreman open` (refuse at stop, switch at warn) and the watch loop (wind-down
+  message to running sessions at ≥ 90 %).
+- D34 · Inbound channel security: web Host allowlist, Origin check, SameSite=Strict cookie, rate-limited pairing;
+  Telegram accepts only the configured chat and allowed user ids. — Prompt-injection / CSRF surface (spec §7).
+- D35 · macOS notifications need `terminal-notifier` for click-through; `install` provides it via Homebrew, or
+  lists it as a user step. — `osascript` notifications cannot open a URL (spec §5.3 / acceptance 6).
+- D36 · Antigravity becomes orchestrator-capable only after an e2e test with the user's Orca hook present.
+
+## After review 1b
+
+- D37 · The orchestrator cannot set objective checks; checks come from workers or the user. — Otherwise
+  `board set check=<shell>` + `board done` is a shell for the orchestrator (verified bypass).
+- D38 · More exec-capable flags denied in the guard (`git -c/--config-env/--exec-path/--upload-pack`, `rg --pre`,
+  `tree -o`, `file -C`); the guard covers subagent tool calls; `send`/`compact` only reach agent terminals;
+  `orchestrator adopt` is user-only.
+- D39 · `foreman compact <sid>` types the raw `/compact` at idle (framed messages cannot carry slash commands).
+- D40 · Sessions have `lifecycle` (active/rotated/closed) separate from activity `state`. — Hooks of a rotated
+  session must not erase "old → new", and its busy/idle state is still needed to avoid interrupting it.
+- D41 · The project's work-file rule is injected by the SessionStart hook instead of editing CLAUDE.md/AGENTS.md;
+  hook files are listed in `.git/info/exclude`. — Spec anti-goal "foreman's files pollute other agents' context"
+  and work repos must stay clean; the rule still reaches every agent on every session start.
+- D42 · At ≥ 90 % the orchestrator is not wound down (it is informed); only workers are. — With Claude at ≥ 90 %
+  and Codex not orchestrator-capable, there may be nowhere to hand off.

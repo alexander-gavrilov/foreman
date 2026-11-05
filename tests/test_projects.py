@@ -142,6 +142,79 @@ class BoardTest(ForemanTestCase):
         self.assertEqual(t["check"]["exit_code"], 1)
 
 
+class CreateProjectConcurrencyTest(ForemanTestCase):
+    def test_same_path_from_many_processes_is_one_project(self):
+        from tests import mp_workers
+        folder = self.make_dir("shared")
+        slugs = mp_workers.run_in_processes(mp_workers.create, [(folder,)] * 6)
+        self.assertEqual(set(slugs), {"shared"})
+        from foreman import projects
+        self.assertEqual(len(projects.list_projects()), 1)
+
+    def test_same_basename_different_paths_get_distinct_slugs(self):
+        from tests import mp_workers
+        from foreman import projects
+        folders = [self.make_dir("grp%d/app" % i) for i in range(6)]
+        slugs = mp_workers.run_in_processes(mp_workers.create, [(f,) for f in folders])
+        self.assertEqual(len(set(slugs)), 6)
+        self.assertEqual(sorted(slugs), sorted(["app"] + ["app-%d" % i for i in range(2, 7)]))
+        by_slug = {p["slug"]: p["path"] for p in projects.list_projects()}
+        self.assertEqual(sorted(by_slug.values()), sorted(folders))
+
+    def test_existing_project_json_is_never_overwritten(self):
+        from foreman import projects, paths, store
+        a = projects.create_project(self.make_dir("one/app"))
+        # a stale slug directory that already has a project.json for another path must be skipped
+        b = projects.create_project(self.make_dir("two/app"))
+        self.assertNotEqual(a["slug"], b["slug"])
+        self.assertEqual(store.read_json(paths.project_file(a["slug"]))["path"], a["path"])
+
+
+class CorruptStateTest(ForemanTestCase):
+    def setUp(self):
+        super().setUp()
+        from foreman import projects, paths, store
+        self.p, self.paths, self.store = projects, paths, store
+        self.init_project("demo")
+        self.p.add_task("demo", "keep me")
+        with open(paths.board_file("demo"), "w") as f:
+            f.write('{"tasks": [')
+
+    def _aside(self):
+        d = os.path.dirname(self.paths.board_file("demo"))
+        return [n for n in os.listdir(d) if n.startswith("board.json.corrupt-")]
+
+    def test_load_board_raises_and_quarantines(self):
+        with self.assertRaises(self.store.StateCorrupt):
+            self.p.load_board("demo")
+        self.assertEqual(len(self._aside()), 1)
+
+    def test_add_task_does_not_silently_create_empty_board(self):
+        with self.assertRaises(self.store.StateCorrupt):
+            self.p.add_task("demo", "new")
+        self.assertFalse(os.path.exists(self.paths.board_file("demo")))
+        self.assertEqual(len(self._aside()), 1)
+
+    def test_wrong_json_type_is_corrupt_too(self):
+        with open(self.paths.board_file("demo"), "w") as f:
+            f.write("[1, 2]")
+        with self.assertRaises(self.store.StateCorrupt):
+            self.p.load_board("demo")
+        self.assertEqual(len(self._aside()), 1)
+
+    def test_missing_board_is_just_empty(self):
+        os.remove(self.paths.board_file("demo"))
+        self.assertEqual(self.p.load_board("demo"), {"tasks": [], "backlog": []})
+
+    def test_corrupt_project_json_is_quarantined_and_skipped_in_listing(self):
+        self.init_project("other")
+        with open(self.paths.project_file("other"), "w") as f:
+            f.write("nope")
+        self.assertEqual([x["slug"] for x in self.p.list_projects()], ["demo"])
+        d = os.path.dirname(self.paths.project_file("other"))
+        self.assertTrue([n for n in os.listdir(d) if n.startswith("project.json.corrupt-")])
+
+
 class JournalChatTest(ForemanTestCase):
     def setUp(self):
         super().setUp()

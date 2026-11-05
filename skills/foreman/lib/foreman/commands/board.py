@@ -35,7 +35,9 @@ def register(subparsers):
     d = sub.add_parser("done", help="mark a task done, only if its check passes")
     add_project_arg(d)
     d.add_argument("task_id")
-    d.add_argument("--check", metavar="CMD", help="shell command that must exit 0")
+    d.add_argument("--check", metavar="CMD",
+                   help="shell command that must exit 0; only used when the task has no stored check "
+                        "(a stored check is fixed and cannot be replaced)")
 
 
 def run(args):
@@ -124,7 +126,15 @@ def _done(args, proj):
     task = projects.get_task(slug, args.task_id)
     if task is None:
         raise CliError("no task %s in project %s" % (args.task_id, slug))
-    cmd = args.check or (task.get("check") or {}).get("cmd")
+    stored = (task.get("check") or {}).get("cmd")
+    if stored:
+        # The objective check is fixed once set: --check can never replace it.
+        cmd = stored
+        if args.check and args.check != stored:
+            sys.stderr.write("foreman: --check ignored: %s already has a stored check (%s)\n"
+                             % (args.task_id, stored))
+    else:
+        cmd = args.check
     if not cmd:
         projects.mark_done(slug, args.task_id)
         print("%s done" % args.task_id)

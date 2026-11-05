@@ -24,6 +24,7 @@ class ForemanTestCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.addCleanup(os.chdir, os.getcwd())  # LIFO: restored after the temp tree is removed
         self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="foreman-test-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = os.path.join(self.tmp, "home")

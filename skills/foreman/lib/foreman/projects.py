@@ -20,11 +20,14 @@ def _normalize(path):
 
 
 def load_project(slug):
-    try:
-        data = store.read_json(paths.project_file(slug))
-    except ValueError:
+    """The project record, None if it does not exist; StateCorrupt (file moved aside) if it is unreadable."""
+    path = paths.project_file(slug)
+    data = store.read_json(path)
+    if data is None:
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        store.quarantine(path, "not a JSON object")
+    return data
 
 
 def save_project(project):
@@ -40,37 +43,50 @@ def list_projects():
     except OSError:
         return out
     for name in names:
-        proj = store.read_json(os.path.join(root, name, "project.json"))
-        if isinstance(proj, dict) and proj.get("slug"):
+        if name.startswith(".") or name.endswith(".lock"):
+            continue
+        try:
+            proj = load_project(name)
+        except (store.StateCorrupt, ValueError):
+            continue  # already moved aside (or not a valid slug); keep listing the healthy ones
+        if proj and proj.get("slug"):
             out.append(proj)
     return out
 
 
 def create_project(path, name=None, language=None):
-    """Register `path` as a project (idempotent: an already-registered folder returns its record)."""
+    """Register `path` as a project (idempotent: an already-registered folder returns its record).
+    The path check and slug allocation happen under one lock on projects/, and project.json is created
+    exclusively, so concurrent callers never get two projects for one path or two paths for one slug."""
     folder = _normalize(path)
-    for existing in list_projects():
-        if existing.get("path") == folder:
-            return existing
     base = slugify(os.path.basename(folder.rstrip(os.sep)) or "project")
-    slug, n = base, 2
-    while os.path.exists(paths.project_file(slug)):
-        slug = "%s-%d" % (base, n)
-        n += 1
-    project = {
-        "slug": slug,
-        "name": name or os.path.basename(folder.rstrip(os.sep)) or slug,
-        "path": folder,
-        "created_at": timeutil.now_iso(),
-        "orchestrator": None,
-        "telegram_topic_id": None,
-        "gates": [],
-        "language": language,
-    }
-    save_project(project)
-    if not os.path.exists(paths.board_file(slug)):
-        save_board(slug, {"tasks": [], "backlog": []})
-    return project
+    registry = os.path.join(paths.projects_dir(), ".registry")
+    with store.locked(registry):
+        for existing in list_projects():
+            if existing.get("path") == folder:
+                return existing
+        n = 1
+        while True:
+            slug = base if n == 1 else "%s-%d" % (base, n)
+            n += 1
+            project = {
+                "slug": slug,
+                "name": name or os.path.basename(folder.rstrip(os.sep)) or slug,
+                "path": folder,
+                "created_at": timeutil.now_iso(),
+                "orchestrator": None,
+                "telegram_topic_id": None,
+                "gates": [],
+                "language": language,
+            }
+            try:
+                store.write_json_exclusive(paths.project_file(slug), project)
+            except FileExistsError:
+                continue
+            break
+        if not os.path.exists(paths.board_file(slug)):
+            save_board(slug, {"tasks": [], "backlog": []})
+        return project
 
 
 def project_for_path(path):
@@ -89,13 +105,20 @@ def project_for_path(path):
 
 # ---------------------------------------------------------------- board
 
-def load_board(slug):
-    board = store.read_json(paths.board_file(slug), None)
-    if not isinstance(board, dict):
-        board = {}
+def _check_board(path, board):
+    """A board must be an object whose tasks/backlog are lists; anything else is corrupt state."""
+    if not isinstance(board, dict) or not isinstance(board.get("tasks", []), list) \
+            or not isinstance(board.get("backlog", []), list):
+        store.quarantine(path, "not a board object")
     board.setdefault("tasks", [])
     board.setdefault("backlog", [])
     return board
+
+
+def load_board(slug):
+    """The board; an empty one if the file is missing; StateCorrupt (file moved aside) if it is unreadable."""
+    path = paths.board_file(slug)
+    return _check_board(path, store.read_json(path, {}))
 
 
 def save_board(slug, board):
@@ -127,15 +150,14 @@ def _mutate_board(slug, fn):
     """Locked read-modify-write of board.json; fn(board) -> result."""
     result = {}
 
+    path = paths.board_file(slug)
+
     def apply(board):
-        if not isinstance(board, dict):
-            board = {}
-        board.setdefault("tasks", [])
-        board.setdefault("backlog", [])
+        board = _check_board(path, board)
         result["value"] = fn(board)
         return board
 
-    store.update_json(paths.board_file(slug), apply, default={})
+    store.update_json(path, apply, default={})
     return result["value"]
 
 
@@ -175,15 +197,20 @@ def set_task_fields(slug, task_id, fields):
                              % (value, ", ".join(SETTABLE_STATUSES)))
         if key == "link" and "=" not in value:
             raise ValueError("link must be label=url")
+        if key == "check" and not value:
+            raise ValueError("check must be a non-empty shell command")
 
     def fn(board):
         task = _find(board, task_id)
+        if "check" in fields and (task.get("check") or {}).get("cmd"):
+            raise ValueError("task %s already has a check (%s); an objective check cannot be replaced"
+                             % (task_id, task["check"]["cmd"]))
         for key, value in fields.items():
             if key == "link":
                 label, url = value.split("=", 1)
                 task["links"].append({"label": label, "url": url})
             elif key == "check":
-                task["check"] = {"cmd": value, "exit_code": None, "tail": None, "ran_at": None} if value else None
+                task["check"] = {"cmd": value, "exit_code": None, "tail": None, "ran_at": None}
             else:
                 task[key] = value
         task["updated_at"] = timeutil.now_iso()
