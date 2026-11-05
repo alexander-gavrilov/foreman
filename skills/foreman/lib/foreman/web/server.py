@@ -34,7 +34,7 @@ def is_allowed_host(host_hdr):
         hostname = host.lower()
 
     # Always allowed local hostnames
-    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::"):
+    if hostname in ("localhost", "127.0.0.1", "::1"):
         return True
 
     cfg = config.load()
@@ -64,6 +64,43 @@ def is_allowed_host(host_hdr):
         return True
 
     return False
+
+
+def _origin_tuple(url):
+    """(scheme, hostname, port) of an Origin / base URL with the default port filled in; None if malformed."""
+    import urllib.parse
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        scheme = (parts.scheme or "").lower()
+        host = (parts.hostname or "").lower()
+        if scheme not in ("http", "https") or not host:
+            return None
+        port = parts.port or (443 if scheme == "https" else 80)
+    except (ValueError, AttributeError):
+        return None
+    return scheme, host, port
+
+
+def is_allowed_origin(origin, host_hdr):
+    """CSRF check: the Origin must equal scheme://host:port of this server as the browser addressed it (the
+    request's Host header, plain http) or of the configured web.base_url. The port is part of the origin:
+    SameSite does not separate ports, so a page on another local port must not pass."""
+    if not origin or not isinstance(origin, str):
+        return False
+    got = _origin_tuple(origin)
+    if got is None:
+        return False
+    allowed = []
+    if host_hdr and is_allowed_host(host_hdr):
+        own = _origin_tuple("http://" + host_hdr.strip())
+        if own:
+            allowed.append(own)
+    base_url = config.get("web.base_url")
+    if base_url:
+        base = _origin_tuple(base_url)
+        if base:
+            allowed.append(base)
+    return got in allowed
 
 
 def is_allowed_client_ip(ip_str):
@@ -167,6 +204,9 @@ class StateMonitor(threading.Thread):
 
 class ForemanRequestHandler(BaseHTTPRequestHandler):
     """BaseHTTPRequestHandler with client IP filtering and routing to api.dispatch."""
+
+    # socket read timeout in seconds: a client that stalls mid-request (slowloris) is dropped. SSE only writes.
+    timeout = 30
 
     def handle_one_request(self):
         """Override to verify client IP after parsing request line and headers."""

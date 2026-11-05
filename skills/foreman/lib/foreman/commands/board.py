@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+import urllib.parse
 
 from foreman import projects, sessions
 from foreman.cliutil import CliError, add_project_arg, dump_json, resolve_project
@@ -93,6 +94,9 @@ def _parse_link(text):
     if "=" not in text or text.startswith("="):
         raise CliError("--link must be label=url, got %r" % text)
     label, url = text.split("=", 1)
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc or url != url.strip():
+        raise CliError("--link url must be http(s)://…, got %r" % url)
     return {"label": label, "url": url}
 
 

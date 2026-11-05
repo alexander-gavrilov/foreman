@@ -125,6 +125,19 @@ class BoardCliTest(ForemanTestCase):
         self.assertEqual(code, 2)
         self.assertIn("label=url", err)
 
+    def test_link_must_be_http_or_https(self):
+        for bad in ("x=javascript:alert(1)", "x=data:text/html,hi", "x=file:///etc/passwd", "x=ftp://h/f",
+                    "x=//host/path", "x=http://", "x= javascript:alert(1)"):
+            code, out, err = self.cli("board", "add", "A", "--link", bad)
+            self.assertEqual(code, 2, bad)
+            self.assertIn("http(s)", err)
+        self.assertEqual(self.cli("board", "add", "A", "--link", "pr=HTTPS://github.com/o/r/pull/1")[0], 0)
+        self.cli("board", "add", "B")
+        code, out, err = self.cli("board", "set", "t2", "link=bad=javascript:alert(1)")
+        self.assertEqual(code, 2)
+        self.assertIn("http(s)", err)
+        self.assertEqual(self.cli("board", "set", "t2", "link=ok=http://x/2")[0], 0)
+
     def test_set(self):
         self.cli("board", "add", "A")
         code, out, err = self.cli("board", "set", "t1", "stage=review", "next=merge it", "owner=s-2")

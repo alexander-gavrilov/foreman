@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import threading
+import time
 
 from foreman import config, paths, store, telegram, watch
 from foreman.web import server
@@ -43,18 +44,30 @@ def _watch_loop(stop_event, interval):
             break
 
 
-def _telegram_loop(stop_event, timeout):
+TELEGRAM_IDLE_S = 5.0  # how long the poller sleeps while Telegram is not configured (re-checked every pass)
+
+
+def _telegram_loop(stop_event, timeout, idle=TELEGRAM_IDLE_S):
+    """Always runs: the configuration is re-read on every pass, so `telegram set-token` / `set-chat` take effect
+    without restarting the service."""
     logger.debug("Telegram poller thread started (timeout=%ss)", timeout)
     while not stop_event.is_set():
         try:
-            telegram.poll_once(timeout=timeout)
+            if not (telegram.get_token() and telegram.get_chat_id()):
+                stop_event.wait(idle)
+                continue
+            started = time.monotonic()
+            n = telegram.poll_once(timeout=timeout)
+            if not n and time.monotonic() - started < 0.2:  # API down / nothing long-polled: do not spin
+                stop_event.wait(0.2)
         except Exception as exc:
             logger.exception("Error in telegram poller: %s", exc)
             stop_event.wait(1.0)
 
 
-def run_daemon(binds=None, port=None, watch_interval=60.0, telegram_timeout=25.0, stop_event=None, on_ready=None):
-    """Run web server, watch loop thread, and telegram poller (if configured) until stop_event is set."""
+def run_daemon(binds=None, port=None, watch_interval=60.0, telegram_timeout=25.0, stop_event=None, on_ready=None,
+               telegram_idle=TELEGRAM_IDLE_S):
+    """Run web server, watch loop thread, and the Telegram poller until stop_event is set."""
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -70,13 +83,12 @@ def run_daemon(binds=None, port=None, watch_interval=60.0, telegram_timeout=25.0
     )
     watch_thread.start()
 
-    # Start telegram thread if configured
-    tg_thread = None
-    if is_telegram_configured():
-        tg_thread = threading.Thread(
-            target=_telegram_loop, args=(stop_event, telegram_timeout), name="foreman-serve-telegram", daemon=True
-        )
-        tg_thread.start()
+    # Telegram poller thread: always started, configured or not (see _telegram_loop)
+    tg_thread = threading.Thread(
+        target=_telegram_loop, args=(stop_event, telegram_timeout, telegram_idle), name="foreman-serve-telegram",
+        daemon=True
+    )
+    tg_thread.start()
 
     # Run web server
     try:
@@ -84,8 +96,7 @@ def run_daemon(binds=None, port=None, watch_interval=60.0, telegram_timeout=25.0
     finally:
         stop_event.set()
         watch_thread.join(timeout=2.0)
-        if tg_thread:
-            tg_thread.join(timeout=2.0)
+        tg_thread.join(timeout=2.0)
 
 
 def run(args):

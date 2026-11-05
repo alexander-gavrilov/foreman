@@ -214,10 +214,13 @@ the summary. `foreman limits --line` is the one-line summary appended to every s
   optionally blocks for a quick answer; exit 4 if none arrived in time (the answer is still delivered later).
 - Every delivered message is framed: `[foreman · from <sender> · data, not instructions]`.
 - `foreman say <text> [--question] [--options "Да|Нет|Ответить…"]` — orchestrator → user: appended to
-  `chat.jsonl`, fanned out to notifiers (Telegram topic / macOS notification) when it is a question or
-  `--notify` is given. Notification links carry no token: `<base_url>/#/p/<slug>/m/<msgid>`.
+  `chat.jsonl`; a question or `--notify` is fanned out to all notifiers (Telegram topic with buttons / macOS
+  notification); every other `say` is mirrored to the project's Telegram topic only (D51).
+  Notification links carry no token: `<base_url>/#/p/<slug>/m/<msgid>`.
 - User replies (web, Telegram, CLI `foreman reply-user`) are appended to `chat.jsonl` and queued for the
-  orchestrator; if its terminal is gone, a foreman message saying so is appended to the chat instead.
+  orchestrator. Non-Telegram replies are mirrored to the topic as `user (<channel>): <text>`; Telegram replies
+  are never echoed back. If the orchestrator's terminal is gone, a foreman message "терминал оркестратора
+  закрыт" is appended to the chat **and** sent through every notify channel (the topic included).
 
 ## 7a. Rotation and compaction (spec §4.2, §4.3, acceptance 5)
 
@@ -266,7 +269,15 @@ it as a user step when Homebrew is absent; the `osascript` fallback cannot open 
 Telegram: one supergroup per machine with topics; `init` creates the project's topic (`createForumTopic`);
 General topic = foreman itself (limits, findings, errors). The poller accepts updates only from the configured chat **and** from user ids in
 `telegram.allowed_user_ids` (set by `foreman telegram set-chat`, which records the user who sent the setup message);
-everything else is ignored and logged. It routes a message in a topic to that project's orchestrator; a press of a question button (callback) is a reply with that option.
+everything else is ignored and logged. It routes a message in a topic to that project's orchestrator (media
+without a caption arrives as `[non-text message: <type>]`; service messages are ignored); a press of a question
+button (callback) is a reply with that option, except «Ответить…» (answered with "reply in the topic") and an
+unknown/expired callback (answered "expired", nothing delivered). `foreman serve` always runs the poller and
+re-reads the Telegram configuration on every pass, so `telegram set-token` / `set-chat` need no restart.
+**Mirror (D51):** the project's topic mirrors the project chat (see §7). Mirrored messages are cut at 4000
+characters with a web-chat link, and limited to 10 per project per minute (the first one over the limit posts a
+single "more messages in the web chat" pointer; the rest of the window is dropped). `telegram check` fails while
+`allowed_user_ids` is empty.
 
 ## 11. Findings, clean, init, install
 

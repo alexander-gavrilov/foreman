@@ -1,6 +1,7 @@
 """Tests for foreman web: address filter, auth, state_view, HTTP server, SSE, and CLI."""
 import http.cookiejar
 import json
+from unittest import mock
 import os
 import secrets
 import socket
@@ -155,6 +156,46 @@ class StateViewTest(ForemanTestCase):
         self.assertEqual(p5_state["dot"], "accent")
         self.assertEqual(p5_state["line"], "Merge PR #12?")
         self.assertEqual(p5_state["unanswered"], 1)
+
+    def test_closed_and_rotated_sessions_do_not_count(self):
+        from foreman import sessions
+        from foreman.web import state_view
+
+        self.init_project("p-closed")
+        orch = sessions.create_session("p-closed", "claude", role="orchestrator", state="idle")
+        w = sessions.create_session("p-closed", "claude", role="worker", state="gone")
+        sessions.set_lifecycle(w["sid"], "closed")
+        r = sessions.create_session("p-closed", "claude", role="worker", state="stuck")
+        sessions.set_lifecycle(r["sid"], "rotated")
+        st = state_view.build_state()
+        self.assertEqual(next(p for p in st["projects"] if p["slug"] == "p-closed")["group"], "quiet")
+
+        # a gone session that is still open (terminal vanished, not yet closed) does make the project stuck
+        self.init_project("p-gone")
+        sessions.create_session("p-gone", "claude", role="orchestrator", state="idle")
+        sessions.create_session("p-gone", "claude", role="worker", state="gone")
+        st = state_view.build_state()
+        self.assertEqual(next(p for p in st["projects"] if p["slug"] == "p-gone")["group"], "stuck")
+
+        # strip: heaviest and the session count come from live sessions only
+        sessions.update_session(w["sid"], context_tokens=900000)
+        detail = state_view.build_project("p-closed")
+        self.assertEqual(detail["strip"]["sessions"], 1)
+        sessions.update_session(orch["sid"], context_tokens=100)
+        detail = state_view.build_project("p-closed")
+        self.assertEqual(detail["strip"]["heaviest"]["context_tokens"], 100)
+        self.assertEqual(len(detail["sessions"]), 3)  # the drawer still lists all of them
+
+    def test_strip_of_project_with_only_closed_sessions(self):
+        from foreman import sessions
+        from foreman.web import state_view
+
+        self.init_project("p-onlyclosed")
+        w = sessions.create_session("p-onlyclosed", "claude", role="worker", state="idle")
+        sessions.set_lifecycle(w["sid"], "closed")
+        detail = state_view.build_project("p-onlyclosed")
+        self.assertEqual(detail["strip"]["sessions"], 0)
+        self.assertIsNone(detail["strip"]["heaviest"])
 
     def test_state_shape_matches_web_api(self):
         from foreman import projects, sessions, store, paths
@@ -416,6 +457,9 @@ class ServerHttpTest(ForemanTestCase):
             def sendall(self, data):
                 self._wfile.write(data)
 
+            def settimeout(self, value):
+                pass
+
         sock = MockSocket(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         handler = ForemanRequestHandler(sock, ("8.8.8.8", 50000), self.server)
         response_bytes = sock._wfile.getvalue()
@@ -429,6 +473,11 @@ class ServerHttpTest(ForemanTestCase):
 
         status, hdrs, body = self._http("/api/state", headers={"Host": "attacker.site:8765"})
         self.assertIn(status, (421, 403))
+
+        # wildcard bind addresses are not names a browser uses to reach us
+        for host in ("0.0.0.0:%d" % self.port, "0.0.0.0", "[::]:%d" % self.port):
+            status, hdrs, body = self._http("/api/state", headers={"Host": host})
+            self.assertEqual(status, 421, host)
 
         # Valid Host headers (localhost or 127.0.0.1) pass Host check (even if unauth -> 401)
         status, hdrs, body = self._http("/api/state", headers={"Host": "127.0.0.1:%d" % self.port})
@@ -493,6 +542,114 @@ class ServerHttpTest(ForemanTestCase):
             data={"text": "matching origin message"}
         )
         self.assertEqual(status, 200)
+
+    def test_csrf_origin_must_match_scheme_host_and_port(self):
+        from foreman.web import auth
+        code, _ = auth.create_pairing_code()
+        _, tok, _ = auth.exchange_pairing_code(code)
+        self.init_project("csrfport")
+        url = "/api/projects/csrfport/messages"
+        own = "127.0.0.1:%d" % self.port
+
+        def post(origin):
+            return self._http(url, method="POST", data='{"text":"x"}', headers={
+                "Cookie": "fm_token=" + tok, "Content-Type": "text/plain", "Origin": origin})[0]
+
+        # same hostname, other port (e.g. an agent's dev server) is a foreign origin
+        self.assertEqual(post("http://localhost:3000"), 403)
+        self.assertEqual(post("http://127.0.0.1:3000"), 403)
+        self.assertEqual(post("http://127.0.0.1"), 403)  # default port 80 != ours
+        self.assertEqual(post("https://" + own), 403)    # other scheme
+        self.assertEqual(post("null"), 403)
+        self.assertEqual(post("http://" + own), 200)
+        # the configured base_url origin (e.g. behind a proxy) is accepted
+        self.write_config({"web": {"base_url": "https://foreman.example:8443"}})
+        self.assertEqual(post("https://foreman.example:8443"), 200)
+        self.assertEqual(post("https://foreman.example"), 403)
+
+    def _raw(self, request_bytes, read_timeout=3):
+        import socket
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=read_timeout)
+        try:
+            sock.sendall(request_bytes)
+            chunks = []
+            while True:
+                try:
+                    data = sock.recv(65536)
+                except socket.timeout:
+                    return b"".join(chunks) or None
+                if not data:
+                    break
+                chunks.append(data)
+            return b"".join(chunks)
+        finally:
+            sock.close()
+
+    def _authed_post_raw(self, slug, body, content_length):
+        from foreman.web import auth
+        code, _ = auth.create_pairing_code()
+        _, tok, _ = auth.exchange_pairing_code(code)
+        head = ("POST /api/projects/%s/messages HTTP/1.0\r\nHost: 127.0.0.1:%d\r\nAuthorization: Bearer %s\r\n"
+                "Content-Type: application/json\r\nContent-Length: %s\r\n\r\n" % (slug, self.port, tok, content_length))
+        return self._raw(head.encode() + body)
+
+    def test_post_body_validation(self):
+        self.init_project("bodyproj")
+        for body in (b'[1,2]', b'"text"', b'42', b'null', b'{bad'):
+            resp = self._authed_post_raw("bodyproj", body, len(body))
+            self.assertIsNotNone(resp, body)
+            self.assertIn(b" 400 ", resp.split(b"\r\n", 1)[0], body)
+        # a negative, non-numeric or oversized Content-Length is refused without reading
+        resp = self._authed_post_raw("bodyproj", b"", "-1")
+        self.assertIn(b" 400 ", resp.split(b"\r\n", 1)[0])
+        resp = self._authed_post_raw("bodyproj", b"", "abc")
+        self.assertIn(b" 400 ", resp.split(b"\r\n", 1)[0])
+        resp = self._authed_post_raw("bodyproj", b"", str(64 * 1024 + 1))
+        self.assertIn(b" 413 ", resp.split(b"\r\n", 1)[0])
+        # the server is still fine afterwards
+        body = b'{"text":"ok"}'
+        resp = self._authed_post_raw("bodyproj", body, len(body))
+        self.assertIn(b" 200 ", resp.split(b"\r\n", 1)[0])
+
+    def test_stalled_client_is_dropped_by_the_socket_timeout(self):
+        from foreman.web import server
+        self.assertTrue(server.ForemanRequestHandler.timeout)
+        with mock.patch.object(server.ForemanRequestHandler, "timeout", 0.4):
+            import socket
+            import time
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            try:
+                sock.sendall(b"GET /api/state HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Slow: ")  # headers never finish
+                t0 = time.time()
+                data = sock.recv(1024)  # the server closes the connection instead of waiting for ever
+                self.assertEqual(data, b"")
+                self.assertLess(time.time() - t0, 3)
+            finally:
+                sock.close()
+
+    def test_reply_to_must_be_a_message_of_the_same_project(self):
+        from foreman import projects
+        from foreman.web import auth
+        code, _ = auth.create_pairing_code()
+        _, tok, _ = auth.exchange_pairing_code(code)
+        self.init_project("rt-a")
+        self.init_project("rt-b")
+        qa = projects.chat_append("rt-a", "orchestrator", "Q?", question=True, options=["Да"])
+        qb = projects.chat_append("rt-b", "orchestrator", "Other?", question=True, options=["Да"])
+        hdr = {"Authorization": "Bearer " + tok}
+
+        def post(reply_to):
+            return self._http("/api/projects/rt-a/messages", method="POST", headers=hdr,
+                              data={"text": "answer", "reply_to": reply_to})[0]
+
+        self.assertEqual(post({"a": 1}), 400)
+        self.assertEqual(post(["m-1"]), 400)
+        self.assertEqual(post(qb["id"]), 400)  # another project's message
+        self.assertEqual(post("m-nonexistent"), 400)
+        self.assertEqual(len([m for m in projects.chat_list("rt-a") if m["from"] == "user"]), 0)
+        self.assertEqual(post(qa["id"]), 200)
+        self.assertEqual(post(None), 200)
+        self.assertEqual(projects.chat_list("rt-a")[1]["reply_to"], qa["id"])
 
     def test_pairing_rate_limit_429(self):
         # 5 failed attempts per minute per client IP -> 429 on subsequent attempts

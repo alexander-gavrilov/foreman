@@ -151,6 +151,11 @@ def check():
     if not chat_id:
         missing.append("telegram.chat_id in config.json missing")
 
+    if not get_allowed_user_ids():
+        missing.append("telegram.allowed_user_ids in config.json is empty: every reply would be dropped "
+                       "(send a message in the group, then `foreman telegram set-chat` again, or "
+                       "`foreman telegram allow-user <id>`)")
+
     if missing:
         return {"ok": False, "missing": missing}
 
@@ -219,7 +224,7 @@ def create_project_topic(project_slug):
     return tid
 
 
-def send_message(thread_id, text, buttons=None, msg_id=None):
+def send_message(thread_id, text, buttons=None, msg_id=None, timeout=15):
     """Send a message to a topic (None = General topic).
 
     If buttons are provided, inline_keyboard is attached with callback_data '<msgid>|<option index>'.
@@ -248,7 +253,7 @@ def send_message(thread_id, text, buttons=None, msg_id=None):
                 row.append({"text": btn, "callback_data": cb_data})
         payload["reply_markup"] = {"inline_keyboard": [row]}
 
-    res = _api_call("sendMessage", payload)
+    res = _api_call("sendMessage", payload, timeout=timeout)
     if res and res.get("ok"):
         tg_mid = res.get("result", {}).get("message_id")
         if tg_mid and msg_id:
@@ -259,6 +264,46 @@ def send_message(thread_id, text, buttons=None, msg_id=None):
 
             store.update_json(_state_file(), apply, default={"offset": 0, "msg_map": {}})
     return res
+
+
+_CONTENT_TYPES = ("photo", "sticker", "video", "video_note", "voice", "audio", "document", "animation", "location",
+                  "venue", "contact", "poll", "dice", "game")
+_SERVICE_TYPES = ("forum_topic_created", "forum_topic_edited", "forum_topic_closed", "forum_topic_reopened",
+                  "general_forum_topic_hidden", "general_forum_topic_unhidden", "new_chat_members",
+                  "left_chat_member", "new_chat_title", "new_chat_photo", "delete_chat_photo", "pinned_message",
+                  "message_auto_delete_timer_changed", "write_access_allowed")
+
+
+def _message_text(msg):
+    """The text to route to the orchestrator: text or caption; a marker for media without a caption; None for
+    service messages (topic renamed, member joined, pin…), which are not user input."""
+    text = msg.get("text") or msg.get("caption") or ""
+    if text.strip():
+        return text
+    for kind in _CONTENT_TYPES:
+        if msg.get(kind):
+            return "[non-text message: %s]" % kind
+    if any(k in msg for k in _SERVICE_TYPES):
+        return None
+    return "[non-text message: unknown]"
+
+
+def _callback_option(slug, cb_data):
+    """(question msg id, option text) for callback data '<msgid>|<index>', or None if it names no live option."""
+    msg_id, sep, idx_str = (cb_data or "").partition("|")
+    if not sep:
+        return None
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        return None
+    for row in reversed(projects.chat_list(slug)):
+        if row.get("id") == msg_id:
+            opts = row.get("options") or []
+            if row.get("question") and 0 <= idx < len(opts):
+                return msg_id, str(opts[idx])
+            return None
+    return None
 
 
 def _find_project_by_topic_id(thread_id):
@@ -359,7 +404,9 @@ def poll_once(timeout=0):
                 })
                 continue
 
-            text = msg.get("text") or msg.get("caption") or ""
+            text = _message_text(msg)
+            if text is None:
+                continue
             thread_id = msg.get("message_thread_id")
             proj = _find_project_by_topic_id(thread_id)
 
@@ -418,27 +465,21 @@ def poll_once(timeout=0):
             thread_id = cb_msg.get("message_thread_id")
             proj = _find_project_by_topic_id(thread_id)
 
+            answer = None
             if proj:
-                chosen_text = cb_data
-                reply_to = None
-                if "|" in cb_data:
-                    msg_id, opt_idx_str = cb_data.split("|", 1)
-                    reply_to = msg_id
-                    try:
-                        opt_idx = int(opt_idx_str)
-                        chat_rows = projects.chat_list(proj["slug"])
-                        for row in reversed(chat_rows):
-                            if row.get("id") == msg_id:
-                                opts = row.get("options") or []
-                                if 0 <= opt_idx < len(opts):
-                                    chosen_text = opts[opt_idx]
-                                break
-                    except ValueError:
-                        pass
-                _deliver_user_reply(proj["slug"], chosen_text, reply_to=reply_to)
+                chosen = _callback_option(proj["slug"], cb_data)
+                if chosen is None:
+                    answer = "expired"
+                elif chosen[1].strip().rstrip(".…").lower() == "ответить":
+                    answer = "reply in the topic"  # the "Reply…" button is a prompt, not an answer
+                else:
+                    _deliver_user_reply(proj["slug"], chosen[1], reply_to=chosen[0])
 
             if cb_id:
-                _api_call("answerCallbackQuery", {"callback_query_id": cb_id})
+                payload = {"callback_query_id": cb_id}
+                if answer:
+                    payload["text"] = answer
+                _api_call("answerCallbackQuery", payload)
 
     # Persist updated offset
     def apply_offset(state):

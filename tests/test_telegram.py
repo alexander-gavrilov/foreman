@@ -61,6 +61,13 @@ class TelegramTestCase(ForemanTestCase):
         self.assertTrue(res["ok"], f"Expected ok, got: {res}")
         self.assertEqual(res["bot"]["username"], "foreman_bot")
 
+    def test_check_fails_without_allowed_user_ids(self):
+        self.write_config({"telegram": {"chat_id": -1001234567890, "api_base": self.server.base_url,
+                                        "allowed_user_ids": []}})
+        res = telegram.check()
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("allowed_user_ids" in m for m in res["missing"]), res)
+
     def test_check_fails_if_not_forum(self):
         self.server.is_forum = False
         res = telegram.check()
@@ -150,6 +157,40 @@ class TelegramTestCase(ForemanTestCase):
         self.assertEqual(len(inbox), 1)
         self.assertEqual(inbox[0]["text"], "Here is my input")
 
+    def _topic_project(self):
+        self.init_project("demo")
+        thread_id = telegram.create_project_topic("demo")
+        orch = sessions.create_session("demo", "claude", role="orchestrator", state="idle")
+        proj = projects.load_project("demo")
+        proj["orchestrator"] = orch["sid"]
+        projects.save_project(proj)
+        return thread_id, orch
+
+    def _raw_topic_message(self, thread_id, **fields):
+        msg = {"message_id": 900, "from": {"id": 12345}, "chat": {"id": self.server.chat_id, "type": "supergroup"},
+               "date": 1700000000, "message_thread_id": thread_id, "is_topic_message": True}
+        msg.update(fields)
+        self.server.enqueue_update({"message": msg})
+
+    def test_non_text_topic_message_is_delivered_as_a_marker(self):
+        thread_id, orch = self._topic_project()
+        self._raw_topic_message(thread_id, sticker={"file_id": "x"})
+        self._raw_topic_message(thread_id, photo=[{"file_id": "y"}])                     # no caption
+        self._raw_topic_message(thread_id, photo=[{"file_id": "y"}], caption="look")      # caption is text
+        self._raw_topic_message(thread_id, voice={"file_id": "v"})
+        telegram.poll_once(timeout=0)
+        texts = [m["text"] for m in projects.chat_list("demo") if m["from"] == "user"]
+        self.assertEqual(texts, ["[non-text message: sticker]", "[non-text message: photo]", "look",
+                                 "[non-text message: voice]"])
+        self.assertNotIn("", [m["text"] for m in sessions.inbox_all(orch["sid"])])
+
+    def test_service_messages_are_not_delivered(self):
+        thread_id, orch = self._topic_project()
+        self._raw_topic_message(thread_id, forum_topic_edited={"name": "renamed"})
+        self._raw_topic_message(thread_id, pinned_message={"message_id": 1})
+        telegram.poll_once(timeout=0)
+        self.assertEqual(projects.chat_list("demo"), [])
+
     def test_poll_reply_to_bot_message_maps_reply_to(self):
         self.init_project("demo")
         thread_id = telegram.create_project_topic("demo")
@@ -207,6 +248,26 @@ class TelegramTestCase(ForemanTestCase):
         reply = chat[-1]
         self.assertEqual(reply["text"], "Да")
         self.assertEqual(reply["reply_to"], q_msg["id"])
+
+    def test_reply_button_only_answers_the_callback(self):
+        thread_id, orch = self._topic_project()
+        q = projects.chat_append("demo", "orchestrator", "Merge?", question=True, options=["Да", "Ответить…"])
+        self.server.enqueue_callback_query(callback_data=f"{q['id']}|1", callback_id="cb-r", thread_id=thread_id)
+        telegram.poll_once(timeout=0)
+        self.assertEqual([m for m in projects.chat_list("demo") if m["from"] == "user"], [])
+        self.assertEqual(sessions.inbox_all(orch["sid"]), [])
+        self.assertEqual(self.server.answered_callbacks, [{"callback_query_id": "cb-r",
+                                                           "text": "reply in the topic"}])
+
+    def test_unknown_callback_is_answered_expired_and_delivers_nothing(self):
+        thread_id, orch = self._topic_project()
+        q = projects.chat_append("demo", "orchestrator", "Merge?", question=True, options=["Да"])
+        for i, data in enumerate(["m-x|0", "garbage", f"{q['id']}|7", f"{q['id']}|x"]):
+            self.server.enqueue_callback_query(callback_data=data, callback_id="cb-%d" % i, thread_id=thread_id)
+        telegram.poll_once(timeout=0)
+        self.assertEqual([m for m in projects.chat_list("demo") if m["from"] == "user"], [])
+        self.assertEqual(sessions.inbox_all(orch["sid"]), [])
+        self.assertEqual([c["text"] for c in self.server.answered_callbacks], ["expired"] * 4)
 
     def test_poll_offset_persistence(self):
         self.server.enqueue_text_message("msg 1", thread_id=999)

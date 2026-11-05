@@ -49,7 +49,9 @@ The weekly window is always first in `windows`. A window with `used_pct: null` i
 }
 ```
 Chat is the last 200 messages, oldest first. Only `question: true` messages carry `options`; the option
-"Ответить…" means "focus the reply box".
+"Ответить…" means "focus the reply box" (in Telegram its button only answers the callback "reply in the topic").
+Triage (`group`), `strip.sessions` and `strip.heaviest` consider only current sessions: closed and rotated-out ones
+are history (the `sessions` list still shows them with their `lifecycle`).
 
 Board tasks are exactly the records of `board.json`: ids are `t1`, `t2`, … (never reused). `status` is one of
 `open` (default; the UI treats it as active), `blocked`, `waiting`, `done`. `done` is only reachable through
@@ -60,6 +62,12 @@ Each task may also carry `check` (`{cmd, exit_code, tail, ran_at}`) and `updated
 Body `{"text": "...", "reply_to": "m-1a2b3c"?, "option": "Да"?}` → `{"ok": true, "id": "m-...", "delivery": "delivered|queued|terminal_gone"}`.
 With `option` and no `text`, the option is the text. UI actions ("open a session", "close", "rotate") are sent
 as ordinary messages to the orchestrator, e.g. `{"text": "Закрой сессию fm-api"}`.
+The body must be a JSON object of at most 64 KiB (`Content-Length` 0..65536; otherwise 400 / 413). `reply_to`, when
+given, must be a string id of a message in this project's chat (else 400). Cookie-authenticated requests need an
+`Origin` equal to `scheme://host:port` of this server (the request's `Host`, plain http) or of `web.base_url` —
+the port counts; a bearer-token request without `Origin` is allowed. The `Host` allowlist does not include the
+wildcard addresses `0.0.0.0` / `::` (unless configured as a bind address). Handler sockets time out after 30 s.
+The posted message is also mirrored to the project's Telegram topic as `user (web): <text>` (architecture §10).
 
 ## GET /api/findings
 `{"findings": [{"id": "f-...", "ts": "...", "title": "...", "status": "draft|sent|failed", "url": null}]}`
