@@ -561,6 +561,7 @@
     gap: 16px;
     max-width: 860px;
     width: 100%;
+    min-width: 0;
   }
 
   .event-note {
@@ -570,6 +571,9 @@
     align-items: baseline;
     gap: 8px;
     padding: 2px 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   .event-note::before {
     content: "";
@@ -593,6 +597,8 @@
     border-radius: 10px;
     padding: 15px 18px;
     transition: box-shadow 0.25s, border-color 0.25s;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .msg-card.question {
     border-color: var(--accent-border);
@@ -626,6 +632,8 @@
     color: var(--text-main);
     line-height: 1.55;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .decision-actions {
@@ -844,6 +852,8 @@
     border-radius: 8px;
     padding: 11px 12px;
     margin-bottom: 8px;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .d-card:last-child {
     margin-bottom: 0;
@@ -866,6 +876,9 @@
     font-weight: 600;
     font-size: 13px;
     color: #fff;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   .d-card-badge {
     font-family: var(--font-mono);
@@ -883,6 +896,8 @@
     font-size: 11.5px;
     color: var(--text-muted);
     line-height: 1.45;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   .d-card-rotation {
     margin-top: 6px;
@@ -893,12 +908,15 @@
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-main);
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   .d-card-links {
     margin-top: 7px;
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    min-width: 0;
   }
   .d-card-link {
     font-family: var(--font-mono);
@@ -909,9 +927,17 @@
     border-radius: 4px;
     background: var(--accent-soft);
     border: 1px solid var(--accent-border);
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
-  .d-card-link:hover {
+  a.d-card-link:hover {
     text-decoration: underline;
+  }
+  .d-card-link-plain {
+    color: var(--text-muted);
+    background: var(--bg-panel);
+    border-color: var(--border-subtle);
   }
 
   /* =========================================================
@@ -1331,6 +1357,96 @@
       },
       "chat": [
         {
+          "id": "m-1a2b-pre1",
+          "ts": "2026-11-05T13:10:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Начинаю подготовку релиза оффлайн-синка v2. План разбит на миграцию схемы SQLite, дедупликацию весовых позиций чеков и финальное ревью PR #48.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre2",
+          "ts": "2026-11-05T13:24:00Z",
+          "from": "user",
+          "channel": "web",
+          "text": "Ок, особое внимание удели обратному откату индекса в миграции и проверке конфликтов по полю updated_at.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre3",
+          "ts": "2026-11-05T13:40:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Открыта сессия impl-sync (claude / sonnet-4-5) для задачи t-1",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre4",
+          "ts": "2026-11-05T14:05:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Промежуточный отчёт по миграции:\nФайл: ~/projects/shopping-list/backend/storage/migrations/20261105_v2_offline_sync_composite_receipt_index.sql\nДифф PR: https://github.com/example/shopping-list/pull/48/files#diff-8f4e2a9b1c3d5e7f9a0b2c4d6e8f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre5",
+          "ts": "2026-11-05T14:18:00Z",
+          "from": "foreman",
+          "channel": "system",
+          "text": "Сессия review v1 ротирована → открыта review v2 (s-b88f56)",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre6",
+          "ts": "2026-11-05T14:30:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Ревьюер проверил идемпотентность триггеров синхронизации и сценарий частичной потери сети при фоновой догрузке батчей.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre7",
+          "ts": "2026-11-05T14:34:00Z",
+          "from": "user",
+          "channel": "telegram",
+          "text": "Отлично. Проверь также лимит размера батча (не более 250 позиций за один POST) и корректность дедупликации весовых штрихкодов EAN-13 с префиксом 20..29.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre8",
+          "ts": "2026-11-05T14:38:00Z",
+          "from": "orchestrator",
+          "channel": "web",
+          "text": "Проверил: батчи разбиваются ровно по 250 записей в модуле ~/projects/shopping-list/backend/sync/batch_uploader_v2.py, тесты весовых позиций (EAN-13 префиксы 20–29) проходят без коллизий.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
+          "id": "m-1a2b-pre9",
+          "ts": "2026-11-05T14:40:00Z",
+          "from": "user",
+          "channel": "web",
+          "text": "Принято, ждём завершения прогона всей матрицы миграций и отчёта от ревью-сессии.",
+          "question": false,
+          "options": [],
+          "answered_by": null
+        },
+        {
           "id": "m-1a2b01",
           "ts": "2026-11-05T14:42:00Z",
           "from": "foreman",
@@ -1741,10 +1857,15 @@
   const appState = {
     state: null,
     projectsBySlug: {},
+    projectFingerprints: {},
+    chatFingerprints: {},
+    renderedSlug: null,
     findings: null,
     selectedSlug: null,
     highlightMsgId: null,
+    highlightedMsgId: null,
     replyToMsgId: null,
+    draftsBySlug: {},
     drawerOpen: false,
     activeDrawerTab: 'board',
     offline: false
@@ -1861,6 +1982,51 @@
     return 'сессий';
   }
 
+  function safeHttpUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return null;
+    const trimmed = rawUrl.trim();
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return trimmed;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function computeChatFingerprint(proj) {
+    if (!proj) return '';
+    return JSON.stringify(Array.isArray(proj.chat) ? proj.chat : []);
+  }
+
+  function computeProjectFingerprint(proj) {
+    if (!proj) return '';
+    const sessions = Array.isArray(proj.sessions)
+      ? proj.sessions.map((s) => ({
+          sid: s.sid,
+          title: s.title,
+          agent: s.agent,
+          model: s.model,
+          role: s.role,
+          owner: s.owner,
+          state: s.state,
+          lifecycle: s.lifecycle,
+          context_tokens: s.context_tokens,
+          context_level: s.context_level,
+          replaces: s.replaces,
+          replaced_by: s.replaced_by
+        }))
+      : [];
+    return JSON.stringify({
+      slug: proj.slug,
+      name: proj.name,
+      strip: proj.strip || null,
+      chat: Array.isArray(proj.chat) ? proj.chat : [],
+      board: proj.board || null,
+      sessions: sessions
+    });
+  }
+
   function setOfflineState(isOffline) {
     appState.offline = isOffline;
     offlinePill.classList.toggle('visible', isOffline);
@@ -1902,16 +2068,28 @@
     return res.json();
   }
 
-  async function loadState() {
+  async function loadState(opts) {
+    const options = opts || {};
+    const fromEvent = Boolean(options.fromEvent);
+    const changedProject = options.changedProject || null;
+
     if (isDemo) {
       appState.state = demoStore.state;
+      let isInitialSelect = false;
       if (!appState.selectedSlug && appState.state.projects.length > 0) {
         appState.selectedSlug = appState.state.projects[0].slug;
+        isInitialSelect = true;
       }
       renderTopBar();
       renderTriageRail();
       if (appState.selectedSlug) {
-        await loadProject(appState.selectedSlug);
+        if (fromEvent && changedProject && changedProject !== appState.selectedSlug) {
+          return;
+        }
+        await loadProject(appState.selectedSlug, {
+          isProjectSwitch: isInitialSelect || Boolean(options.isProjectSwitch),
+          fromEvent: fromEvent
+        });
       }
       return;
     }
@@ -1919,13 +2097,21 @@
     try {
       const data = await apiGet('/api/state');
       appState.state = data;
+      let isInitialSelect = false;
       if (!appState.selectedSlug && data.projects && data.projects.length > 0) {
         appState.selectedSlug = data.projects[0].slug;
+        isInitialSelect = true;
       }
       renderTopBar();
       renderTriageRail();
       if (appState.selectedSlug) {
-        await loadProject(appState.selectedSlug);
+        if (fromEvent && changedProject && changedProject !== appState.selectedSlug) {
+          return;
+        }
+        await loadProject(appState.selectedSlug, {
+          isProjectSwitch: isInitialSelect || Boolean(options.isProjectSwitch),
+          fromEvent: fromEvent
+        });
       }
     } catch (err) {
       if (!String(err.message).includes('401')) {
@@ -1934,24 +2120,33 @@
     }
   }
 
-  async function loadProject(slug) {
+  async function loadProject(slug, opts) {
     if (!slug) return;
+    const options = opts || {};
+    const isProjectSwitch = Boolean(options.isProjectSwitch) || appState.renderedSlug !== slug;
+
+    let proj = null;
     if (isDemo) {
-      const proj = demoStore.projects[slug];
-      if (proj) {
-        appState.projectsBySlug[slug] = proj;
-        renderProjectView();
+      proj = demoStore.projects[slug] || null;
+    } else {
+      try {
+        proj = await apiGet('/api/projects/' + encodeURIComponent(slug));
+      } catch (err) {
+        console.error('Failed to load project:', err);
+        return;
       }
+    }
+    if (!proj) return;
+
+    appState.projectsBySlug[slug] = proj;
+    const newProjFp = computeProjectFingerprint(proj);
+    const prevProjFp = appState.projectFingerprints[slug];
+
+    if (!isProjectSwitch && !appState.highlightMsgId && prevProjFp === newProjFp) {
       return;
     }
 
-    try {
-      const proj = await apiGet('/api/projects/' + encodeURIComponent(slug));
-      appState.projectsBySlug[slug] = proj;
-      renderProjectView();
-    } catch (err) {
-      console.error('Failed to load project:', err);
-    }
+    renderProjectView({ isProjectSwitch: isProjectSwitch });
   }
 
   // Rendering: Top bar
@@ -2128,13 +2323,29 @@
   }
 
   // Rendering: Selected Project View (Strip + Chat + Drawer)
-  function renderProjectView() {
+  function renderProjectView(opts) {
+    const options = opts || {};
     const slug = appState.selectedSlug;
     const proj = appState.projectsBySlug[slug];
     if (!proj) return;
 
+    const isProjectSwitch = Boolean(options.isProjectSwitch) || appState.renderedSlug !== slug;
+    const hadComposerFocus = document.activeElement === composerInput;
+    const savedDraft = isProjectSwitch
+      ? (appState.draftsBySlug[slug] !== undefined ? appState.draftsBySlug[slug] : '')
+      : composerInput.value;
+    const selStart = isProjectSwitch ? savedDraft.length : composerInput.selectionStart;
+    const selEnd = isProjectSwitch ? savedDraft.length : composerInput.selectionEnd;
+
+    const prevScrollTop = chatMessages.scrollTop;
+    const distanceFromBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+    const wasNearBottom = distanceFromBottom <= 80;
+
     mobileProjTitle.textContent = proj.name || proj.slug;
-    composerInput.placeholder = 'Написать оркестратору ' + (proj.name || proj.slug) + '…';
+    const targetPlaceholder = 'Написать оркестратору ' + (proj.name || proj.slug) + '…';
+    if (composerInput.placeholder !== targetPlaceholder) {
+      composerInput.placeholder = targetPlaceholder;
+    }
 
     // Pinned Status Strip
     const strip = proj.strip || {};
@@ -2162,97 +2373,131 @@
     updateDrawerChrome();
 
     // Chat Messages
-    chatStreamInner.innerHTML = '';
-    const messages = Array.isArray(proj.chat) ? proj.chat : [];
+    const newChatFp = computeChatFingerprint(proj);
+    const prevChatFp = appState.chatFingerprints[slug];
+    const shouldRebuildChat = isProjectSwitch || Boolean(appState.highlightMsgId) || prevChatFp !== newChatFp;
 
-    messages.forEach((msg) => {
-      if (msg.from === 'foreman' || msg.channel === 'system') {
-        const note = document.createElement('div');
-        note.id = 'msg-' + msg.id;
-        note.className = 'event-note' + (msg.error ? ' error-note' : '');
-        const timeStr = formatClockTime(msg.ts);
-        note.textContent = (timeStr ? timeStr + ' · ' : '') + (msg.text || '');
-        if (appState.highlightMsgId === msg.id) {
-          note.classList.add('highlighted');
+    if (shouldRebuildChat) {
+      chatStreamInner.innerHTML = '';
+      const messages = Array.isArray(proj.chat) ? proj.chat : [];
+      const activeHighlightId = appState.highlightMsgId || appState.highlightedMsgId;
+
+      messages.forEach((msg) => {
+        if (msg.from === 'foreman' || msg.channel === 'system') {
+          const note = document.createElement('div');
+          note.id = 'msg-' + msg.id;
+          note.className = 'event-note' + (msg.error ? ' error-note' : '');
+          const timeStr = formatClockTime(msg.ts);
+          note.textContent = (timeStr ? timeStr + ' · ' : '') + (msg.text || '');
+          if (activeHighlightId === msg.id) {
+            note.classList.add('highlighted');
+          }
+          chatStreamInner.appendChild(note);
+          return;
         }
-        chatStreamInner.appendChild(note);
-        return;
-      }
 
-      const card = document.createElement('article');
-      card.id = 'msg-' + msg.id;
-      const isQuestion = Boolean(msg.question);
-      const isUser = msg.from === 'user';
-      card.className = 'msg-card' +
-        (isQuestion ? ' question' : '') +
-        (isUser ? ' from-user' : '') +
-        (appState.highlightMsgId === msg.id ? ' highlighted' : '');
+        const card = document.createElement('article');
+        card.id = 'msg-' + msg.id;
+        const isQuestion = Boolean(msg.question);
+        const isUser = msg.from === 'user';
+        card.className = 'msg-card' +
+          (isQuestion ? ' question' : '') +
+          (isUser ? ' from-user' : '') +
+          (activeHighlightId === msg.id ? ' highlighted' : '');
 
-      const authorLabel = isUser
-        ? 'Вы'
-        : ('Оркестратор ' + (proj.name || proj.slug));
-      const timeStr = formatClockTime(msg.ts);
-      const rightMeta = isQuestion && !msg.answered_by
-        ? (timeStr ? timeStr + ' · ждёт вашего решения' : 'ждёт вашего решения')
-        : timeStr;
+        const authorLabel = isUser
+          ? 'Вы'
+          : ('Оркестратор ' + (proj.name || proj.slug));
+        const timeStr = formatClockTime(msg.ts);
+        const rightMeta = isQuestion && !msg.answered_by
+          ? (timeStr ? timeStr + ' · ждёт вашего решения' : 'ждёт вашего решения')
+          : timeStr;
 
-      const metaDiv = document.createElement('div');
-      metaDiv.className = 'msg-meta';
-      metaDiv.innerHTML =
-        '<strong>' + escapeHtml(authorLabel) + '</strong>' +
-        '<span>' + escapeHtml(rightMeta) + '</span>';
-      card.appendChild(metaDiv);
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'msg-meta';
+        metaDiv.innerHTML =
+          '<strong>' + escapeHtml(authorLabel) + '</strong>' +
+          '<span>' + escapeHtml(rightMeta) + '</span>';
+        card.appendChild(metaDiv);
 
-      const bodyDiv = document.createElement('div');
-      bodyDiv.className = 'msg-body';
-      bodyDiv.textContent = msg.text || '';
-      card.appendChild(bodyDiv);
+        const bodyDiv = document.createElement('div');
+        bodyDiv.className = 'msg-body';
+        bodyDiv.textContent = msg.text || '';
+        card.appendChild(bodyDiv);
 
-      // Strictly ONLY messages with question: true show one-tap option buttons
-      if (msg.question === true && Array.isArray(msg.options) && msg.options.length > 0) {
-        const actionsDiv = document.createElement('div');
-        actionsDiv.className = 'decision-actions';
+        // Strictly ONLY messages with question: true show one-tap option buttons
+        if (msg.question === true && Array.isArray(msg.options) && msg.options.length > 0) {
+          const actionsDiv = document.createElement('div');
+          actionsDiv.className = 'decision-actions';
 
-        msg.options.forEach((optText, idx) => {
-          const optBtn = document.createElement('button');
-          optBtn.type = 'button';
-          optBtn.className = 'btn' + (idx === 0 ? ' btn-primary' : '');
-          optBtn.textContent = optText;
+          msg.options.forEach((optText, idx) => {
+            const optBtn = document.createElement('button');
+            optBtn.type = 'button';
+            optBtn.className = 'btn' + (idx === 0 ? ' btn-primary' : '');
+            optBtn.textContent = optText;
 
-          optBtn.addEventListener('click', () => {
-            if (optText === 'Ответить…' || optText.startsWith('Ответить')) {
-              setReplyTarget(msg.id, msg.text);
-            } else {
-              sendOptionReply(slug, msg.id, optText);
-            }
+            optBtn.addEventListener('click', () => {
+              if (optText === 'Ответить…' || optText.startsWith('Ответить')) {
+                setReplyTarget(msg.id, msg.text);
+              } else {
+                sendOptionReply(slug, msg.id, optText);
+              }
+            });
+
+            actionsDiv.appendChild(optBtn);
           });
 
-          actionsDiv.appendChild(optBtn);
-        });
+          card.appendChild(actionsDiv);
 
-        card.appendChild(actionsDiv);
-
-        if (msg.answered_by) {
-          const ansDiv = document.createElement('div');
-          ansDiv.className = 'answered-pill';
-          ansDiv.textContent = '✓ Ответ отправлен';
-          card.appendChild(ansDiv);
+          if (msg.answered_by) {
+            const ansDiv = document.createElement('div');
+            ansDiv.className = 'answered-pill';
+            ansDiv.textContent = '✓ Ответ отправлен';
+            card.appendChild(ansDiv);
+          }
         }
-      }
 
-      chatStreamInner.appendChild(card);
-    });
+        chatStreamInner.appendChild(card);
+      });
 
-    if (appState.highlightMsgId) {
-      const targetEl = document.getElementById('msg-' + appState.highlightMsgId);
-      if (targetEl) {
-        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      appState.chatFingerprints[slug] = newChatFp;
+
+      if (appState.highlightMsgId) {
+        const targetEl = document.getElementById('msg-' + appState.highlightMsgId);
+        appState.highlightMsgId = null;
+        if (targetEl) {
+          targetEl.scrollIntoView({ block: 'center' });
+        } else if (isProjectSwitch || wasNearBottom) {
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        } else {
+          chatMessages.scrollTop = prevScrollTop;
+        }
+      } else if (isProjectSwitch || wasNearBottom) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      } else {
+        chatMessages.scrollTop = prevScrollTop;
       }
-    } else {
-      chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
+    appState.renderedSlug = slug;
+    appState.projectFingerprints[slug] = computeProjectFingerprint(proj);
+
     renderDrawerContents(proj);
+
+    if (composerInput.value !== savedDraft) {
+      composerInput.value = savedDraft;
+    }
+    appState.draftsBySlug[slug] = composerInput.value;
+    if (hadComposerFocus) {
+      if (document.activeElement !== composerInput) {
+        composerInput.focus({ preventScroll: true });
+      }
+      try {
+        if (typeof selStart === 'number' && typeof selEnd === 'number') {
+          composerInput.setSelectionRange(selStart, selEnd);
+        }
+      } catch (_) {}
+    }
   }
 
   // Rendering: Right Drawer / Bottom Sheet (Board & Sessions tabs)
@@ -2279,11 +2524,16 @@
         const badgeClass = isStuck ? 'stuck' : (isGate ? 'warn' : (isDone ? 'muted' : 'ok'));
 
         const linksHtml = Array.isArray(t.links) && t.links.length > 0
-          ? '<div class="d-card-links">' + t.links.map((lnk) =>
-              '<a class="d-card-link" href="' + escapeHtml(lnk.url) + '" target="_blank" rel="noopener noreferrer">' +
-                escapeHtml(lnk.label) +
-              '</a>'
-            ).join('') + '</div>'
+          ? '<div class="d-card-links">' + t.links.map((lnk) => {
+              const safeUrl = safeHttpUrl(lnk && lnk.url);
+              const labelText = (lnk && lnk.label) ? lnk.label : ((lnk && lnk.url) || '');
+              if (safeUrl) {
+                return '<a class="d-card-link" href="' + escapeHtml(safeUrl) + '" target="_blank" rel="noopener noreferrer">' +
+                  escapeHtml(labelText) +
+                '</a>';
+              }
+              return '<span class="d-card-link d-card-link-plain">' + escapeHtml(labelText) + '</span>';
+            }).join('') + '</div>'
           : '';
 
         return '<div class="d-card ' + cardClass + '">' +
@@ -2407,7 +2657,7 @@
         if (qMsg) qMsg.answered_by = newId;
       }
       clearReplyTarget();
-      renderProjectView();
+      renderProjectView({ isProjectSwitch: false });
       return;
     }
 
@@ -2425,10 +2675,10 @@
             text: 'Терминал оркестратора недоступен (terminal gone) — сообщение не доставлено.',
             error: true
           });
-          renderProjectView();
+          renderProjectView({ isProjectSwitch: false });
         }
       }
-      await loadState();
+      await loadState({ fromEvent: true });
     } catch (err) {
       console.error('Failed to send message:', err);
     }
@@ -2462,8 +2712,12 @@
 
   // Project selection & hash routing
   function selectProject(slug, updateHash) {
+    if (appState.selectedSlug) {
+      appState.draftsBySlug[appState.selectedSlug] = composerInput.value;
+    }
     appState.selectedSlug = slug;
     appState.highlightMsgId = null;
+    appState.highlightedMsgId = null;
     clearReplyTarget();
     appShell.setAttribute('data-mobile-screen', 'chat');
 
@@ -2475,35 +2729,54 @@
     }
 
     renderTriageRail();
-    loadProject(slug);
+    loadProject(slug, { isProjectSwitch: true });
   }
 
-  function applyHashRoute() {
+  function parseHashRoute() {
     const rawHash = window.location.hash || '';
     const matchMsg = rawHash.match(/^#\/p\/([^/]+)\/m\/([^/]+)$/);
     const matchProj = rawHash.match(/^#\/p\/([^/]+)$/);
 
     if (matchMsg) {
-      const slug = decodeURIComponent(matchMsg[1]);
-      const msgId = decodeURIComponent(matchMsg[2]);
-      appState.selectedSlug = slug;
-      appState.highlightMsgId = msgId;
+      return {
+        screen: 'chat',
+        slug: decodeURIComponent(matchMsg[1]),
+        msgId: decodeURIComponent(matchMsg[2])
+      };
+    }
+    if (matchProj) {
+      return {
+        screen: 'chat',
+        slug: decodeURIComponent(matchProj[1]),
+        msgId: null
+      };
+    }
+    return {
+      screen: 'triage',
+      slug: null,
+      msgId: null
+    };
+  }
+
+  function applyHashRoute() {
+    const route = parseHashRoute();
+    if (route.slug) {
+      if (appState.selectedSlug && appState.selectedSlug !== route.slug) {
+        appState.draftsBySlug[appState.selectedSlug] = composerInput.value;
+      }
+      appState.selectedSlug = route.slug;
+      appState.highlightMsgId = route.msgId;
+      appState.highlightedMsgId = route.msgId;
       appShell.setAttribute('data-mobile-screen', 'chat');
       renderTriageRail();
-      loadProject(slug);
-    } else if (matchProj) {
-      const slug = decodeURIComponent(matchProj[1]);
-      appState.selectedSlug = slug;
-      appState.highlightMsgId = null;
-      appShell.setAttribute('data-mobile-screen', 'chat');
-      renderTriageRail();
-      loadProject(slug);
+      loadProject(route.slug, { isProjectSwitch: true });
     } else {
       appState.highlightMsgId = null;
+      appState.highlightedMsgId = null;
       appShell.setAttribute('data-mobile-screen', 'triage');
       if (appState.selectedSlug) {
         renderTriageRail();
-        loadProject(appState.selectedSlug);
+        loadProject(appState.selectedSlug, { isProjectSwitch: true });
       }
     }
   }
@@ -2539,8 +2812,11 @@
 
     findingsModalBody.innerHTML = list.map((f) => {
       const st = statusMap[f.status] || { label: f.status || 'черновик', cls: 'muted' };
+      const safeUrl = safeHttpUrl(f.url);
       const linkHtml = f.url
-        ? '<div class="d-card-links"><a class="d-card-link" href="' + escapeHtml(f.url) + '" target="_blank" rel="noopener noreferrer">Открыть Issue ↗</a></div>'
+        ? (safeUrl
+            ? '<div class="d-card-links"><a class="d-card-link" href="' + escapeHtml(safeUrl) + '" target="_blank" rel="noopener noreferrer">Открыть Issue ↗</a></div>'
+            : '<div class="d-card-links"><span class="d-card-link d-card-link-plain">' + escapeHtml(f.url) + '</span></div>')
         : '';
       return '<div class="d-card">' +
         '<div class="d-card-top">' +
@@ -2571,6 +2847,12 @@
 
   replyCancelBtn.addEventListener('click', () => clearReplyTarget());
 
+  composerInput.addEventListener('input', () => {
+    if (appState.selectedSlug) {
+      appState.draftsBySlug[appState.selectedSlug] = composerInput.value;
+    }
+  });
+
   composerForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = composerInput.value.trim();
@@ -2582,6 +2864,7 @@
     }
     const replyId = appState.replyToMsgId;
     composerInput.value = '';
+    appState.draftsBySlug[appState.selectedSlug] = '';
     await submitMessagePayload(appState.selectedSlug, payload, text, replyId);
   });
 
@@ -2622,6 +2905,32 @@
 
   window.addEventListener('hashchange', () => applyHashRoute());
 
+  function handleEventPayload(raw) {
+    if (!raw) return;
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (parsed && parsed.type === 'changed') {
+        loadState({
+          fromEvent: true,
+          changedProject: parsed.project || parsed.slug || null
+        });
+      }
+    } catch (_) {}
+  }
+
+  window.addEventListener('foreman:changed', (ev) => {
+    handleEventPayload((ev && ev.detail) || { type: 'changed' });
+  });
+
+  window.__foreman = {
+    appState: appState,
+    demoStore: demoStore,
+    emitChanged: (payload) => handleEventPayload(payload || { type: 'changed' }),
+    loadState: loadState,
+    loadProject: loadProject,
+    renderProjectView: renderProjectView
+  };
+
   // Live SSE subscription (/api/events) with exponential backoff
   function connectEvents() {
     if (isDemo || typeof EventSource === 'undefined') return;
@@ -2639,16 +2948,6 @@
       es.onopen = () => {
         backoffMs = 1000;
         setOfflineState(false);
-      };
-
-      const handleEventPayload = (raw) => {
-        if (!raw) return;
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.type === 'changed') {
-            loadState();
-          }
-        } catch (_) {}
       };
 
       es.onmessage = (ev) => handleEventPayload(ev.data);
@@ -2679,8 +2978,16 @@
       appState.activeDrawerTab = 'sessions';
     }
   }
-  loadState().then(() => {
-    applyHashRoute();
+  const initialRoute = parseHashRoute();
+  if (initialRoute.slug) {
+    appState.selectedSlug = initialRoute.slug;
+    appState.highlightMsgId = initialRoute.msgId;
+    appState.highlightedMsgId = initialRoute.msgId;
+    appShell.setAttribute('data-mobile-screen', 'chat');
+  } else {
+    appShell.setAttribute('data-mobile-screen', 'triage');
+  }
+  loadState({ isProjectSwitch: true }).then(() => {
     connectEvents();
   });
 })();
