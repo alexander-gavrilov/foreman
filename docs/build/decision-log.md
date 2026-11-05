@@ -69,3 +69,4 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   agents expose limits; the tap does not replace the user's statusline (fancy-statusline keeps working).
 - D26 · "Waiting for permission" of an Antigravity session is known only on Herdr (`blocked`); on Orca such a session
   shows as busy and becomes "stuck" after the threshold. — agy has no permission hook event.
+- D27 · Orca `terminal wait --for tui-idle` timed out on idle Antigravity tabs (observed while closing research workers). foreman's idle signal for agy is its own Stop hook (`fullyIdle`), with Orca `worktree ps` as a fallback, not tui-idle alone.
