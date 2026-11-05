@@ -112,3 +112,91 @@ the user has not explicitly objected to; **open** = still to decide.
 - What the user wants to see/do first in the web UI.
 - Anti-goals ("what would make this a failure even if it works") — not yet asked.
 - Shopping-list migration: its `orchestrator/` stays until foreman replaces it.
+
+## Clarifications from the predecessor session (2026-11-02, answers to batched handoff questions)
+- Limits snapshots: the agy statusline patch is live (`~/.gemini/antigravity-cli/statusline-command.sh`);
+  the Claude patch was overwritten at once, because fancy-statusline's UserPromptSubmit hook re-copies its script
+  over `~/.claude/statusline-command.sh` on every prompt. → The Claude limits snapshot must live
+  upstream (fancy-statusline) or in a foreman hook, never as a local patch. Backups: `*.bak-orch`.
+- Codex: **user** named it among the main vendors ("хотя бы … Антигравити, ClaudeCode, Кодекс").
+  It is installed and used (`~/.codex` with hooks enabled, herdr-agent-state.sh). Subscription: unknown.
+- Web UI host/remote access: not discussed. "localhost + token, phone via existing HTTPS reverse proxy" is a
+  proposal (shopping-list has docs/deployment-https.md). Everything runs on this machine (ghome) today;
+  history mentions a headless server and a laptop bridged via claude.ai.
+- agy permission policy: research note + proposal only; not confirmed as v1 scope.
+- Autonomy, verbatim **user**: "по умолчанию без согласований если нет четких инструкций от меня действовать подругому".
+  "Per-project gates" and "foreman rule changes only via PR" are proposals.
+- Python over bash: Claude's call (JSON/JSONL parsing, /proc, locking, SSE server, zero deps); no user input.
+- shopping-list orchestrator a0172d76: still running and idle, no ticks. `orchestrator/` is local and uncommitted.
+  "shopping-list as first consumer" was not discussed (proposal).
+- **user** preferences not captured earlier: cares about token cost ("сколько стоит / зачем") → show cost evidence
+  with proposals; expects claims to be verified (corrected wrong "hooks only in Claude Code" and confusion
+  of deployment mechanisms with orchestration tools); discuss before building; cheap subagents for research;
+  file cleanup must be automatic ("не сидеть и каждый раз думать, когда чистить"); 150k is soft
+  ("если стоит продолжать в текущем контекстном окне — продолжают").
+- Rejected by **user**: periodic `/loop` ticks; basing the web UI on shopping-list's stack. Name chosen from
+  baton/switchboard/foreman/helm.
+- **user** (2026-11-02): this foreman session is the control panel. Opus does the design talk; bulk reading, transcript search
+  and the builder-check go to cheap worker sessions (Sonnet / Antigravity Flash) in Orca tabs, which report short conclusions.
+
+## Anti-goal and core properties (confirmed by user 2026-11-02)
+- **user** Failure mode: foreman works but is inconvenient. Concretely, the user had to (a) "kick" the
+  orchestrator so it caught up on what was happening, and (b) correct it when it dove into a task instead of delegating.
+- **user-confirmed** Core property 1: the orchestrator is always current without being asked. Events come to it
+  (session hooks report stage changes / done / stuck / context threshold; a 0-token timer wakes it only on events;
+  board + journal are its memory, which survives rotation).
+- **user-confirmed** Core property 2: the orchestrator cannot drift into doing the work. This is enforced mechanically,
+  not by prose: a hook blocks project edits for the orchestrator role, `foreman` returns short summaries instead of
+  raw files, and bulk reading defaults to cheap worker sessions.
+- **user-confirmed** Success: no "как дела?" and no kicking. The user shows up only when a decision is needed and
+  sees the state at a glance (terminal or phone).
+
+## Web UI & notifications (2026-11-02)
+- **user** Main screen = the board and everything as agreed. When foreman calls the user, it does so by a notification,
+  and opening it goes straight to the chat with the orchestrator's message.
+- **user** If Telegram: wants to reply there too; probably one channel per chat.
+- Recon (Sonnet worker, 2026-11-02): aibroker v0.62.4 (MIT, third-party, mnott/AIBroker) has no Telegram code
+  in core. Telegram lives in the separate adapter Telex (MTProto user account via gramjs), which is NOT installed here.
+  Core routes inbound to a single "active session" by PTY typing (iTerm2/tmux), is Claude-oriented, and has no
+  per-chat/per-topic routing and no shell CLI for Telegram send.
+- **proposal** foreman owns a small Telegram Bot API notifier (stdlib urllib, long-poll getUpdates): one forum
+  supergroup, one topic per project (message_thread_id), replies routed by topic to that project's orchestrator
+  via the transport adapter (orca/herdr send). Notifier is an interface; aibroker/ntfy/etc. are optional sinks.
+- **user** Web UI shows the orchestrator sessions of ALL projects on the machine (machine-level, like the Telegram group).
+- **user** Telegram: one group per machine, one forum topic per project with its orchestrator. Details (bot creates topics on
+  `foreman init`; General topic = foreman itself; worker sessions get no topics, their questions go through the orchestrator) are proposals.
+- **user** Implementation split: Antigravity does design + frontend; a Claude session verifies functionality.
+  **proposal** API/event contract is fixed in the spec first; Claude verifies against the spec's acceptance criteria and the code
+  (Playwright/DevTools, mobile + desktop widths), not against agy's report; Argon (not Flash) for design.
+
+## Web UI layout (2026-11-05)
+- **user** Chosen: "Direction 3", the Argon variant. Mockup (outside repo): `~/.local/state/agent-work/foreman/2026-11-02-web-ui-mockups/.superpowers/brainstorm/2309803-1793804082/content/agy-direction-3.html`.
+  The user found direction 1 (dark "dispatch", 3 columns) overloaded and direction 2 (light bento cards) too simplified.
+  Direction 3 = direction 1's dark style, calmer. Left triage rail of all projects grouped Ждёт вас / Застряла / Работают / Тихо;
+  centre = chat of the selected project; a pinned status strip above the chat (stage, N sessions, worst context) expands into a
+  drawer (desktop) / bottom sheet (phone) with Board / Sessions; top bar = weekly limit meters only (5h on hover);
+  one-tap decision buttons only on a question message; a notification lands on the project chat.
+- Model routing evidence: the same brief on Gemini 4 Argon (medium) vs Gemini 3.8 Flash (high): Argon ~4 min, Flash ~7 min,
+  both ≈1% of the agy 5h window. The user preferred Argon's result. → **proposal** design/open-ended UI work → Argon; Flash for
+  well-specified mechanical work.
+- Bug to design around: the agy statusline patch overwrote `~/.cache/agent-limits/agy.json` with `quota: null`. Limit snapshots must
+  never be overwritten by empty data (keep the last good value + its age).
+- **user** Remote access from outside home: through the user's existing WireGuard VPN. → **proposal** `foreman web` binds to
+  LAN/VPN interfaces only (never public), token auth stays; no reverse proxy / public HTTPS needed for v1.
+- **user** foreman will be shared: if it proves itself on the home server, the user will run it (or at least the
+  approach) on the work computer too. → GitHub repo is public / shareable (my call, follows from "можно считать, что я буду шарить").
+  **proposal** Work-project data must never reach the public repo: `foreman report` scrubs paths/project names/content,
+  and a per-machine setting `upstream: auto | draft | off` (draft = issue text is saved to the local inbox and the user
+  sends it). Suggested default: home `auto`, work `draft`.
+- **user** Work computer: macOS, with Claude Code and Antigravity. → foreman must run on Linux AND macOS:
+  timer = systemd user timer (Linux) / launchd agent (macOS); no hard dependency on `/proc` (session ↔ terminal
+  mapping comes from hooks self-reporting, `/proc` only as a Linux fallback); portable `stat`/paths; stdlib Python 3.
+
+## Answers after the builder check (2026-11-05)
+- **user** Telegram setup: the user gives Claude Code access to a desktop with a browser; the agent creates the bot and the group,
+  turns on topics and makes the bot an admin there (no manual user steps).
+- **user** Network: desktop and laptop reach the home server over OpenVPN, phones over WireGuard. The work Mac does not
+  connect to the home server (no point), and the work Mac has no access to Telegram.
+  → **proposal** On the work Mac, notifications are local desktop notifications opening the local web UI.
+- **user** Changes to foreman's own rules go only through a PR, even under default autonomy.
+- Permission policy in v1: not answered → **proposal** after core, web UI and Telegram.
