@@ -274,9 +274,7 @@ def _git(cwd, *args):
                           capture_output=True, text=True, check=True).stdout
 
 
-class InitInGitSubfolder(ForemanTestCase):
-    """F6 (review 3c): init in a repo subfolder must keep the working tree clean too."""
-
+class _GitSubfolderBase(ForemanTestCase):
     def setUp(self):
         super().setUp()
         import shutil
@@ -290,6 +288,10 @@ class InitInGitSubfolder(ForemanTestCase):
             f.write("x = 1\n")
         _git(self.repo, "add", "-A")
         _git(self.repo, "commit", "-q", "-m", "init")
+
+
+class InitInGitSubfolder(_GitSubfolderBase):
+    """F6 (review 3c): init in a repo subfolder must keep the working tree clean too."""
 
     def test_subfolder_init_leaves_the_tree_clean_and_remove_restores_exclude(self):
         before = open(os.path.join(self.repo, ".git", "info", "exclude")).read()
@@ -309,3 +311,23 @@ class InitInGitSubfolder(ForemanTestCase):
         initproj.init_project(self.repo, agents=["claude"], transports=[], fm=FM)
         self.assertIn("/.claude/settings.local.json", open(os.path.join(self.repo, ".git", "info", "exclude")).read())
         self.assertEqual(_git(self.repo, "status", "--porcelain"), "")
+
+
+class InitSkipsTrackedHookFiles(_GitSubfolderBase):
+    """F7 (review 3c): a hook file that is committed in the repo is never edited (D41: the tree stays clean)."""
+
+    def test_tracked_hook_file_is_left_alone_with_a_note(self):
+        codex = os.path.join(self.sub, ".codex", "hooks.json")
+        os.makedirs(os.path.dirname(codex))
+        with open(codex, "w") as f:
+            f.write('{"hooks": {}}\n')
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "codex hooks")
+        changes, notes = initproj.init_project(self.sub, agents=["claude", "codex"], transports=[], fm=FM)
+        self.assertEqual(open(codex).read(), '{"hooks": {}}\n')
+        self.assertEqual(_git(self.repo, "status", "--porcelain"), "")
+        self.assertTrue(any(".codex/hooks.json" in n and "tracked" in n for n in notes), notes)
+        self.assertFalse([c for c in changes if "codex" in c], changes)
+        self.assertNotIn("codex/hooks.json", open(os.path.join(self.repo, ".git", "info", "exclude")).read())
+        # the untracked claude file was still written and excluded
+        self.assertTrue(os.path.exists(os.path.join(self.sub, ".claude", "settings.local.json")))

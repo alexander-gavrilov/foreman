@@ -224,6 +224,17 @@ def _exclude_file(project_path):
     return None
 
 
+def is_tracked(project_path, rel):
+    """True when git tracks `rel` (relative to the project): such a file is part of the repo and is not ours
+    to edit."""
+    import subprocess
+    try:
+        return subprocess.run(["git", "-C", project_path, "ls-files", "--error-unmatch", "--", rel],
+                              capture_output=True, text=True, timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _git_exclude(project_path):
     """(exclude file, prefix) for a folder inside a git work tree: git knows where info/exclude lives (also for
     worktrees) and how deep the folder is below the repo root, so entries can be anchored there. Falls back to
@@ -345,14 +356,22 @@ def init_project(path, name=None, home=None, agents=None, transports=None, fm=No
         changes.append("renamed project %s to %r" % (project["slug"], name))
 
     agents = detect_agents(home) if agents is None else list(agents)
+    tracked = {a for a, rel in HOOK_FILES.items() if is_tracked(path, rel)}
+    # a tracked hook file is not ours to edit; every other one is excluded, even for an agent installed only later
+    ours = [rel for a, rel in HOOK_FILES.items() if a not in tracked]
     for agent in agents:
+        if agent in tracked:
+            notes.append("%s is tracked by git, so foreman did not edit it; add the foreman hook there yourself "
+                         "(`%s`) or untrack the file and run init again" % (HOOK_FILES[agent],
+                                                                          _cmd(fm, agent, "<Event>")))
+            continue
         if write_hooks(path, agent, fm):
             changes.append("wrote %s hooks (%s)" % (agent, HOOK_FILES[agent]))
             if agent == "codex":
                 notes.append("Codex: approve the foreman hook once in Codex /hooks (foreman never trusts itself)")
             elif agent == "antigravity":
                 notes.append("Antigravity: trust this workspace in Antigravity so .agents/hooks.json can run")
-    for rel in exclude_from_git(path, list(HOOK_FILES.values())):
+    for rel in exclude_from_git(path, ours):
         changes.append("excluded %s from git (.git/info/exclude)" % rel)
 
     if project.get("telegram_topic_id") is None:
