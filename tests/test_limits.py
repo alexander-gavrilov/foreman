@@ -160,6 +160,7 @@ class LimitsTest(ForemanTestCase):
         self.assertEqual(loaded_agy["context_tokens"], 45000)
 
     def test_cli_tap_and_limits(self):
+        os.environ["FOREMAN_NOW"] = "2026-10-31T00:00:00Z"  # before the fixture's reset times (stale = unknown)
         # 1. Tap statusline
         payload = json.dumps({
             "rate_limits": {

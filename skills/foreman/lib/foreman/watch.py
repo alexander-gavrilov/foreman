@@ -164,20 +164,14 @@ def run_pass(interval_s=60):
                     summary["conditions"].append(cond_soft)
 
     # 4. Limits crossing limit_warn / limit_stop
-    limit_warn = config.get("thresholds.limit_warn", 70)
-    limit_stop = config.get("thresholds.limit_stop", 90)
     all_projs = projects.list_projects()
 
+    prov_levels = limits.levels()  # stale readings count as unknown there
     for prov in ("claude", "antigravity"):
-        p_limits = limits.load_provider_limits(prov)
-        vals = [
-            w["used_pct"]
-            for w in p_limits.values()
-            if isinstance(w, dict) and w.get("used_pct") is not None
-        ]
-        max_pct = max(vals) if vals else 0
+        level = prov_levels.get(prov, "unknown")
+        max_pct = limits.max_pct(prov)
 
-        if max_pct >= limit_stop:
+        if level == "stop":
             cond_stop = "limit_stop:" + prov
             cond_warn = "limit_warn:" + prov
             active_conditions.add(cond_stop)
@@ -202,7 +196,7 @@ def run_pass(interval_s=60):
                 dedupe.add(cond_stop)
                 dedupe.add(cond_warn)
                 summary["conditions"].append(cond_stop)
-        elif max_pct >= limit_warn:
+        elif level == "warn":
             cond_warn = "limit_warn:" + prov
             active_conditions.add(cond_warn)
             if cond_warn not in dedupe:

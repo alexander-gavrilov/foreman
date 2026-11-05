@@ -9,6 +9,7 @@ from tests.helpers import ForemanTestCase, run_cli
 class WatchTest(ForemanTestCase):
     def setUp(self):
         super().setUp()
+        os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"  # fixtures' limit resets_at must stay in the future
         self.init_project("demo")
 
     def test_quiet_state_zero_wakes_and_zero_transport_sends(self):

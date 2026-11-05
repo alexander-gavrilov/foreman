@@ -6,6 +6,16 @@ from unittest.mock import patch
 from tests.helpers import ForemanTestCase
 
 
+def run_main(*args):
+    import contextlib
+    import io
+    from foreman import cli
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = cli.main(list(args))
+    return code, out.getvalue(), err.getvalue()
+
+
 def _set_alive(root, handle, alive):
     path = os.path.join(root, "terminals", handle + ".json")
     with open(path) as f:
@@ -97,3 +107,69 @@ class GoneDetectionTest(ForemanTestCase):
         with patch("foreman.transports.fake.FakeTransport.list", side_effect=RuntimeError("boom")):
             watch.run_pass()
         self.assertEqual(wake.find_orchestrator("demo")["sid"], orch["sid"])
+
+
+class StaleLimitsTest(ForemanTestCase):
+    NOW = "2026-11-05T12:00:00Z"
+
+    def setUp(self):
+        super().setUp()
+        self.init_project("demo")
+        os.environ["FOREMAN_NOW"] = self.NOW
+
+    def _stale_claude(self):
+        from foreman import limits
+        limits.record_reading("claude", {
+            "five_hour": {"used_pct": 95, "resets_at": "2026-11-04T10:00:00Z"},
+        }, observed_at="2026-11-04T09:00:00Z")
+
+    def test_levels_treats_window_past_resets_at_as_unknown(self):
+        from foreman import limits
+        self._stale_claude()
+        self.assertEqual(limits.levels()["claude"], "unknown")
+
+    def test_levels_without_resets_at_uses_window_length_from_observed_at(self):
+        from foreman import limits
+        limits.record_reading("claude", {"five_hour": {"used_pct": 95, "resets_at": None}},
+                              observed_at="2026-11-05T06:00:00Z")  # 6h > 5h window
+        self.assertEqual(limits.levels()["claude"], "unknown")
+        limits.record_reading("claude", {"five_hour": {"used_pct": 95, "resets_at": None}},
+                              observed_at="2026-11-05T10:00:00Z")  # 2h < 5h window
+        self.assertEqual(limits.levels()["claude"], "stop")
+
+    def test_one_stale_window_does_not_hide_a_fresh_one(self):
+        from foreman import limits
+        limits.record_reading("claude", {
+            "five_hour": {"used_pct": 95, "resets_at": "2026-11-04T10:00:00Z"},
+            "seven_day": {"used_pct": 75, "resets_at": "2026-11-10T10:00:00Z"},
+        })
+        self.assertEqual(limits.levels()["claude"], "warn")
+
+    def test_summary_line_shows_stale_window_as_unknown(self):
+        from foreman import limits
+        limits.record_reading("claude", {
+            "five_hour": {"used_pct": 95, "resets_at": "2026-11-04T10:00:00Z"},
+            "seven_day": {"used_pct": 20, "resets_at": "2026-11-10T10:00:00Z"},
+        }, observed_at="2026-11-05T11:56:00Z")
+        line = limits.summary_line()
+        self.assertIn("wk 20%", line)
+        self.assertIn("5h ?", line)
+        self.assertNotIn("95", line)
+
+    def test_open_is_not_refused_on_a_stale_stop_reading(self):
+        self._stale_claude()
+        code, out, err = run_main("open", "--project", "demo", "--agent", "claude", "--purpose", "x",
+                                  "--title", "fm-x", "--transport", "fake", "--prompt", "hi")
+        self.assertEqual(code, 0, err)
+
+    def test_watch_ignores_stale_reading(self):
+        from foreman import sessions, watch, transports
+        self._stale_claude()
+        h = transports.get_transport("fake").launch("claude", "haiku", None, self.work, "hi", "t")
+        w = sessions.create_session("demo", "claude", transport={"kind": "fake", "handle": h}, state="idle",
+                                    title="w1")
+        with patch("foreman.wake.wake") as mock_wake, patch("foreman.notify.notify") as mock_notify:
+            watch.run_pass()
+        self.assertEqual(mock_wake.call_count, 0)
+        self.assertEqual(mock_notify.call_count, 0)
+        self.assertEqual(sessions.inbox_pending(w["sid"]), [])
