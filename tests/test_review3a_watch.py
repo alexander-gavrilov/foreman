@@ -173,3 +173,69 @@ class StaleLimitsTest(ForemanTestCase):
         self.assertEqual(mock_wake.call_count, 0)
         self.assertEqual(mock_notify.call_count, 0)
         self.assertEqual(sessions.inbox_pending(w["sid"]), [])
+
+
+class JanitorReuseTest(ForemanTestCase):
+    T0 = 1793700000  # a fixed "now" (epoch seconds)
+
+    def setUp(self):
+        super().setUp()
+        from foreman import paths
+        self.init_project("demo")
+        self.folder = os.path.join(paths.agent_work_dir("demo"), "2026-10-23-reused")
+        os.makedirs(self.folder)
+        self.file = os.path.join(self.folder, "draft.txt")
+        with open(self.file, "w") as f:
+            f.write("x")
+
+    def _now(self, epoch):
+        from datetime import datetime, timezone
+        os.environ["FOREMAN_NOW"] = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _touch(self, epoch):
+        for p in (self.file, self.folder):
+            os.utime(p, (epoch, epoch))
+
+    def _announce_at_13_5_days(self):
+        from foreman import janitor
+        self._now(self.T0)
+        self._touch(self.T0 - int(13.5 * 86400))
+        state = {}
+        with patch("foreman.notify.notify") as n:
+            janitor.janitor_pass(state)
+        self.assertEqual(n.call_count, 1)
+        self.assertIn(self.folder, state["janitor"])
+        return state
+
+    def test_reused_folder_drops_its_announcement(self):
+        from foreman import janitor
+        state = self._announce_at_13_5_days()
+        self._now(self.T0 + 86400)
+        self._touch(self.T0 + 86400)  # used again
+        with patch("foreman.notify.notify"):
+            janitor.janitor_pass(state)
+        self.assertNotIn(self.folder, state["janitor"])
+        # 14.1 days after the new use: announced afresh, not deleted without a new listing
+        self._now(self.T0 + 86400 + int(14.1 * 86400))
+        with patch("foreman.notify.notify") as n:
+            janitor.janitor_pass(state)
+        self.assertTrue(os.path.exists(self.folder))
+        self.assertEqual(n.call_count, 1)
+
+    def test_touched_since_announcement_is_not_deleted_even_without_an_intermediate_pass(self):
+        from foreman import janitor
+        state = self._announce_at_13_5_days()
+        self._touch(self.T0 + 86400)  # used again, janitor did not run meanwhile
+        self._now(self.T0 + 86400 + int(14.1 * 86400))
+        with patch("foreman.notify.notify") as n:
+            janitor.janitor_pass(state)
+        self.assertTrue(os.path.exists(self.folder))
+        self.assertEqual(n.call_count, 1)  # re-announced
+
+    def test_untouched_announced_folder_is_deleted_at_ttl(self):
+        from foreman import janitor
+        state = self._announce_at_13_5_days()
+        self._now(self.T0 + 2 * 86400)
+        with patch("foreman.notify.notify"):
+            janitor.janitor_pass(state)
+        self.assertFalse(os.path.exists(self.folder))

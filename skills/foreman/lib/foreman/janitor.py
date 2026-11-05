@@ -120,44 +120,39 @@ def janitor_pass(watch_state):
     janitor_state = watch_state.setdefault("janitor", {})
     folders = scan_work_folders()
 
+    def announce(item, rec_idle):
+        projects.journal_append(
+            item["slug"],
+            actor="foreman",
+            kind="clean",
+            text="Work folder idle for %d days scheduled for deletion: %s" % (int(rec_idle), item["name"]),
+        )
+        notify.notify(None, "Work folder idle: %s" % item["path"])
+        janitor_state[item["path"]] = {
+            "announced_at": timeutil.now_iso(),
+            "announced_mtime": item["newest_mtime"],
+            "idle_days": rec_idle,
+        }
+
     for item in folders:
         path = item["path"]
-        slug = item["slug"]
-        name = item["name"]
         idle_days = item["idle_days"]
 
         rec = janitor_state.get(path)
-        if idle_days >= ttl_days:
-            if rec and rec.get("announced_at"):
-                # Delete at TTL only if announced earlier
+        if idle_days < announce_days:
+            # Used again since it was announced: the old announcement no longer covers it.
+            janitor_state.pop(path, None)
+        elif idle_days >= ttl_days:
+            announced_mtime = (rec or {}).get("announced_mtime")
+            untouched = announced_mtime is not None and item["newest_mtime"] <= announced_mtime
+            if rec and rec.get("announced_at") and untouched:
+                # Delete at TTL only if announced earlier and nothing was touched since that listing
                 safe_delete_dir(path)
                 janitor_state.pop(path, None)
             else:
-                # Announce first if not announced earlier
-                projects.journal_append(
-                    slug,
-                    actor="foreman",
-                    kind="clean",
-                    text="Work folder idle for %d days scheduled for deletion: %s" % (int(idle_days), name),
-                )
-                notify.notify(None, "Work folder idle: %s" % path)
-                janitor_state[path] = {
-                    "announced_at": timeutil.now_iso(),
-                    "idle_days": idle_days,
-                }
-        elif idle_days >= announce_days:
-            if not rec or not rec.get("announced_at"):
-                projects.journal_append(
-                    slug,
-                    actor="foreman",
-                    kind="clean",
-                    text="Work folder idle for %d days scheduled for deletion: %s" % (int(idle_days), name),
-                )
-                notify.notify(None, "Work folder idle: %s" % path)
-                janitor_state[path] = {
-                    "announced_at": timeutil.now_iso(),
-                    "idle_days": idle_days,
-                }
+                announce(item, idle_days)
+        elif not rec or not rec.get("announced_at"):
+            announce(item, idle_days)
 
     # Clean up state entries for paths that no longer exist
     existing_paths = {f["path"] for f in folders}
