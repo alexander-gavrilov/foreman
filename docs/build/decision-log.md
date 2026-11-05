@@ -126,3 +126,8 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   reviews moved to another provider/instance while Claude was exhausted (14:15–16:30 UTC), and Antigravity's Claude
   models (exhausted 14:47) were replaced by Gemini 4 Argon in the same worktrees with a handoff message. The lead also
   rotated at ~290k context (handoff file, old lead kept idle and answerable within the warm-cache window, as in §4.5).
+- D47 · Upstream findings stay `auto` at home (spec §4.11), made safe instead of switched off: the scrubber removes any
+  absolute path, remote, host/IP, token pattern and key=value secret, and keeps only allowed foreman issue/PR URLs;
+  `install` prints the upstream mode and how to change it; the project rule says `--project` for rule findings; the
+  test base class forces draft mode and fails on any unexpected `gh` call. — Review 3c showed leaks through the old
+  scrubber and that any Linux install would file to the public repo by default.
