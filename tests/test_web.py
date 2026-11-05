@@ -494,6 +494,30 @@ class ServerHttpTest(ForemanTestCase):
         )
         self.assertEqual(status, 200)
 
+    def test_csrf_origin_must_match_scheme_host_and_port(self):
+        from foreman.web import auth
+        code, _ = auth.create_pairing_code()
+        _, tok, _ = auth.exchange_pairing_code(code)
+        self.init_project("csrfport")
+        url = "/api/projects/csrfport/messages"
+        own = "127.0.0.1:%d" % self.port
+
+        def post(origin):
+            return self._http(url, method="POST", data='{"text":"x"}', headers={
+                "Cookie": "fm_token=" + tok, "Content-Type": "text/plain", "Origin": origin})[0]
+
+        # same hostname, other port (e.g. an agent's dev server) is a foreign origin
+        self.assertEqual(post("http://localhost:3000"), 403)
+        self.assertEqual(post("http://127.0.0.1:3000"), 403)
+        self.assertEqual(post("http://127.0.0.1"), 403)  # default port 80 != ours
+        self.assertEqual(post("https://" + own), 403)    # other scheme
+        self.assertEqual(post("null"), 403)
+        self.assertEqual(post("http://" + own), 200)
+        # the configured base_url origin (e.g. behind a proxy) is accepted
+        self.write_config({"web": {"base_url": "https://foreman.example:8443"}})
+        self.assertEqual(post("https://foreman.example:8443"), 200)
+        self.assertEqual(post("https://foreman.example"), 403)
+
     def test_pairing_rate_limit_429(self):
         # 5 failed attempts per minute per client IP -> 429 on subsequent attempts
         for _ in range(5):

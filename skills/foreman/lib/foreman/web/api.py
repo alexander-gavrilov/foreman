@@ -271,10 +271,8 @@ def dispatch(handler):
         has_bearer = auth_hdr.startswith("Bearer ")
 
         if origin:
-            parsed_origin = urllib.parse.urlsplit(origin)
-            origin_host = (parsed_origin.hostname or "").lower()
-            from foreman.web.server import is_allowed_host
-            if not is_allowed_host(origin_host):
+            from foreman.web.server import is_allowed_origin
+            if not is_allowed_origin(origin, handler.headers.get("Host", "")):
                 _send_json(handler, 403, {"error": "forbidden", "message": "cross-origin request forbidden"})
                 return
         else:

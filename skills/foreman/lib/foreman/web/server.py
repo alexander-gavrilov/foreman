@@ -66,6 +66,43 @@ def is_allowed_host(host_hdr):
     return False
 
 
+def _origin_tuple(url):
+    """(scheme, hostname, port) of an Origin / base URL with the default port filled in; None if malformed."""
+    import urllib.parse
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        scheme = (parts.scheme or "").lower()
+        host = (parts.hostname or "").lower()
+        if scheme not in ("http", "https") or not host:
+            return None
+        port = parts.port or (443 if scheme == "https" else 80)
+    except (ValueError, AttributeError):
+        return None
+    return scheme, host, port
+
+
+def is_allowed_origin(origin, host_hdr):
+    """CSRF check: the Origin must equal scheme://host:port of this server as the browser addressed it (the
+    request's Host header, plain http) or of the configured web.base_url. The port is part of the origin:
+    SameSite does not separate ports, so a page on another local port must not pass."""
+    if not origin or not isinstance(origin, str):
+        return False
+    got = _origin_tuple(origin)
+    if got is None:
+        return False
+    allowed = []
+    if host_hdr and is_allowed_host(host_hdr):
+        own = _origin_tuple("http://" + host_hdr.strip())
+        if own:
+            allowed.append(own)
+    base_url = config.get("web.base_url")
+    if base_url:
+        base = _origin_tuple(base_url)
+        if base:
+            allowed.append(base)
+    return got in allowed
+
+
 def is_allowed_client_ip(ip_str):
     """Check if client IP is loopback, RFC1918, CGNAT 100.64/10, link-local or IPv6 ULA/loopback."""
     if not ip_str or not isinstance(ip_str, str):
