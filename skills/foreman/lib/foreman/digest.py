@@ -16,7 +16,7 @@ def format_digest(messages):
     except Exception:
         summary = None
     if summary:
-        lines.append(summary)
+        lines.append("limits: " + summary)
     return "\n".join(lines)
 
 

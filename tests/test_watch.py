@@ -215,9 +215,11 @@ class WatchTest(ForemanTestCase):
         self.assertEqual(len(pending_worker), 1)
         self.assertIn("Лимит claude ≥90%: wind down and hand off at your next idle point", pending_worker[0]["text"])
 
-        # Orchestrator session did NOT receive wind-down in inbox
+        # Orchestrator is told (a wake about the limit) but is NOT wound down
         pending_orch = sessions.inbox_all(s_orch["sid"])
-        self.assertEqual(len(pending_orch), 0)
+        self.assertTrue(pending_orch)
+        for m in pending_orch:
+            self.assertNotIn("wind down", m["text"])
 
         # Second pass does not queue duplicate message
         watch.run_pass()
