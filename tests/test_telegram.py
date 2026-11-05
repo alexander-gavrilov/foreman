@@ -242,6 +242,26 @@ class TelegramTestCase(ForemanTestCase):
         self.assertEqual(reply["text"], "Да")
         self.assertEqual(reply["reply_to"], q_msg["id"])
 
+    def test_reply_button_only_answers_the_callback(self):
+        thread_id, orch = self._topic_project()
+        q = projects.chat_append("demo", "orchestrator", "Merge?", question=True, options=["Да", "Ответить…"])
+        self.server.enqueue_callback_query(callback_data=f"{q['id']}|1", callback_id="cb-r", thread_id=thread_id)
+        telegram.poll_once(timeout=0)
+        self.assertEqual([m for m in projects.chat_list("demo") if m["from"] == "user"], [])
+        self.assertEqual(sessions.inbox_all(orch["sid"]), [])
+        self.assertEqual(self.server.answered_callbacks, [{"callback_query_id": "cb-r",
+                                                           "text": "reply in the topic"}])
+
+    def test_unknown_callback_is_answered_expired_and_delivers_nothing(self):
+        thread_id, orch = self._topic_project()
+        q = projects.chat_append("demo", "orchestrator", "Merge?", question=True, options=["Да"])
+        for i, data in enumerate(["m-x|0", "garbage", f"{q['id']}|7", f"{q['id']}|x"]):
+            self.server.enqueue_callback_query(callback_data=data, callback_id="cb-%d" % i, thread_id=thread_id)
+        telegram.poll_once(timeout=0)
+        self.assertEqual([m for m in projects.chat_list("demo") if m["from"] == "user"], [])
+        self.assertEqual(sessions.inbox_all(orch["sid"]), [])
+        self.assertEqual([c["text"] for c in self.server.answered_callbacks], ["expired"] * 4)
+
     def test_poll_offset_persistence(self):
         self.server.enqueue_text_message("msg 1", thread_id=999)
         self.server.enqueue_text_message("msg 2", thread_id=999)

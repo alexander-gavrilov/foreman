@@ -283,6 +283,24 @@ def _message_text(msg):
     return "[non-text message: unknown]"
 
 
+def _callback_option(slug, cb_data):
+    """(question msg id, option text) for callback data '<msgid>|<index>', or None if it names no live option."""
+    msg_id, sep, idx_str = (cb_data or "").partition("|")
+    if not sep:
+        return None
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        return None
+    for row in reversed(projects.chat_list(slug)):
+        if row.get("id") == msg_id:
+            opts = row.get("options") or []
+            if row.get("question") and 0 <= idx < len(opts):
+                return msg_id, str(opts[idx])
+            return None
+    return None
+
+
 def _find_project_by_topic_id(thread_id):
     if thread_id is None:
         return None
@@ -442,27 +460,21 @@ def poll_once(timeout=0):
             thread_id = cb_msg.get("message_thread_id")
             proj = _find_project_by_topic_id(thread_id)
 
+            answer = None
             if proj:
-                chosen_text = cb_data
-                reply_to = None
-                if "|" in cb_data:
-                    msg_id, opt_idx_str = cb_data.split("|", 1)
-                    reply_to = msg_id
-                    try:
-                        opt_idx = int(opt_idx_str)
-                        chat_rows = projects.chat_list(proj["slug"])
-                        for row in reversed(chat_rows):
-                            if row.get("id") == msg_id:
-                                opts = row.get("options") or []
-                                if 0 <= opt_idx < len(opts):
-                                    chosen_text = opts[opt_idx]
-                                break
-                    except ValueError:
-                        pass
-                _deliver_user_reply(proj["slug"], chosen_text, reply_to=reply_to)
+                chosen = _callback_option(proj["slug"], cb_data)
+                if chosen is None:
+                    answer = "expired"
+                elif chosen[1].strip().rstrip(".…").lower() == "ответить":
+                    answer = "reply in the topic"  # the "Reply…" button is a prompt, not an answer
+                else:
+                    _deliver_user_reply(proj["slug"], chosen[1], reply_to=chosen[0])
 
             if cb_id:
-                _api_call("answerCallbackQuery", {"callback_query_id": cb_id})
+                payload = {"callback_query_id": cb_id}
+                if answer:
+                    payload["text"] = answer
+                _api_call("answerCallbackQuery", payload)
 
     # Persist updated offset
     def apply_offset(state):
