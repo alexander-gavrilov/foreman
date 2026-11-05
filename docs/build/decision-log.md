@@ -107,3 +107,22 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   and work repos must stay clean; the rule still reaches every agent on every session start.
 - D42 · At ≥ 90 % the orchestrator is not wound down (it is informed); only workers are. — With Claude at ≥ 90 %
   and Codex not orchestrator-capable, there may be nowhere to hand off.
+
+## Build process (lead decisions during the build)
+
+- D43 · The seven parallel PRs (#4 #6 #7 #8 #9 #10 #11) are merged into one branch `build/integration`, cross-package
+  mismatches fixed there, and the combined code reviewed by area by three independent reviewers (transports/lifecycle/
+  limits/watch/guard; web/Telegram/notify + frontend vs §5.2; init/install/findings/skills/packaging). Merging the
+  integration PR marks the individual PRs merged. — The PRs were built against one contract but in parallel; reviewing
+  them one by one would review code that changes again during integration.
+- D44 · Live Telegram setup and verification go through the control panel relay: foreman-ac → "WIN-TASK <id>:" →
+  foreman-win (Windows, Chrome with web.telegram.org); results return as "WIN-RESULT <id>:". No secrets in a WIN-TASK;
+  the bot token reaches this server by foreman-win running `foreman telegram set-token` on ghome through its Orca env,
+  token on stdin. foreman-win asks the user before any Telegram change. — The build lead must not ask the user, and the
+  Telegram account lives in a browser on another machine.
+- D45 · Windows is not in this build (user decision via the control panel, 13:28); Linux and macOS only. foreman-win is
+  used only for Telegram work and remote-access checks (web UI from another machine over the VPN).
+- D46 · Spec §4.4 (limits) applies to the build itself: at ≥ 90 % of a provider window no new sessions are started there;
+  reviews moved to another provider/instance while Claude was exhausted (14:15–16:30 UTC), and Antigravity's Claude
+  models (exhausted 14:47) were replaced by Gemini 4 Argon in the same worktrees with a handoff message. The lead also
+  rotated at ~290k context (handoff file, old lead kept idle and answerable within the warm-cache window, as in §4.5).
