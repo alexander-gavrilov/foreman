@@ -1,20 +1,29 @@
-"""Transports: `get_transport(kind)` returns a Transport instance.
+"""Transports: `get_transport(kind)` returns a Transport instance from an explicit registry.
 
-Real transports live in foreman/transports/<kind>.py and expose a class named <Kind>Transport
-(OrcaTransport, HerdrTransport); they are imported lazily so a missing one never breaks the others."""
+Each kind maps to (module, class). A module that does not exist yet (another work package) gives a clear
+ValueError instead of an ImportError, and unregistered names can never trigger an arbitrary import."""
 import importlib
+
+REGISTRY = {
+    "orca": ("foreman.transports.orca", "OrcaTransport"),
+    "herdr": ("foreman.transports.herdr", "HerdrTransport"),
+    "claude-msg": ("foreman.transports.claude_msg", "ClaudeMsgTransport"),
+    "fake": ("foreman.transports.fake", "FakeTransport"),
+}
 
 
 def get_transport(kind):
-    if kind == "fake":
-        from foreman.transports.fake import FakeTransport
-        return FakeTransport()
-    if kind and kind.isidentifier() and kind not in ("base", "fake"):
-        try:
-            mod = importlib.import_module("foreman.transports." + kind)
-        except ImportError:
-            mod = None
-        cls = getattr(mod, kind.capitalize() + "Transport", None) if mod else None
-        if cls is not None:
-            return cls()
-    raise ValueError("unknown or unavailable transport: %r" % (kind,))
+    entry = REGISTRY.get(kind) if isinstance(kind, str) else None
+    if entry is None:
+        raise ValueError("unknown transport %r (known: %s)" % (kind, ", ".join(sorted(REGISTRY))))
+    modname, clsname = entry
+    try:
+        mod = importlib.import_module(modname)
+    except ModuleNotFoundError as exc:
+        if exc.name and (modname == exc.name or modname.startswith(exc.name + ".")):
+            raise ValueError("transport %r is not available: module %s does not exist yet" % (kind, modname))
+        raise  # a dependency of the transport module is missing: a real bug, show it
+    cls = getattr(mod, clsname, None)
+    if cls is None:
+        raise ValueError("transport %r is not available: %s has no %s" % (kind, modname, clsname))
+    return cls()
