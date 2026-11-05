@@ -1,6 +1,6 @@
 ---
 name: foreman
-description: Use when working in a project that uses foreman (the SessionStart hook injects the foreman project rule), when you need a scratch/work file, notice a problem with the tooling or a project rule, finish a stage of your task, or when the user says "установи плагин" / "install foreman" / "set up foreman".
+description: "Use when working in a project that uses foreman (the SessionStart hook injects the foreman project rule), when you need a scratch/work file, notice a problem with the tooling or a project rule, finish a stage of your task, or when the user says \"установи плагин\" / \"install foreman\" / \"set up foreman\"."
 ---
 
 # foreman

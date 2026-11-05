@@ -1,6 +1,6 @@
 ---
 name: foreman-orchestrator
-description: Use when you are (or are asked to be) a project's foreman orchestrator session: you coordinate worker sessions, the board and the journal, and never do project work yourself.
+description: "Use when you are (or are asked to be) a project's foreman orchestrator session: you coordinate worker sessions, the board and the journal, and never do project work yourself."
 ---
 
 # foreman orchestrator
