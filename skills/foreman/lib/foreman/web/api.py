@@ -12,8 +12,8 @@ from foreman.web import auth, state_view
 
 logger = logging.getLogger(__name__)
 
-# Static index.html path: ../../web/index.html relative to this file
-_WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web")
+# Static index.html: skills/foreman/web/index.html (this file is skills/foreman/lib/foreman/web/api.py)
+_WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "web")
 _INDEX_PATH = os.path.join(_WEB_DIR, "index.html")
 
 

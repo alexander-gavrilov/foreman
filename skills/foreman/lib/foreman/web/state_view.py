@@ -76,13 +76,12 @@ def _build_limits(cfg):
 
     out = {}
     for prov, meta in providers.items():
-        data = store.read_json(paths.limits_file(prov), {})
-        raw_windows = data.get("windows", {}) if isinstance(data, dict) else {}
+        raw_windows = limits_mod.load_provider_limits(prov)  # {window: {used_pct, resets_at, observed_at}}
 
         windows_list = []
         for def_win in meta["default_windows"]:
             k = def_win["key"]
-            rw = raw_windows.get(k, {}) if isinstance(raw_windows, dict) else {}
+            rw = raw_windows.get(k) or (raw_windows.get("seven_day") if k == "weekly" else None) or {}
             used_pct = rw.get("used_pct")
             resets_at = rw.get("resets_at")
             observed_at = rw.get("observed_at")

@@ -245,6 +245,20 @@ class ServerHttpTest(ForemanTestCase):
         self.assertEqual(status, 200)
         self.assertIn("text/html", hdrs.get("Content-Type", ""))
         self.assertIn("foreman", body)
+        # the real single-file UI shipped in skills/foreman/web/, not the fallback placeholder
+        self.assertGreater(len(body), 5000)
+
+    def test_state_limits_use_recorded_readings(self):
+        from foreman import limits
+        from foreman.web import state_view
+        limits.record_reading("claude", {"seven_day": {"used_pct": 61, "resets_at": "2100-01-01T00:00:00Z"},
+                                         "five_hour": {"used_pct": 42, "resets_at": "2100-01-01T00:00:00Z"}})
+        limits.record_reading("antigravity", {"weekly": {"used_pct": 95, "resets_at": "2100-01-01T00:00:00Z"}})
+        lim = state_view.build_state(version=1)["limits"]
+        self.assertEqual([(w["key"], w["used_pct"]) for w in lim["claude"]["windows"]],
+                         [("weekly", 61), ("five_hour", 42)])
+        self.assertEqual(lim["claude"]["level"], "ok")
+        self.assertEqual(lim["antigravity"]["level"], "stop")
 
     def test_api_state_without_token_returns_401(self):
         status, hdrs, body = self._http("/api/state")
