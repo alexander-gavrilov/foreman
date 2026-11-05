@@ -17,11 +17,68 @@ class StoreTest(ForemanTestCase):
         self.assertEqual(self.store.read_json(self.path, {"x": 1}), {"x": 1})
         self.assertIsNone(self.store.read_json(self.path))
 
-    def test_read_default_when_corrupt(self):
-        os.makedirs(os.path.dirname(self.path))
+    def _write_corrupt(self, text="{not json"):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with open(self.path, "w") as f:
-            f.write("{not json")
-        self.assertEqual(self.store.read_json(self.path, []), [])
+            f.write(text)
+
+    def _aside(self):
+        return [n for n in os.listdir(os.path.dirname(self.path)) if ".corrupt-" in n]
+
+    def test_corrupt_file_is_moved_aside_and_raises(self):
+        self._write_corrupt()
+        with self.assertRaises(self.store.StateCorrupt) as cm:
+            self.store.read_json(self.path, [])
+        self.assertFalse(os.path.exists(self.path))
+        aside = self._aside()
+        self.assertEqual(len(aside), 1)
+        self.assertTrue(aside[0].startswith("b.json.corrupt-"))
+        self.assertIn(aside[0], str(cm.exception))
+        with open(os.path.join(os.path.dirname(self.path), aside[0])) as f:
+            self.assertEqual(f.read(), "{not json")  # evidence is preserved
+        # after quarantine the file is simply missing
+        self.assertEqual(self.store.read_json(self.path, "dflt"), "dflt")
+
+    def test_two_quarantines_do_not_overwrite_each_other(self):
+        for _ in range(2):
+            self._write_corrupt()
+            with self.assertRaises(self.store.StateCorrupt):
+                self.store.read_json(self.path)
+        self.assertEqual(len(self._aside()), 2)
+
+    def test_update_json_on_corrupt_does_not_write(self):
+        self._write_corrupt()
+        with self.assertRaises(self.store.StateCorrupt):
+            self.store.update_json(self.path, lambda d: {"fresh": True}, default={})
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_empty_file_counts_as_corrupt(self):
+        self._write_corrupt("")
+        with self.assertRaises(self.store.StateCorrupt):
+            self.store.read_json(self.path)
+
+    def test_state_corrupt_is_a_foreman_error(self):
+        from foreman import errors
+        self.assertTrue(issubclass(self.store.StateCorrupt, errors.ForemanError))
+
+    def test_write_json_exclusive(self):
+        self.store.write_json_exclusive(self.path, {"a": 1})
+        self.assertEqual(self.store.read_json(self.path), {"a": 1})
+        with self.assertRaises(FileExistsError):
+            self.store.write_json_exclusive(self.path, {"a": 2})
+        self.assertEqual(self.store.read_json(self.path), {"a": 1})
+        leftovers = [n for n in os.listdir(os.path.dirname(self.path)) if n.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
+    def test_rewrite_jsonl_backs_up_when_it_had_corrupt_lines(self):
+        p = os.path.join(self.foreman_home, "j.jsonl")
+        self.store.append_jsonl(p, {"i": 1})
+        with open(p, "a") as f:
+            f.write("garbage\n")
+        self.store.rewrite_jsonl(p, lambda rows: rows)
+        backups = [n for n in os.listdir(self.foreman_home) if n.startswith("j.jsonl.corrupt-")]
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(self.store.read_jsonl(p), [{"i": 1}])
 
     def test_write_roundtrip_and_creates_dirs(self):
         self.store.write_json(self.path, {"k": "значение"})
@@ -104,6 +161,28 @@ class StoreTest(ForemanTestCase):
             self.store.append_jsonl(p, {"i": i})
         self.store.rewrite_jsonl(p, lambda rows: [r for r in rows if r["i"] != 1])
         self.assertEqual([r["i"] for r in self.store.read_jsonl(p)], [0, 2])
+
+
+class StoreMultiProcessTest(ForemanTestCase):
+    def test_update_json_across_processes(self):
+        from foreman import store
+        from tests import mp_workers
+        path = os.path.join(self.foreman_home, "counter.json")
+        store.write_json(path, {"n": 0})
+        mp_workers.run_in_processes(mp_workers.increment, [(path, 25)] * 4)
+        self.assertEqual(store.read_json(path)["n"], 100)
+
+    def test_append_jsonl_across_processes_never_interleaves(self):
+        from foreman import store
+        from tests import mp_workers
+        path = os.path.join(self.foreman_home, "log.jsonl")
+        mp_workers.run_in_processes(mp_workers.append_rows, [(path, t, 30) for t in range(4)])
+        with open(path) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 120)
+        rows = [json.loads(l) for l in lines]  # every line is intact JSON
+        for t in range(4):
+            self.assertEqual([r["i"] for r in rows if r["tag"] == t], list(range(30)))
 
 
 if __name__ == "__main__":

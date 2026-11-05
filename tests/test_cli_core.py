@@ -193,13 +193,87 @@ class BoardCliTest(ForemanTestCase):
         self.cli("board", "set", "t1", "check=exit 4")
         code, out, err = self.cli("board", "done", "t1")
         self.assertEqual(code, 1)
-        code, out, err = self.cli("board", "set", "t1", "check=true")
-        code, out, err = self.cli("board", "done", "t1")
+        task = json.loads(self.cli("board", "show", "--json")[1])["tasks"][0]
+        self.assertEqual(task["status"], "open")
+        self.assertEqual(task["check"]["exit_code"], 4)
+
+    def test_done_check_flag_cannot_replace_a_stored_check(self):
+        self.cli("board", "add", "A")
+        self.assertEqual(self.cli("board", "set", "t1", "check=false")[0], 0)
+        code, out, err = self.cli("board", "done", "t1", "--check", "touch PWNED")
+        self.assertEqual(code, 1)                               # the stored (failing) check ran
+        self.assertFalse(os.path.exists(os.path.join(self.cwd, "PWNED")))
+        task = json.loads(self.cli("board", "show", "--json")[1])["tasks"][0]
+        self.assertEqual(task["status"], "open")
+        self.assertEqual(task["check"]["cmd"], "false")
+        self.assertIn("ignored", err)
+
+    def test_done_check_flag_may_set_a_check_when_none_is_stored(self):
+        self.cli("board", "add", "A")
+        code, out, err = self.cli("board", "done", "t1", "--check", "false")
+        self.assertEqual(code, 1)
+        task = json.loads(self.cli("board", "show", "--json")[1])["tasks"][0]
+        self.assertEqual(task["check"]["cmd"], "false")
+        # now the check is stored: a different --check no longer replaces it
+        code, out, err = self.cli("board", "done", "t1", "--check", "true")
+        self.assertEqual(code, 1)
+
+    def test_same_check_flag_as_stored_is_fine(self):
+        self.cli("board", "add", "A")
+        self.cli("board", "set", "t1", "check=true")
+        code, out, err = self.cli("board", "done", "t1", "--check", "true")
         self.assertEqual(code, 0, err)
+        self.assertNotIn("ignored", err)
+
+    def test_set_check_cannot_replace_a_stored_check(self):
+        self.cli("board", "add", "A")
+        self.assertEqual(self.cli("board", "set", "t1", "check=false")[0], 0)
+        code, out, err = self.cli("board", "set", "t1", "check=true")
+        self.assertEqual(code, 2)
+        self.assertIn("check", err)
+        self.assertEqual(self.cli("board", "done", "t1")[0], 1)
+
+    def test_corrupt_board_is_reported_not_overwritten(self):
+        self.cli("board", "add", "A")
+        board = os.path.join(self.foreman_home, "projects/demo/board.json")
+        with open(board, "w") as f:
+            f.write("{broken")
+        code, out, err = self.cli("board", "add", "B")
+        self.assertEqual(code, 1)
+        self.assertIn("corrupt", err)
+        self.assertIn("board.json.corrupt-", err)
+        self.assertFalse(os.path.exists(board))
+        self.assertTrue([n for n in os.listdir(os.path.dirname(board)) if n.startswith("board.json.corrupt-")])
+        self.assertNotIn("Traceback", err)
+
 
     def test_done_unknown_task(self):
         code, out, err = self.cli("board", "done", "t5")
         self.assertEqual(code, 2)
+
+
+class AmbiguityCliTest(ForemanTestCase):
+    def test_cliutil_find_session_scopes_to_caller_project(self):
+        from foreman import sessions, cliutil
+        a = self.init_project("alpha")
+        b = self.init_project("beta")
+        sa = sessions.create_session("alpha", "claude", title="api")
+        sb = sessions.create_session("beta", "claude", title="api")
+        os.chdir(a["path"])
+        self.addCleanup(os.chdir, self.tmp)
+        ns = type("A", (), {"project": None})()
+        self.assertEqual(cliutil.find_session("api", ns)["sid"], sa["sid"])
+        ns.project = "beta"
+        self.assertEqual(cliutil.find_session("api", ns)["sid"], sb["sid"])
+        os.chdir(self.work)
+        ns.project = None
+        with self.assertRaises(cliutil.CliError) as cm:
+            cliutil.find_session("api", ns)
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn(sa["sid"], cm.exception.message)
+        self.assertIn(sb["sid"], cm.exception.message)
+        with self.assertRaises(cliutil.CliError):
+            cliutil.find_session("missing", ns)
 
 
 class LogCliTest(ForemanTestCase):

@@ -5,7 +5,7 @@ import importlib
 import sys
 
 from foreman import __version__
-from foreman.cliutil import CliError
+from foreman.errors import ForemanError
 
 COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "board", "log",
             "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
@@ -69,7 +69,7 @@ def main(argv=None):
         code = args._run(args)
         sys.stdout.flush()
         return int(code or 0)
-    except CliError as err:
+    except ForemanError as err:
         sys.stderr.write("foreman: %s\n" % err.message)
         return err.code
     except BrokenPipeError:

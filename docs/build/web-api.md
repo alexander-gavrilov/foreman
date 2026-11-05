@@ -40,8 +40,8 @@ The weekly window is always first in `windows`. A window with `used_pct: null` i
     {"id": "m-1a2b3c", "ts": "...", "from": "orchestrator|user|foreman", "channel": "web|telegram|cli|system",
      "text": "...", "question": true, "options": ["Да", "Нет", "Ответить…"], "answered_by": null}
   ],
-  "board": {"tasks": [{"id": "t-1", "title": "...", "stage": "...", "owner": "fm-api (s-1a2b3c)", "next": "...",
-            "links": [{"label": "PR #12", "url": "https://..."}], "status": "active|done"}]},
+  "board": {"tasks": [{"id": "t1", "title": "...", "stage": "...", "owner": "fm-api (s-1a2b3c)", "next": "...",
+            "links": [{"label": "PR #12", "url": "https://..."}], "status": "open|blocked|waiting|done"}]},
   "sessions": [{"sid": "s-1a2b3c", "title": "fm-api", "agent": "claude", "model": "sonnet-5-5", "role": "worker",
                 "owner": "orchestrator|user", "state": "busy", "state_age": "3m", "context_tokens": 152000,
                 "context_level": "ok|warn|unknown", "replaces": null, "replaced_by": null}],
@@ -50,6 +50,11 @@ The weekly window is always first in `windows`. A window with `used_pct: null` i
 ```
 Chat is the last 200 messages, oldest first. Only `question: true` messages carry `options`; the option
 "Ответить…" means "focus the reply box".
+
+Board tasks are exactly the records of `board.json`: ids are `t1`, `t2`, … (never reused). `status` is one of
+`open` (default; the UI treats it as active), `blocked`, `waiting`, `done`. `done` is only reachable through
+`foreman board done`, which runs the task's stored objective check first (the check can be set once and not replaced).
+Each task may also carry `check` (`{cmd, exit_code, tail, ran_at}`) and `updated_at`.
 
 ## POST /api/projects/<slug>/messages
 Body `{"text": "...", "reply_to": "m-1a2b3c"?, "option": "Да"?}` → `{"ok": true, "id": "m-...", "delivery": "delivered|queued|terminal_gone"}`.
