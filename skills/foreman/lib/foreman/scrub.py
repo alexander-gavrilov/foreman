@@ -114,12 +114,11 @@ def _omit_content(text):
 
 
 _TLDS = ("com org net io ai co me tv xyz dev app cloud tech online site store info biz edu gov mil int "
-         "uk de fr ru ua us nl se no fi it es cz jp cn in br au ca eu ch at be dk ie il kr tr tw hk sg nz za mx ar cl "
+         "uk de fr ru ua us nl se no fi it es cz jp cn in br au ca eu ch at be dk ie il kr tr tw hk sg nz za mx ar cl pl "
          "lan local internal corp arpa example test invalid localhost home").split()
 # A two-label name whose last label is also an everyday code/English word (`log.info`, `self.id`, `x.in`) is not
 # taken for a host unless it has three or more labels; the unambiguous TLDs always count.
-_AMBIGUOUS_TLDS = frozenset("info in it no is at be me us tv ai co app dev site store online tech int mil gov edu "
-                            "biz cl ar ch se fi es tr tw hk sg nz za mx au ca eu dk ie il kr cn br cz jp".split())
+_AMBIGUOUS_TLDS = frozenset("info in it no is at be me us id".split())  # R5-2: real TLDs (.ai .dev .app .ch ..) are hosts
 _FQDN = re.compile(r"(?<![\w@/.:-])(?:[A-Za-z0-9][A-Za-z0-9-]*\.)+(?:%s)(?![\w-]|\.[A-Za-z0-9])" % "|".join(_TLDS), re.I)
 _HOSTY_LABEL = re.compile(r"(?i)^(?:www|mail|smtp|db\d*|git|api|ns\d*|vpn|wiki|jira|ci|[a-z]+\d+|[\w]+-[\w-]+)$")
 _WILD_HOST = re.compile(r"\*\.(?:[A-Za-z0-9-]+\.)*(?:%s)(?![\w-])" % "|".join(_TLDS), re.I)
@@ -127,7 +126,16 @@ _HOST_PORT = re.compile(r"(?<![\w./@:-])([A-Za-z][A-Za-z0-9-]*):(\d{2,5})(?![\w:
 _COMMON_PORTS = frozenset("22 25 53 80 110 143 389 443 465 587 636 993 995 1433 1521 2181 2375 2376 3000 3306 4000 "
                           "5000 5432 5672 6379 7000 8000 8008 8080 8081 8443 8888 9000 9092 9200 11211 27017".split())
 _IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w]|\.\d)")
-_VERSION_BEFORE = re.compile(r"(?:\bv|\bversion\s*|\bver\.?\s*|\bpython\s*|\bnode\s*|==|>=|<=|~=|\bbuild\s*|\b(?:foreman|release|claude|codex|orca|herdr|gemini|agy|cli)\s+)$", re.I)
+_VERSION_STRICT = re.compile(r"(?:\bv|\bversion\s*|\bver\.?\s*|\bpython\s*|==|>=|<=|~=|\bbuild\s*)$", re.I)
+_VERSION_PRODUCT = re.compile(r"\b(?:foreman|release|claude|codex|orca|herdr|gemini|agy|cli|node)\s+$", re.I)
+
+
+def _private_ip(text):
+    a, b = (int(x) for x in text.split(".")[:2])
+    return a in (0, 10, 127) or a >= 224 or (a, b) == (192, 168) or (a == 172 and 16 <= b <= 31) \
+        or (a, b) == (169, 254) or (a == 100 and 64 <= b <= 127)
+
+
 _IPV6 = re.compile(r"(?<![\w:])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}"
                    r"|(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?"
                    r"|::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6}))(?![\w:])")
@@ -151,9 +159,34 @@ _SECRET_PATTERNS = (
     r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}",
     r"(?i)\b(?:password|passwd|passphrase|pwd)\s+(?:is|was|=|:)\s+(?!(?:wrong|empty|required|missing|incorrect|"
     r"correct|invalid|set|not|the|a|an|too)\b)\S+",   # "the password is hunter2"
-    r"(?i)\b(?:secret|token|api[_-]?key)\s+(?:is|was)\s+(?=\S*\d)\S{6,}",
     r"(?<=://)[^\s/:@]+:[^\s/@]+(?=@)",              # user:password@ in a URL
 )
+# words that follow "the token is ..." in plain prose; anything else after is/was is taken for a value (R5-2)
+PLAIN_AFTER_IS = frozenset(
+    "a an the not no yes none null nil unset empty blank missing required wrong incorrect correct invalid valid set "
+    "too stored expired revoked rotated unknown stale old new used unused leaked exposed visible hidden shown "
+    "printed logged sent saved written read ok fine fixed deleted created refreshed always never also only still "
+    "already now then passed failed rejected accepted allowed denied found lost long short value val string str "
+    "int true false x y xxx redacted there here this that it in on at to of for from by with without and or but "
+    "is was be being been so if when after before because until while as like just very really".split())
+_KNOWN_ANGLE = frozenset("<value> <val> <secret> <redacted> <token> <password> <key> <string> <id> <name> "
+                         "<your-token> <your-key> <api-key> <path> <project> <email> <host> <url> <repo>".split())
+_IS_SECRET = re.compile(r"(?i)\b((?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|private[_-]?key|"
+                        r"credentials?)\s+(?:is|was)\s+)([^\s,;]+)")
+
+
+def _known_placeholder(value):
+    v = value.strip().rstrip(".,;)}]").lower()
+    return v.startswith(_L) or v in _KNOWN_ANGLE or v in {"<%s>" % k for k in PLACEHOLDERS}
+
+
+def _is_secret(m):
+    value = m.group(2)
+    if _known_placeholder(value) or value.strip(".,;:!?)\"'").lower() in PLAIN_AFTER_IS:
+        return m.group(0)
+    return m.group(1) + _tok("secret")
+
+
 # key=value / key: value / --flag=value / "key": "value" where the key names a secret
 _KV = re.compile(r"""(?i)(?<![\w])(--)?([\w-]*?(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential|key)[\w-]*)
                      (["']?)\s*[=:]\s*(?:"([^"\n]*)"|'([^'\n]*)'|(\S+))""", re.X)
@@ -168,7 +201,7 @@ def _kv_secret(m):
     name, quote = m.group(2), m.group(3)
     value = next((g for g in (m.group(4), m.group(5), m.group(6)) if g is not None), "")
     bare = value.strip().rstrip(",;.)}]")
-    if not bare or bare.lower() in _NOT_A_VALUE or bare.startswith(("<", _L)):
+    if not bare or bare.lower() in _NOT_A_VALUE or _known_placeholder(bare):
         return m.group(0)
     if _KEY_NOT_SECRET.search(name):
         return m.group(0)
@@ -195,13 +228,31 @@ _TOKENISH = re.compile(r"(?<![\w/.-])[A-Za-z0-9+_=-]{24,}(?![\w/])")
 _READABLE_SEG = re.compile(r"^[A-Za-z]+\d{0,2}$")
 
 
+def _class(ch):
+    return "l" if ch.islower() else "u" if ch.isupper() else "d" if ch.isdigit() else "o"
+
+
+def _transition_density(seg):
+    """Share of adjacent characters that change class (lower / upper / digit): `aBcDeF` and `Ab12Cd34` are high,
+    words and CamelCase names are low."""
+    if len(seg) < 2:
+        return 0.0
+    return sum(1 for a, b in zip(seg, seg[1:]) if _class(a) != _class(b)) / (len(seg) - 1)
+
+
+def _random_segments(token):
+    return any(len(seg) >= 8 and _transition_density(seg) >= 0.45 for seg in re.split(r"[_\-/.+=]+", token))
+
+
 def _looks_random(token, min_len=24, min_entropy=3.6):
     if len(token) < min_len or not any(c.isalpha() for c in token):
         return False
+    if _random_segments(token):
+        return True  # mixed case / letter-digit flips inside a segment (R5-2)
     has_digit = any(c.isdigit() for c in token)
     if not (has_digit or any(c in "+/=" for c in token)):
         return False
-    segs = [x for x in re.split(r"[_-]+", token) if x]
+    segs = [x for x in re.split(r"[_/-]+", token) if x]
     if len(segs) > 1 and all(_READABLE_SEG.match(x) and len(x) <= 14 for x in segs):
         return False  # snake_case / kebab-case identifier made of short words
     if token.startswith(_L):
@@ -214,7 +265,8 @@ def _generic_token(m):
 
 
 _WIN_PATH = re.compile(r"(?<![\w])(?:[A-Za-z]:[\\/]|\\\\[\w.$-]+[\\/])[^\s'\"`)\]>,;]*")
-_ABS_PATH = re.compile(r"(?<![\w.:/\\<>~-])/(?:[\w.@+~%-]+/)*[\w.@+~%-]+(?:/[^\s'\"`)\]>,;:]*)?")
+_ABS_PATH = re.compile(r"(?<![\w./\\<>~-])/(?:[\w.@+~%-]+/)*[\w.@+~%-]+(?:/[^\s'\"`)\]>,;:]*)?")
+_DOT_PATH = re.compile(r"(?<![\w./\\~:@-])(?:\.{1,2}/)+[\w.@+%-]+(?:/[\w.@+%-]+)*/?")
 _REL_PATH = re.compile(r"(?<![\w./\\~:@-])[\w@+%-][\w.@+%-]*(?:/[\w.@+%-]+)+/?(?![\w])")
 _SSH_REMOTE = re.compile(r"(?<![\w.-])[\w.-]+@[\w.-]+:(?!//)[^\s'\"`)\]>,;]+")
 
@@ -279,13 +331,20 @@ def scrub(text, ctx=None):
     # secrets before anything that could split them (paths, ids, hosts)
     for pat in _SECRET_PATTERNS:
         text = re.sub(pat, _tok("secret"), text)
+    text = _IS_SECRET.sub(_is_secret, text)
     text = _KV.sub(_kv_secret, text)
 
     text = _SSH_REMOTE.sub(_tok("repo"), text)
     text = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", _tok("email"), text)
     def ipv4(m):  # a version number (`v1.2.3.4`, `python 3.12.1.2`) is not an address
-        return m.group(0) if _VERSION_BEFORE.search(m.string[max(0, m.start() - 12):m.start()]) \
-            or m.group(0).split(".")[0] in ("0", "00") else _tok("host")
+        before = m.string[max(0, m.start() - 12):m.start()]
+        if any(int(x) > 255 for x in m.group(0).split(".")) or m.group(0).split(".")[0] in ("0", "00"):
+            return m.group(0)
+        if _VERSION_STRICT.search(before):
+            return m.group(0)
+        if _VERSION_PRODUCT.search(before) and not _private_ip(m.group(0)):
+            return m.group(0)  # `foreman 3.12.1.2`; a private address after a product name is a host
+        return _tok("host")
     text = _IPV4.sub(ipv4, text)
     text = _IPV6.sub(_tok("host"), text)
 
@@ -300,6 +359,7 @@ def scrub(text, ctx=None):
     text = _WIN_PATH.sub(_tok("path"), text)
     text = _ABS_PATH.sub(_tok("path"), text)
     text = re.sub(r"(?<![\w/])~[\w.-]*/[^\s'\"`)\]>,;:]*", _tok("path"), text)
+    text = _DOT_PATH.sub(_tok("path"), text)
     text = _REL_PATH.sub(_relative_path, text)
 
     for name in sorted(set(ctx.get("names", [])), key=len, reverse=True):
@@ -340,32 +400,117 @@ def scrub(text, ctx=None):
     return _finalize(text)
 
 
-# ---------------------------------------------------------------- the gate (D56)
+# ---------------------------------------------------------------- the gate (D56, D58)
+# The gate is the safety boundary, the scrubber only makes reports readable (D58): after taking away what is known
+# to be harmless (foreman's own paths, slug and URLs, placeholders, plain version numbers) every remaining token
+# must look like ordinary prose. A false draft is cheap, a false public issue is not.
 
 MIN_USEFUL_CHARS = 20
 _RESIDUAL_SECRET = (
     re.compile(r"-----BEGIN"),
     re.compile(r"(?i)\bauthorization\s*[:=]"),
-    re.compile(r"(?i)\b(?:password|passwd|passphrase|pwd|secret|api[_-]?key|private[_-]?key|credential)s?[\"']?\s*[:=]\s*"
-               r"[\"']?(?!<)[^\s\"'<]{3,}"),
     re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"://[^\s/@]+:[^\s/@]+@"),
 )
+_SECRET_PHRASE = re.compile(r"(?i)(?<![\w])(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|private[_-]?key|"
+                            r"credential|key)s?[\"']?\s*(is|was|[:=])\s*[\"'`]?([^\s,;\"'`)]*)")
+_ANY_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>\"'`]+")
+_VERSION_PLAIN = re.compile(r"(?<![\w.])v?\d+(?:\.\d+){1,2}(?:-?(?:rc|alpha|beta|a|b|dev)\d*)?(?![\w]|\.\d)")
+_VERSION_WORDED = re.compile(r"(?i)\b(?:v|version\s+|ver\.?\s*|python\s+)\d+(?:\.\d+){3}(?![\w.])")
+_GATE_SPLIT = re.compile(r"[\s,;()\[\]{}\"'`|<>*=!?\u00ab\u00bb\u2192\u00b7\u2014\u2013]+")
+_HOST_PORT_GATE = re.compile(r"(?<![\w./@:-])([A-Za-z][A-Za-z0-9._-]*):(\d{2,5})(?![\w:])")
+_PORT_LABELS = frozenset("line lines col column pid port ports exit code rc step status".split())
+_PROSE_SLASH = frozenset(
+    "and/or read/write on/off yes/no input/output true/false either/or he/she pass/fail start/stop client/server i/o "
+    "ci/cd tcp/ip w/o n/a up/down open/close enable/disable add/remove push/pull before/after request/response "
+    "stdin/stdout stdout/stderr s/he lead/orchestrator orchestrator/worker worker/orchestrator user/web".split())
+_DOT_PROSE = frozenset("e.g i.e a.m p.m etc vs github.com".split())
+_PLAIN_DOTTED = re.compile(r"^\d+(?:\.\d+)+[%a-z]{0,3}$")
+_GENERIC_FILES = frozenset("events.jsonl settings.json settings.local.json hooks.json inbox.jsonl".split())
+
+
+def _foreman_modules():
+    root = os.path.dirname(os.path.abspath(__file__))
+    names = set()
+    for base, _dirs, files in os.walk(root):
+        for f in files:
+            if f.endswith(".py"):
+                names.add(f[:-3])
+        names.add(os.path.basename(base))
+    names.discard("__init__")
+    return frozenset(n for n in names if n)
+
+
+_MODULES = _foreman_modules()
+
+
+def _prose_dotted(tok):
+    if tok.lower() in _DOT_PROSE or tok in _GENERIC_FILES or _PLAIN_DOTTED.match(tok):
+        return True
+    parts = tok.split(".")
+    if parts[0] == "foreman" and len(parts) > 1 and parts[1] in _MODULES and all(re.match(r"^\w+$", x) for x in parts):
+        return True
+    return len(parts) == 2 and parts[1] == "py" and parts[0] in _MODULES  # `watch.py`
+
+
+def _unsafe_token(raw):
+    """Reason a single whitespace-free token is not ordinary prose, else None."""
+    tok = raw.strip(".:;-_#\u2026")
+    if raw.startswith(".") and len(raw) > 1 and not set(raw) <= {"."}:
+        tok = raw.rstrip(".:;")  # `.env`, `.claude`: a hidden name, not an ellipsis
+    if not tok or set(tok) <= set("./-_:#"):
+        return None
+    if _FOREMAN_OWN_PATH.match(tok):
+        return None
+    if "/" in tok or "\\" in tok:
+        low = tok.strip("/").lower()
+        if low in _PROSE_SLASH or re.match(r"^\d+(?:/\d+)+$", low):
+            return None
+        return "path-like token remains after scrubbing"
+    if "." in tok and not _prose_dotted(tok):
+        return "dotted name remains after scrubbing"
+    if len(tok) >= 16 and (_random_segments(tok) or _looks_random(tok, min_len=16, min_entropy=3.4)):
+        return "high-entropy token remains after scrubbing"
+    return None
 
 
 def gate(scrubbed):
-    """Fail-safe check of the text AFTER scrubbing (D56). Returns None when it may leave the machine on its own,
-    else a short reason: it still holds high-entropy / secret-like content, or too little useful text survived
-    (placeholders and punctuation do not count). The caller keeps such a finding as a local draft."""
+    """Fail-safe check of the text AFTER scrubbing (D56, D58). Returns None when it may leave the machine on its own,
+    else a short reason: after removing what is known to be harmless every remaining token must look like plain
+    prose (no path separator, host, port, IP address, dotted name, secret-like phrase or random-looking token), and
+    enough useful text must survive (placeholders and punctuation do not count). The caller keeps such a finding
+    as a local draft. Known limit: an unregistered project name in plain prose cannot be recognised."""
     text = scrubbed or ""
     for pat in _RESIDUAL_SECRET:
         if pat.search(text):
             return "secret-like text remains after scrubbing"
-    for m in re.finditer(r"[A-Za-z0-9+/_=-]{20,}", text):
-        if _looks_random(m.group(0), min_len=20, min_entropy=3.4):
-            return "high-entropy token remains after scrubbing"
-    plain = re.sub(r"<(?:%s)>" % "|".join(re.escape(k) for k in PLACEHOLDERS), " ", text)
-    useful = re.sub(r"[\W_]+", "", plain)
+    # take away what is allowed to stay
+    def allowed_url(m):
+        u = m.group(0).rstrip(".,;:!?)]}>'\"")
+        return " " if _keep_url(u) else m.group(0)
+    text = _ANY_URL.sub(allowed_url, text)
+    if "://" in text:
+        return "url remains after scrubbing"
+    text = re.sub(r"(?<![\w./-])" + re.escape(ALLOWED_SLUG) + r"(?![\w./-])", " ", text)
+    text = re.sub(r"<(?:%s)>" % "|".join(re.escape(k) for k in PLACEHOLDERS), " ", text)
+    for m in _SECRET_PHRASE.finditer(text):
+        value = m.group(2)
+        v = value.strip(".!?").lower()
+        if v and not _known_placeholder(value) and v not in PLAIN_AFTER_IS:
+            return "secret-like text remains after scrubbing"
+    text = re.sub(r"<(?:%s)>" % "|".join(re.escape(k.strip("<>")) for k in _KNOWN_ANGLE), " ", text)
+    plain = text
+    text = _VERSION_WORDED.sub(" ", _VERSION_PLAIN.sub(" ", text))
+    if _IPV4.search(text) or _IPV6.search(text):
+        return "IP address remains after scrubbing"
+    for m in _HOST_PORT_GATE.finditer(text):
+        if m.group(1).lower() not in _PORT_LABELS:
+            return "host:port remains after scrubbing"
+    for raw in _GATE_SPLIT.split(text):
+        reason = _unsafe_token(raw)
+        if reason:
+            return reason
+    useful = re.sub(r"[\W_]+", "", re.sub(r"<(?:%s)>" % "|".join(re.escape(k) for k in PLACEHOLDERS), " ", plain))
     if len(useful) < MIN_USEFUL_CHARS:
         return "too little useful text survived scrubbing (%d characters)" % len(useful)
     return None
