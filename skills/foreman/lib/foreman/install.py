@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from xml.sax.saxutils import escape
@@ -142,6 +143,16 @@ def _swap_command(path, data, text, old, new):
         f.write(out)
 
 
+def _backup(path, backup):
+    """Copy `path` to `backup` with the same permissions from the start (settings files can hold API keys)."""
+    with open(path, "rb") as src:
+        data = src.read()
+    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as dst:
+        dst.write(data)
+    os.chmod(backup, stat.S_IMODE(os.stat(path).st_mode))
+
+
 def tap_statuslines(fm, home=None):
     changes = []
     for agent, parts in STATUSLINES:
@@ -157,7 +168,7 @@ def tap_statuslines(fm, home=None):
             continue
         backup = path + ".foreman-bak"
         if original is None and not os.path.exists(backup):
-            shutil.copyfile(path, backup)
+            _backup(path, backup)
         _swap_command(path, data, text, cmd, new)
         changes.append("tapped the %s statusline (%s)" % (agent, path))
     return changes
@@ -175,7 +186,13 @@ def untap_statuslines(home=None):
             continue
         _swap_command(path, data, text, cmd, original)
         backup = path + ".foreman-bak"
-        if _read(backup) is not None and _load_settings(backup)[1] == _read(path):
+        saved, saved_text = _load_settings(backup)
+        if saved_text is not None and saved is not None and saved == _load_settings(path)[0]:
+            # same settings as before the tap: put the original bytes back (formatting, escapes) and drop the copy
+            with open(backup, "rb") as f:
+                raw = f.read()
+            with open(path, "wb") as f:
+                f.write(raw)
             os.unlink(backup)
         changes.append("restored the %s statusline (%s)" % (agent, path))
     return changes

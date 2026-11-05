@@ -31,7 +31,7 @@ def snapshot(root):
     return out
 
 
-class InstallTest(ForemanTestCase):
+class _InstallBase(ForemanTestCase):
     def setUp(self):
         super().setUp()
         os.environ.pop("FOREMAN_INSTALL_DRY_SERVICES", None)
@@ -44,6 +44,8 @@ class InstallTest(ForemanTestCase):
     def sl(self, path):
         return json.load(open(path))["statusLine"]["command"]
 
+
+class InstallTest(_InstallBase):
     def test_linux_round_trip(self):
         before = snapshot(self.home)
         r = Runner()
@@ -242,3 +244,35 @@ class StatuslineWrapTest(ForemanTestCase):
 
     def test_exit_status_of_the_original_is_kept(self):
         self.assertEqual(self.run_wrapped("exit 7", "{}").returncode, 7)
+
+
+class StatuslineBackupTest(_InstallBase):
+    """F8/F9 (review 3c): the backup keeps the file's permissions; uninstall is byte-identical even when the
+    command literal is not stored verbatim in the file."""
+
+    def test_backup_keeps_the_source_permissions(self):
+        os.chmod(self.claude, 0o600)
+        install.install(platform="linux", runner=Runner())
+        self.assertEqual(os.stat(self.claude + ".foreman-bak").st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(self.claude).st_mode & 0o777, 0o600)
+
+    def test_uninstall_is_byte_identical_for_an_escaped_command_literal(self):
+        original = ('{\n    "env": {"ANTHROPIC_API_KEY": "k"},\n    "statusLine": {\n        "type": "command",\n'
+                    '        "command": "echo caf\\u00e9 | cat"\n    }\n}\n')
+        with open(self.claude, "w") as f:
+            f.write(original)
+        install.install(platform="linux", runner=Runner())
+        self.assertIn("tap statusline", self.sl(self.claude))
+        install.uninstall(platform="linux", runner=Runner())
+        self.assertEqual(open(self.claude, "rb").read(), original.encode())
+        self.assertFalse(os.path.exists(self.claude + ".foreman-bak"))
+
+    def test_changed_settings_keep_the_backup_for_the_user(self):
+        install.install(platform="linux", runner=Runner())
+        data = json.load(open(self.claude))
+        data["theme"] = "light"  # the user edited the file after install
+        json.dump(data, open(self.claude, "w"))
+        install.uninstall(platform="linux", runner=Runner())
+        self.assertEqual(json.load(open(self.claude))["theme"], "light")
+        self.assertEqual(self.sl(self.claude), "bash ~/sl.sh")
+        self.assertTrue(os.path.exists(self.claude + ".foreman-bak"))
