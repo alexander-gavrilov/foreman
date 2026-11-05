@@ -222,3 +222,15 @@ class N11InitRemoveTest(_GitSubfolderBase):
                     "/usr/bin/foremanx hook --agent claude --event Stop", "foreman-audit hook --agent claude --event Stop"):
             self.assertFalse(initproj._is_foreman_handler({"command": cmd}), cmd)
 
+
+
+class N12TopbarCssTest(RuntimeCase):
+    """Checked in a real Chromium at 390 px (project title 83 px instead of 22 px); this guards the rule."""
+
+    def test_phone_topbar_keeps_a_readable_project_title_and_shrinks_unknown_limits(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "skills", "foreman", "web", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        phone = html[html.index("@media (max-width: 640px)"):]
+        self.assertRegex(phone, r"\.mobile-proj-title\s*\{[^}]*min-width:\s*9ch")
+        self.assertRegex(phone, r"\.limit-pct\.unknown\s*\{[^}]*font-size:\s*0")

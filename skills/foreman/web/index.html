@@ -1021,6 +1021,23 @@
     .topbar-right {
       gap: 6px;
     }
+    /* N12: the project title keeps a readable minimum width; unknown limits give up their text first */
+    .brand-group {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .mobile-proj-title {
+      min-width: 9ch;
+      flex-shrink: 0;
+      max-width: 40vw;
+    }
+    .limit-pct.unknown {
+      font-size: 0;
+    }
+    .limit-pct.unknown::after {
+      content: "?";
+      font-size: 12px;
+    }
     .limits-group {
       gap: 4px;
     }
