@@ -1,6 +1,7 @@
 """Tests for foreman web: address filter, auth, state_view, HTTP server, SSE, and CLI."""
 import http.cookiejar
 import json
+from unittest import mock
 import os
 import secrets
 import socket
@@ -456,6 +457,9 @@ class ServerHttpTest(ForemanTestCase):
             def sendall(self, data):
                 self._wfile.write(data)
 
+            def settimeout(self, value):
+                pass
+
         sock = MockSocket(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
         handler = ForemanRequestHandler(sock, ("8.8.8.8", 50000), self.server)
         response_bytes = sock._wfile.getvalue()
@@ -557,6 +561,66 @@ class ServerHttpTest(ForemanTestCase):
         self.write_config({"web": {"base_url": "https://foreman.example:8443"}})
         self.assertEqual(post("https://foreman.example:8443"), 200)
         self.assertEqual(post("https://foreman.example"), 403)
+
+    def _raw(self, request_bytes, read_timeout=3):
+        import socket
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=read_timeout)
+        try:
+            sock.sendall(request_bytes)
+            chunks = []
+            while True:
+                try:
+                    data = sock.recv(65536)
+                except socket.timeout:
+                    return b"".join(chunks) or None
+                if not data:
+                    break
+                chunks.append(data)
+            return b"".join(chunks)
+        finally:
+            sock.close()
+
+    def _authed_post_raw(self, slug, body, content_length):
+        from foreman.web import auth
+        code, _ = auth.create_pairing_code()
+        _, tok, _ = auth.exchange_pairing_code(code)
+        head = ("POST /api/projects/%s/messages HTTP/1.0\r\nHost: 127.0.0.1:%d\r\nAuthorization: Bearer %s\r\n"
+                "Content-Type: application/json\r\nContent-Length: %s\r\n\r\n" % (slug, self.port, tok, content_length))
+        return self._raw(head.encode() + body)
+
+    def test_post_body_validation(self):
+        self.init_project("bodyproj")
+        for body in (b'[1,2]', b'"text"', b'42', b'null', b'{bad'):
+            resp = self._authed_post_raw("bodyproj", body, len(body))
+            self.assertIsNotNone(resp, body)
+            self.assertIn(b" 400 ", resp.split(b"\r\n", 1)[0], body)
+        # a negative, non-numeric or oversized Content-Length is refused without reading
+        resp = self._authed_post_raw("bodyproj", b"", "-1")
+        self.assertIn(b" 400 ", resp.split(b"\r\n", 1)[0])
+        resp = self._authed_post_raw("bodyproj", b"", "abc")
+        self.assertIn(b" 400 ", resp.split(b"\r\n", 1)[0])
+        resp = self._authed_post_raw("bodyproj", b"", str(64 * 1024 + 1))
+        self.assertIn(b" 413 ", resp.split(b"\r\n", 1)[0])
+        # the server is still fine afterwards
+        body = b'{"text":"ok"}'
+        resp = self._authed_post_raw("bodyproj", body, len(body))
+        self.assertIn(b" 200 ", resp.split(b"\r\n", 1)[0])
+
+    def test_stalled_client_is_dropped_by_the_socket_timeout(self):
+        from foreman.web import server
+        self.assertTrue(server.ForemanRequestHandler.timeout)
+        with mock.patch.object(server.ForemanRequestHandler, "timeout", 0.4):
+            import socket
+            import time
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            try:
+                sock.sendall(b"GET /api/state HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Slow: ")  # headers never finish
+                t0 = time.time()
+                data = sock.recv(1024)  # the server closes the connection instead of waiting for ever
+                self.assertEqual(data, b"")
+                self.assertLess(time.time() - t0, 3)
+            finally:
+                sock.close()
 
     def test_pairing_rate_limit_429(self):
         # 5 failed attempts per minute per client IP -> 429 on subsequent attempts

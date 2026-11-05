@@ -157,13 +157,33 @@ def handle_project_detail(handler, slug):
     _send_json(handler, 200, p_detail)
 
 
-def handle_post_message(handler, slug):
+MAX_BODY_BYTES = 64 * 1024
+
+
+def _read_json_object(handler):
+    """The request body as a dict, or None after answering 400/413 (never reads past MAX_BODY_BYTES)."""
+    raw_len = (handler.headers.get("Content-Length") or "0").strip()
+    if not raw_len.isdigit():  # negative, empty or non-numeric
+        _send_json(handler, 400, {"ok": False, "error": "invalid Content-Length"})
+        return None
+    content_length = int(raw_len)
+    if content_length > MAX_BODY_BYTES:
+        _send_json(handler, 413, {"ok": False, "error": "request body too large (max %d bytes)" % MAX_BODY_BYTES})
+        return None
     try:
-        content_length = int(handler.headers.get("Content-Length", 0))
-        body = handler.rfile.read(content_length)
-        payload = json.loads(body.decode("utf-8"))
+        payload = json.loads(handler.rfile.read(content_length).decode("utf-8"))
     except Exception as exc:
         _send_json(handler, 400, {"ok": False, "error": "invalid json: %s" % exc})
+        return None
+    if not isinstance(payload, dict):
+        _send_json(handler, 400, {"ok": False, "error": "json body must be an object"})
+        return None
+    return payload
+
+
+def handle_post_message(handler, slug):
+    payload = _read_json_object(handler)
+    if payload is None:
         return
 
     text = payload.get("text")

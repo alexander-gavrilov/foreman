@@ -205,6 +205,9 @@ class StateMonitor(threading.Thread):
 class ForemanRequestHandler(BaseHTTPRequestHandler):
     """BaseHTTPRequestHandler with client IP filtering and routing to api.dispatch."""
 
+    # socket read timeout in seconds: a client that stalls mid-request (slowloris) is dropped. SSE only writes.
+    timeout = 30
+
     def handle_one_request(self):
         """Override to verify client IP after parsing request line and headers."""
         try:
