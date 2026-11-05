@@ -90,13 +90,26 @@ def _template(name):
 # ------------------------------------------------------------ statusline taps
 
 def wrap_command(original, fm, agent):
-    return "%s tap statusline --agent %s -- %s" % (shlex.quote(fm), agent, original)
+    """`<fm> tap statusline --agent A -- sh -c '<original>'`: the original may use shell syntax (env prefix,
+    $(...), ;, &&); tap runs it as an argv, so the quoting here is the only shell layer."""
+    return "%s tap statusline --agent %s -- sh -c %s" % (shlex.quote(fm), agent, shlex.quote(original))
 
 
 def unwrap_command(command):
-    """The original command inside a foreman tap wrapper, or None when `command` is not wrapped."""
+    """The original command inside a foreman tap wrapper, or None when `command` is not wrapped. Exact
+    reverse of wrap_command; the older unquoted form (`-- <original>`) is still recognised."""
     m = _WRAPPED.search(command or "")
-    return command[m.end():] if m else None
+    if not m:
+        return None
+    rest = command[m.end():]
+    if rest.startswith("sh -c "):
+        try:
+            parts = shlex.split(rest)
+        except ValueError:
+            parts = []
+        if len(parts) == 3 and parts[:2] == ["sh", "-c"] and rest == "sh -c " + shlex.quote(parts[2]):
+            return parts[2]
+    return rest
 
 
 def _statusline_file(home, parts):

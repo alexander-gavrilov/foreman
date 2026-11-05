@@ -56,8 +56,8 @@ class InstallTest(ForemanTestCase):
         self.assertIn("Restart=always", unit)
         self.assertEqual(r.calls[0], ["systemctl", "--user", "daemon-reload"])
         self.assertEqual(r.calls[1], ["systemctl", "--user", "enable", "--now", "foreman.service"])
-        self.assertEqual(self.sl(self.claude), "%s tap statusline --agent claude -- bash ~/sl.sh" % link)
-        self.assertEqual(self.sl(self.agy), "%s tap statusline --agent antigravity -- bash ~/agy.sh" % link)
+        self.assertEqual(self.sl(self.claude), "%s tap statusline --agent claude -- sh -c 'bash ~/sl.sh'" % link)
+        self.assertEqual(self.sl(self.agy), "%s tap statusline --agent antigravity -- sh -c 'bash ~/agy.sh'" % link)
         self.assertTrue(os.path.exists(self.claude + ".foreman-bak"))
         cfg = json.load(open(paths.config_file()))
         self.assertEqual(cfg["web"], {"bind": ["127.0.0.1", "10.8.0.2"], "port": 9000, "base_url": "http://h.lan:9000"})
@@ -181,3 +181,47 @@ class InstallTest(ForemanTestCase):
         self.assertTrue(os.path.exists(
             os.path.join(self.home, "Library", "LaunchAgents", "com.foreman.serve.plist")))
         uninstall_cmd.run(argparse.Namespace(purge=False), platform="darwin", runner=r)
+
+
+class StatuslineWrapTest(ForemanTestCase):
+    """F2 (review 3c): the original statusline runs under `sh -c <quoted>`, so shell syntax in it works,
+    stdin still reaches it, and unwrap reverses the wrapping exactly."""
+    ORIGINALS = ['bash ~/sl.sh', 'FOO=hi sh -c "echo $FOO"', 'input=$(cat); echo "got:$input"',
+                 'echo a; echo b', 'true && echo ok', "echo 'it''s' \"q\" café", 'a | b > /dev/null 2>&1']
+
+    def test_wrap_unwrap_round_trip(self):
+        for orig in self.ORIGINALS:
+            wrapped = install.wrap_command(orig, "/x y/foreman", "claude")
+            self.assertEqual(install.unwrap_command(wrapped), orig, orig)
+            # idempotent: wrapping what is already wrapped (after unwrap) gives the same command
+            self.assertEqual(install.wrap_command(install.unwrap_command(wrapped), "/x y/foreman", "claude"), wrapped)
+        self.assertIsNone(install.unwrap_command("bash ~/sl.sh"))
+
+    def test_legacy_unquoted_wrapper_is_still_unwrapped(self):
+        self.assertEqual(install.unwrap_command("/b/foreman tap statusline --agent claude -- bash ~/sl.sh"),
+                         "bash ~/sl.sh")
+
+    def run_wrapped(self, orig, payload):
+        import subprocess
+        wrapped = install.wrap_command(orig, BIN, "claude")
+        return subprocess.run(["sh", "-c", wrapped], input=payload, capture_output=True, text=True,
+                              env=dict(os.environ), timeout=30)
+
+    def test_shell_syntax_statuslines_run_and_get_stdin(self):
+        payload = json.dumps({"session_id": "c-1", "rate_limits": {"five_hour": {"used_percentage": 42,
+                              "resets_at": 4102444800}, "seven_day": {"used_percentage": 61, "resets_at": 4102444800}}})
+        cases = {
+            "FOO=hi sh -c 'echo $FOO'": "hi\n",
+            'input=$(cat); echo "got:$input"': "got:%s\n" % payload,
+            'echo a; echo b': "a\nb\n",
+            'true && echo ok': "ok\n",
+            'cat': payload,
+        }
+        for orig, expected in cases.items():
+            r = self.run_wrapped(orig, payload)
+            self.assertEqual((r.returncode, r.stdout), (0, expected), "%s -> %r" % (orig, r.stderr))
+        from foreman import limits
+        self.assertEqual(limits.load_provider_limits("claude")["seven_day"]["used_pct"], 61)  # tap still recorded
+
+    def test_exit_status_of_the_original_is_kept(self):
+        self.assertEqual(self.run_wrapped("exit 7", "{}").returncode, 7)
