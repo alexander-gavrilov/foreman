@@ -1,0 +1,1418 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>foreman — Направление 3: Спокойная диспетчерская (Progressive Disclosure)</title>
+<style>
+  :root {
+    --bg-page: #0b0e14;
+    --bg-canvas: #0f141d;
+    --bg-panel: #151b26;
+    --bg-elevated: #1c2433;
+    --bg-hover: #212b3d;
+    --border: #232d3f;
+    --border-subtle: #1a2230;
+    --text-main: #e6edf3;
+    --text-muted: #8b98ad;
+    --text-dim: #5a667a;
+
+    /* Семантика цветов по правилам Направления 3:
+       - один акцент (синий) для «Ждёт вас»
+       - янтарный только для предупреждений (контекст >150k, лимит ≥70%)
+       - красный только для застрявших сессий и лимитов ≥90% */
+    --accent: #3b82f6;
+    --accent-bright: #60a5fa;
+    --accent-soft: rgba(59, 130, 246, 0.12);
+    --accent-border: rgba(59, 130, 246, 0.38);
+
+    --amber: #f59e0b;
+    --amber-soft: rgba(245, 158, 11, 0.12);
+    --amber-border: rgba(245, 158, 11, 0.35);
+
+    --red: #ef4444;
+    --red-soft: rgba(239, 68, 68, 0.12);
+    --red-border: rgba(239, 68, 68, 0.4);
+
+    --green: #10b981;
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Ubuntu, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg-page);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    padding: 28px 32px 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 1640px;
+    margin: 0 auto;
+  }
+
+  /* Шапка документа и резюме синтеза (6 буллетов) */
+  .doc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .doc-header h1 {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .doc-badge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .doc-nav {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .doc-nav a {
+    color: var(--text-muted);
+    text-decoration: none;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .doc-nav a:hover {
+    color: #fff;
+    background: var(--bg-hover);
+  }
+
+  .synthesis-box {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 32px;
+  }
+  .synthesis-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .synthesis-list {
+    list-style: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 28px;
+    font-size: 13px;
+    color: var(--text-main);
+  }
+  @media (max-width: 1100px) {
+    .synthesis-list { grid-template-columns: 1fr; }
+  }
+  .synthesis-list li {
+    position: relative;
+    padding-left: 16px;
+  }
+  .synthesis-list li::before {
+    content: "•";
+    position: absolute;
+    left: 0;
+    color: var(--accent-bright);
+    font-weight: 700;
+  }
+  .synthesis-list strong {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* Секции шоукейса */
+  .showcase-section {
+    margin-bottom: 44px;
+  }
+  .section-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 12px;
+    gap: 16px;
+  }
+  .section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .section-note {
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .frame-caption {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* =========================================================
+     ОБЩИЕ КОМПОНЕНТЫ ИНТЕРФЕЙСА FOREMAN (НАПРАВЛЕНИЕ 3)
+     ========================================================= */
+
+  .desktop-frame {
+    background: var(--bg-canvas);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Верхняя панель: спокойная, только 2 недельных индикатора */
+  .topbar {
+    height: 48px;
+    background: #0c1018;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-name {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+  }
+  .host-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  /* Два маленьких индикатора недельных лимитов с деталями по наведению */
+  .limits-group {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .limit-meter {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: default;
+    transition: background 0.15s;
+  }
+  .limit-meter:hover {
+    background: var(--bg-panel);
+  }
+  .limit-name {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .limit-bar {
+    width: 68px;
+    height: 5px;
+    background: #1b2230;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .limit-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+  .limit-pct {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+  .limit-pct.warn { color: var(--amber); }
+  .limit-pct.crit { color: var(--red); }
+
+  /* Тултип 5ч окон при наведении/тапе */
+  .limit-popover {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 230px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+    z-index: 30;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .limit-meter:hover .limit-popover {
+    display: block;
+  }
+  .pop-row {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    margin-bottom: 4px;
+    color: var(--text-main);
+  }
+
+  /* Двухколоночная сетка главного экрана (Triage Rail + Центр чата) */
+  .main-layout {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr);
+    min-height: 560px;
+    position: relative;
+  }
+
+  /* Левая колонка: Triage-очередь проектов (без рамок и гроздей бейджей) */
+  .triage-rail {
+    background: #111620;
+    border-right: 1px solid var(--border-subtle);
+    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .triage-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .triage-group-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    padding: 0 10px 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .triage-row {
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .triage-row:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .triage-row.selected {
+    background: var(--bg-elevated);
+  }
+  .triage-row.needs-you {
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .triage-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .triage-proj {
+    font-weight: 600;
+    font-size: 13.5px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .s-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .s-dot.need { background: var(--accent-bright); box-shadow: 0 0 8px var(--accent); }
+  .s-dot.stuck { background: var(--red); }
+  .s-dot.run { background: var(--green); }
+  .s-dot.quiet { background: transparent; border: 1.5px solid var(--text-dim); }
+
+  .triage-time {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .triage-line {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-left: 15px;
+  }
+  .triage-row.needs-you .triage-line {
+    color: #dbeafe;
+  }
+  .triage-row.stuck-row .triage-line {
+    color: #fca5a5;
+  }
+
+  /* Центральная область: Закреплённая полоска статуса + Чат */
+  .chat-column {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-canvas);
+    min-width: 0;
+  }
+
+  /* Компактная полоска состояния над чатом (кликабельная → открывает шторку) */
+  .pinned-status-strip {
+    padding: 11px 22px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .pinned-status-strip:hover {
+    background: var(--bg-elevated);
+  }
+  .strip-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .strip-proj-name {
+    font-weight: 700;
+    font-size: 14.5px;
+    color: #fff;
+  }
+  .strip-sep {
+    color: var(--text-dim);
+  }
+  .strip-item {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .strip-item strong {
+    color: var(--text-main);
+    font-weight: 500;
+  }
+  .strip-warn {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--amber);
+    font-weight: 600;
+  }
+  .strip-action {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent-bright);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+
+  /* Поток сообщений чата — больше воздуха */
+  .chat-messages {
+    padding: 24px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    flex: 1;
+    max-width: 860px;
+  }
+
+  .event-note {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .event-note::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+
+  .msg-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .msg-card.question {
+    border-color: var(--accent-border);
+    background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), var(--bg-panel));
+  }
+  .msg-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .msg-meta strong {
+    color: #fff;
+    font-weight: 600;
+  }
+  .msg-body {
+    font-size: 14px;
+    color: var(--text-main);
+    line-height: 1.55;
+  }
+
+  /* Кнопки решения в один тап — только внутри сообщения с вопросом */
+  .decision-actions {
+    margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .btn:hover {
+    background: var(--bg-hover);
+  }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent-bright);
+    color: #fff;
+    font-weight: 600;
+  }
+  .btn-primary:hover {
+    background: #2563eb;
+  }
+
+  /* Нижнее поле ввода (спокойное, без дублирующих чипсов) */
+  .chat-composer {
+    padding: 14px 28px 18px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    gap: 10px;
+    max-width: 860px;
+  }
+  .composer-input {
+    flex: 1;
+    background: #0b0e14;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 14px;
+    color: #fff;
+    font-size: 13px;
+    font-family: var(--font-sans);
+  }
+  .composer-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  /* Правая выдвижная шторка (Drawer) для Доски и Сессий */
+  .drawer-pane {
+    width: 340px;
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.45);
+  }
+  .drawer-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .drawer-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: #fff;
+  }
+  .drawer-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+  }
+  .drawer-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .drawer-section:last-child {
+    border-bottom: none;
+  }
+  .drawer-sec-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .d-card {
+    background: var(--bg-canvas);
+    border: 1px solid var(--border-subtle);
+    border-radius: 7px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .d-card:last-child { margin-bottom: 0; }
+  .d-card.warn { border-color: var(--amber-border); }
+  .d-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .d-card-title {
+    font-weight: 600;
+    font-size: 12.5px;
+    color: #fff;
+  }
+  .d-card-sub {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  /* =========================================================
+     МОБИЛЬНЫЕ ЭКРАНЫ (~390px) РЯДОМ ДРУГ С ДРУГОМ
+     ========================================================= */
+  .phones-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 390px);
+    gap: 24px;
+    align-items: start;
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+  .phone-frame {
+    width: 390px;
+    min-height: 670px;
+    background: var(--bg-canvas);
+    border: 2px solid #2b364b;
+    border-radius: 30px;
+    overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .phone-status {
+    height: 24px;
+    background: #090c12;
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .phone-topbar {
+    background: #0c1018;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .phone-meters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .p-meter {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .p-bar {
+    width: 38px;
+    height: 4px;
+    background: #1b2230;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  /* Bottom sheet на 3-м экране телефона */
+  .sheet-backdrop {
+    position: absolute;
+    inset: 24px 0 0 0;
+    background: rgba(6, 9, 14, 0.65);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .bottom-sheet {
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    border-radius: 18px 18px 0 0;
+    padding: 10px 16px 20px;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.6);
+  }
+  .sheet-handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #3b475e;
+    margin: 0 auto 12px;
+  }
+  .sheet-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: var(--bg-canvas);
+    padding: 3px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+  }
+  .sheet-tab {
+    text-align: center;
+    padding: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    color: var(--text-muted);
+  }
+  .sheet-tab.active {
+    background: var(--bg-elevated);
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Заголовок -->
+  <header class="doc-header">
+    <div>
+      <h1>
+        <span>foreman · Направление 3: «Спокойная диспетчерская»</span>
+        <span class="doc-badge">DIRECTION 3 · СИНТЕЗ</span>
+      </h1>
+    </div>
+    <nav class="doc-nav">
+      <a href="agy-direction-1.html">← Направление 1</a>
+      <a href="agy-direction-2.html">← Направление 2</a>
+    </nav>
+  </header>
+
+  <!-- 6 буллетов: что взято из Направления 1, что из Направления 2, что убрано -->
+  <section class="synthesis-box">
+    <div class="synthesis-title">Что объединено в Направлении 3 (Progressive Disclosure)</div>
+    <ul class="synthesis-list">
+      <li><strong>Из Направления 1 (Тёмная тактика):</strong> глубокая тёмная палитра, левая triage-колонка всех проектов машины по срочности («Ждёт вас» / «Застряла» / «Работают» / «Тихо») и кнопки быстрого ответа в один тап.</li>
+      <li><strong>Из Направления 2 (Закреплённый контекст):</strong> компактная полоска статуса прямо над чатом (текущий этап, число сессий, самый тяжёлый контекст <code>220k ⚠</code>) вместо постоянной третьей колонки.</li>
+      <li><strong>Строгая цветовая дисциплина:</strong> один синий акцент только для «Ждёт вас», янтарный — для предупреждений (контекст &gt;150k, лимит ≥70%), красный — только для застрявших сессий и лимита ≥90%.</li>
+      <li><strong>Спокойный топ-бар:</strong> только два компактных индикатора недельных лимитов (<code>Claude неделя</code>, <code>Antigravity неделя</code>); 5-часовые окна и пороги вынесены во всплывающую подсказку по наведению/тапу.</li>
+      <li><strong>Убрано с главного экрана:</strong> полная таблица-матрица всех проектов × воркеров, грозди мини-бейджей в списке проектов и дублирующиеся чипсы над полем ввода.</li>
+      <li><strong>Убрано в правую шторку / bottom sheet:</strong> длинные ID сессий (<code>b88f566b</code>), таймеры жизни кэша (TTL), расчёты стоимости Q&amp;A в токенах и полные карточки задач Доски — всё это в одном клике по полоске статуса.</li>
+    </ul>
+  </section>
+
+  <!-- =====================================================================
+       1. DESKTOP: СПОКОЙНЫЙ ГЛАВНЫЙ ЭКРАН (ПО УМОЛЧАНИЮ ШТОРКА ЗАКРЫТА)
+       ===================================================================== -->
+  <section class="showcase-section">
+    <div class="section-bar">
+      <div class="section-title">
+        <span class="section-num">1</span>
+        <span>Desktop · Главный экран (по умолчанию — без третьей колонки)</span>
+      </div>
+      <div class="section-note">Наведите на лимиты в шапке для 5ч окон или нажмите на полоску статуса над чатом, чтобы открыть шторку Доски и Сессий</div>
+    </div>
+
+    <div class="frame-caption">
+      <span>Desktop · 1440px · Фокус на triage-списке и чате выбранного проекта</span>
+      <span>Клик по полоске над чатом переключает шторку →</span>
+    </div>
+
+    <div class="desktop-frame">
+      <!-- Top Bar -->
+      <div class="topbar">
+        <div class="brand-group">
+          <div class="brand-name"><span class="brand-dot"></span> foreman</div>
+          <span class="host-label">ghome</span>
+        </div>
+
+        <div class="limits-group">
+          <!-- Claude неделя -->
+          <div class="limit-meter">
+            <span class="limit-name">Claude неделя</span>
+            <div class="limit-bar">
+              <div class="limit-fill" style="width:34%;background:var(--green)"></div>
+            </div>
+            <span class="limit-pct">34%</span>
+            <div class="limit-popover">
+              <div class="pop-row"><span>Недельное окно (7д)</span><strong>34%</strong></div>
+              <div class="pop-row"><span>Окно 5 часов</span><strong>18%</strong></div>
+              <div style="margin-top:4px;color:var(--text-dim)">Резерв в норме (порог смены ≥70%)</div>
+            </div>
+          </div>
+
+          <!-- Antigravity неделя -->
+          <div class="limit-meter">
+            <span class="limit-name">Antigravity неделя</span>
+            <div class="limit-bar">
+              <div class="limit-fill" style="width:72%;background:var(--amber)"></div>
+            </div>
+            <span class="limit-pct warn">72% ⚠</span>
+            <div class="limit-popover">
+              <div class="pop-row"><span>Gemini неделя</span><strong style="color:var(--amber)">72% ⚠</strong></div>
+              <div class="pop-row"><span>Gemini 5ч / 3p 5ч</span><strong>29% / 12%</strong></div>
+              <div style="margin-top:4px;color:var(--amber)">≥70%: новые сессии → Claude</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main 2-column Workspace -->
+      <div class="main-layout" id="desktopMainLayout">
+        <!-- Left Triage Rail -->
+        <aside class="triage-rail">
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Ждёт вас</span><span>1</span></div>
+            <div class="triage-row needs-you selected">
+              <div class="triage-row-head">
+                <span class="triage-proj"><span class="s-dot need"></span>shopping-list</span>
+                <span class="triage-time">2м</span>
+              </div>
+              <div class="triage-line">Ротировать ревью-сессию 220k на Sonnet?</div>
+            </div>
+          </div>
+
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Застряла</span><span>1</span></div>
+            <div class="triage-row stuck-row">
+              <div class="triage-row-head">
+                <span class="triage-proj"><span class="s-dot stuck"></span>photo-qualifier</span>
+                <span class="triage-time">14м</span>
+              </div>
+              <div class="triage-line">codex-exif не отвечает, авто-рестарт</div>
+            </div>
+          </div>
+
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Работают</span><span>1</span></div>
+            <div class="triage-row">
+              <div class="triage-row-head">
+                <span class="triage-proj"><span class="s-dot run"></span>foreman</span>
+                <span class="triage-time">сейчас</span>
+              </div>
+              <div class="triage-line">Мокапы веб-панели и спецификация SSE</div>
+            </div>
+          </div>
+
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Тихо</span><span>1</span></div>
+            <div class="triage-row">
+              <div class="triage-row-head">
+                <span class="triage-proj" style="color:var(--text-muted)"><span class="s-dot quiet"></span>obsidian-personal</span>
+                <span class="triage-time">вчера</span>
+              </div>
+              <div class="triage-line">Инбокс недели 44 разобран</div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Center Chat Column -->
+        <main class="chat-column">
+          <!-- Pinned Status Strip (expands drawer on click) -->
+          <div class="pinned-status-strip" onclick="toggleDesktopDrawer()">
+            <div class="strip-left">
+              <span class="strip-proj-name">shopping-list</span>
+              <span class="strip-sep">·</span>
+              <span class="strip-item">Этап: <strong>ревью PR #48 → гейт</strong></span>
+              <span class="strip-sep">·</span>
+              <span class="strip-item"><strong>3</strong> сессии</span>
+              <span class="strip-sep">·</span>
+              <span class="strip-warn">макс. контекст: 220k ⚠</span>
+            </div>
+            <div class="strip-action" id="drawerToggleLabel">Доска и сессии ▸</div>
+          </div>
+
+          <!-- Chat Stream -->
+          <div class="chat-messages">
+            <div class="event-note">
+              14:42 · Воркер impl-sync завершил миграцию схемы v2 (18/18 тестов прошли)
+            </div>
+
+            <div class="event-note">
+              15:08 · Сессия review v2 превысила мягкий ориентир контекста (220k)
+            </div>
+
+            <!-- Question Message with One-Tap Decision Buttons -->
+            <div class="msg-card question">
+              <div class="msg-meta">
+                <strong>Оркестратор shopping-list</strong>
+                <span>15:09 · ждёт вашего решения</span>
+              </div>
+              <div class="msg-body">
+                Сессия <strong>review v2</strong> (Opus) выросла до <strong>220k</strong>. Ревью PR #48 закончено, осталось внести две правки по составному индексу.<br><br>
+                Заморозить старую сессию, открыть свежий <strong>Sonnet 4.5</strong> и передать handoff сообщением?
+              </div>
+              <div class="decision-actions">
+                <button class="btn btn-primary">Да, ротировать на Sonnet</button>
+                <button class="btn">Нет, оставить в 220k</button>
+                <button class="btn">Ответить…</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Calm Composer -->
+          <div class="chat-composer">
+            <input class="composer-input" type="text" placeholder="Написать оркестратору shopping-list…">
+            <button class="btn">Отправить</button>
+          </div>
+        </main>
+
+        <!-- Interactive Drawer (hidden by default on Frame 1, shown on click) -->
+        <aside class="drawer-pane" id="interactiveDrawer" style="display:none">
+          <div class="drawer-header">
+            <span class="drawer-title">Доска и сессии · shopping-list</span>
+            <button class="drawer-close" onclick="toggleDesktopDrawer()">✕</button>
+          </div>
+          <div class="drawer-section">
+            <div class="drawer-sec-label"><span>Доска задач (2)</span><span>Этап</span></div>
+            <div class="d-card warn">
+              <div class="d-card-top">
+                <span class="d-card-title">v2 оффлайн-синк (PR #48)</span>
+                <span style="color:var(--amber);font-size:11px;font-family:var(--font-mono)">ревью → гейт</span>
+              </div>
+              <div class="d-card-sub">След. шаг: фикс индекса после ротации ревьюера</div>
+            </div>
+            <div class="d-card">
+              <div class="d-card-top">
+                <span class="d-card-title">Дедупликация чеков</span>
+                <span style="color:var(--green);font-size:11px;font-family:var(--font-mono)">имплементация</span>
+              </div>
+              <div class="d-card-sub">След. шаг: прогон pytest весовых позиций</div>
+            </div>
+          </div>
+          <div class="drawer-section">
+            <div class="drawer-sec-label"><span>Сессии (3)</span><span>Контекст / 150k</span></div>
+            <div class="d-card warn">
+              <div class="d-card-top">
+                <span class="d-card-title">review v2 · Opus 4</span>
+                <span style="color:var(--amber);font-family:var(--font-mono);font-size:11.5px;font-weight:600">220k ⚠</span>
+              </div>
+              <div class="d-card-sub">
+                ID: b88f566b · orca · idle<br>
+                Кэш тёплый: 47 мин · Q&amp;A ~22k (холодный ~440k)
+              </div>
+            </div>
+            <div class="d-card">
+              <div class="d-card-top">
+                <span class="d-card-title">impl-sync · Sonnet 4.5</span>
+                <span style="color:var(--green);font-family:var(--font-mono);font-size:11.5px">64k ● busy</span>
+              </div>
+              <div class="d-card-sub">ID: c19a04e2 · orca · ход #14</div>
+            </div>
+            <div class="d-card">
+              <div class="d-card-top">
+                <span class="d-card-title">orchestrator · Opus 4</span>
+                <span style="color:var(--text-muted);font-family:var(--font-mono);font-size:11.5px">68k ○ ждёт</span>
+              </div>
+              <div class="d-card-sub">ID: a0172d76 · #topic-12</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       2. DESKTOP СОСТОЯНИЕ 2: ПРАВАЯ ШТОРКА ОТКРЫТА (ДОСКА + СЕССИИ + ТЕХДЕТАЛИ)
+       ===================================================================== -->
+  <section class="showcase-section">
+    <div class="section-bar">
+      <div class="section-title">
+        <span class="section-num">2</span>
+        <span>Desktop · Состояние с открытой правой шторкой (по клику на полоску статуса)</span>
+      </div>
+      <div class="section-note">Все технические детали (ID сессий, TTL кэша, расчёт стоимости Q&amp;A, карточки Доски) раскрываются только по запросу</div>
+    </div>
+
+    <div class="frame-caption">
+      <span>Desktop · Состояние 2 · Открыта шторка «Доска и сессии»</span>
+      <span>Progressive Disclosure</span>
+    </div>
+
+    <div class="desktop-frame">
+      <div class="main-layout" style="grid-template-columns: 250px minmax(0, 1fr) 360px; min-height: 430px;">
+        <!-- Свёрнутая по высоте демонстрация левой панели -->
+        <aside class="triage-rail">
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Ждёт вас</span><span>1</span></div>
+            <div class="triage-row needs-you selected">
+              <div class="triage-row-head">
+                <span class="triage-proj"><span class="s-dot need"></span>shopping-list</span>
+                <span class="triage-time">2м</span>
+              </div>
+              <div class="triage-line">Ротировать ревью-сессию 220k на Sonnet?</div>
+            </div>
+          </div>
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Застряла</span><span>1</span></div>
+            <div class="triage-row stuck-row">
+              <div class="triage-row-head">
+                <span class="triage-proj"><span class="s-dot stuck"></span>photo-qualifier</span>
+                <span class="triage-time">14м</span>
+              </div>
+              <div class="triage-line">codex-exif не отвечает, авто-рестарт</div>
+            </div>
+          </div>
+          <div class="triage-group">
+            <div class="triage-group-label"><span>Работают / Тихо</span><span>2</span></div>
+            <div class="triage-row">
+              <div class="triage-row-head">
+                <span class="triage-proj"><span class="s-dot run"></span>foreman</span>
+                <span class="triage-time">сейчас</span>
+              </div>
+              <div class="triage-line">Мокапы веб-панели</div>
+            </div>
+            <div class="triage-row">
+              <div class="triage-row-head">
+                <span class="triage-proj" style="color:var(--text-muted)"><span class="s-dot quiet"></span>obsidian-personal</span>
+                <span class="triage-time">вчера</span>
+              </div>
+              <div class="triage-line">Инбокс недели 44 разобран</div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Центр -->
+        <main class="chat-column">
+          <div class="pinned-status-strip" style="background:var(--bg-elevated)">
+            <div class="strip-left">
+              <span class="strip-proj-name">shopping-list</span>
+              <span class="strip-sep">·</span>
+              <span class="strip-item">Этап: <strong>ревью PR #48 → гейт</strong></span>
+              <span class="strip-sep">·</span>
+              <span class="strip-warn">220k ⚠</span>
+            </div>
+            <div class="strip-action">Скрыть шторку ✕</div>
+          </div>
+
+          <div class="chat-messages" style="padding: 18px 22px;">
+            <div class="msg-card question">
+              <div class="msg-meta">
+                <strong>Оркестратор shopping-list</strong>
+                <span>15:09</span>
+              </div>
+              <div class="msg-body">
+                Сессия <strong>review v2</strong> (Opus) выросла до <strong>220k</strong>. Ревью PR #48 закончено, осталось внести две правки по составному индексу. Заморозить старую сессию, открыть свежий <strong>Sonnet 4.5</strong> и передать handoff сообщением?
+              </div>
+              <div class="decision-actions">
+                <button class="btn btn-primary">Да, ротировать на Sonnet</button>
+                <button class="btn">Нет, оставить в 220k</button>
+                <button class="btn">Ответить…</button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <!-- Открытая правая шторка -->
+        <aside class="drawer-pane">
+          <div class="drawer-header">
+            <span class="drawer-title">Доска и сессии · shopping-list</span>
+            <button class="drawer-close">✕</button>
+          </div>
+
+          <div class="drawer-section">
+            <div class="drawer-sec-label"><span>Доска задач (2)</span><span>Этап</span></div>
+            <div class="d-card warn">
+              <div class="d-card-top">
+                <span class="d-card-title">v2 оффлайн-синк (PR #48)</span>
+                <span style="color:var(--amber);font-size:11px;font-family:var(--font-mono)">ревью → гейт</span>
+              </div>
+              <div class="d-card-sub">Владелец: b88f566b · След.: фикс индекса → мерж</div>
+            </div>
+            <div class="d-card">
+              <div class="d-card-top">
+                <span class="d-card-title">Дедупликация чеков</span>
+                <span style="color:var(--green);font-size:11px;font-family:var(--font-mono)">имплементация</span>
+              </div>
+              <div class="d-card-sub">Владелец: c19a04e2 · След.: pytest весовых товаров</div>
+            </div>
+          </div>
+
+          <div class="drawer-section">
+            <div class="drawer-sec-label"><span>Сессии проекта (3)</span><span>Порог ~150k</span></div>
+            <div class="d-card warn">
+              <div class="d-card-top">
+                <span class="d-card-title">review v2 · Claude Opus 4</span>
+                <span style="color:var(--amber);font-family:var(--font-mono);font-size:11.5px;font-weight:600">220k ⚠</span>
+              </div>
+              <div class="d-card-sub">
+                ID: <code>b88f566b</code> · транспорт: <code>orca</code> · idle<br>
+                Кэш TTL: ещё 47 мин · пакет Q&amp;A ~22k (холодный ~440k)
+              </div>
+            </div>
+
+            <div class="d-card">
+              <div class="d-card-top">
+                <span class="d-card-title">impl-sync · Claude Sonnet 4.5</span>
+                <span style="color:var(--green);font-family:var(--font-mono);font-size:11.5px">64k ● busy</span>
+              </div>
+              <div class="d-card-sub">ID: <code>c19a04e2</code> · транспорт: <code>orca</code> · ход #14</div>
+            </div>
+
+            <div class="d-card">
+              <div class="d-card-top">
+                <span class="d-card-title">orchestrator · Claude Opus 4</span>
+                <span style="color:var(--text-muted);font-family:var(--font-mono);font-size:11.5px">68k ○ ждёт</span>
+              </div>
+              <div class="d-card-sub">ID: <code>a0172d76</code> · Telegram #topic-12</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       3. PHONE (~390px): ЭКРАН 1 (TRIAGE) + ЭКРАН 2 (ЧАТ ИЗ TELEGRAM) + ЭКРАН 3 (BOTTOM SHEET)
+       ===================================================================== -->
+  <section class="showcase-section">
+    <div class="section-bar">
+      <div class="section-title">
+        <span class="section-num">3</span>
+        <span>Phone (~390px) · Три состояния рядом: Triage-список → Чат из Telegram → Bottom Sheet</span>
+      </div>
+      <div class="section-note">Уведомление из Telegram ведёт сразу на Экран 2; тап по верхней полоске статуса открывает шторку Доска / Сессии (Экран 3)</div>
+    </div>
+
+    <div class="phones-grid">
+      <!-- PHONE SCREEN 1: TRIAGE LIST -->
+      <div>
+        <div class="frame-caption">
+          <span>Экран 1 · Triage-список</span>
+          <span>390px</span>
+        </div>
+        <div class="phone-frame">
+          <div class="phone-status">
+            <span>15:11 · ghome</span>
+            <span>5G · 92%</span>
+          </div>
+
+          <div class="phone-topbar">
+            <div class="brand-name" style="font-size:13px"><span class="brand-dot"></span> foreman</div>
+            <div class="phone-meters" title="Нажмите для деталей 5ч окон">
+              <div class="p-meter">
+                <span style="color:var(--text-muted)">Claude</span>
+                <div class="p-bar"><div class="limit-fill" style="width:34%;background:var(--green)"></div></div>
+                <span>34%</span>
+              </div>
+              <div class="p-meter">
+                <span style="color:var(--text-muted)">Agy</span>
+                <div class="p-bar"><div class="limit-fill" style="width:72%;background:var(--amber)"></div></div>
+                <span style="color:var(--amber)">72%⚠</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="triage-rail" style="border-right:none;flex:1;padding:14px 12px">
+            <div class="triage-group">
+              <div class="triage-group-label"><span>Ждёт вас</span><span>1</span></div>
+              <div class="triage-row needs-you">
+                <div class="triage-row-head">
+                  <span class="triage-proj"><span class="s-dot need"></span>shopping-list</span>
+                  <span class="triage-time">2м назад</span>
+                </div>
+                <div class="triage-line">Ротировать ревью-сессию 220k на Sonnet?</div>
+              </div>
+            </div>
+
+            <div class="triage-group">
+              <div class="triage-group-label"><span>Застряла</span><span>1</span></div>
+              <div class="triage-row stuck-row">
+                <div class="triage-row-head">
+                  <span class="triage-proj"><span class="s-dot stuck"></span>photo-qualifier</span>
+                  <span class="triage-time">14м</span>
+                </div>
+                <div class="triage-line">codex-exif не отвечает, авто-рестарт</div>
+              </div>
+            </div>
+
+            <div class="triage-group">
+              <div class="triage-group-label"><span>Работают</span><span>1</span></div>
+              <div class="triage-row">
+                <div class="triage-row-head">
+                  <span class="triage-proj"><span class="s-dot run"></span>foreman</span>
+                  <span class="triage-time">сейчас</span>
+                </div>
+                <div class="triage-line">Мокапы веб-панели и спецификация SSE</div>
+              </div>
+            </div>
+
+            <div class="triage-group">
+              <div class="triage-group-label"><span>Тихо</span><span>1</span></div>
+              <div class="triage-row">
+                <div class="triage-row-head">
+                  <span class="triage-proj" style="color:var(--text-muted)"><span class="s-dot quiet"></span>obsidian-personal</span>
+                  <span class="triage-time">вчера</span>
+                </div>
+                <div class="triage-line">Инбокс недели 44 разобран</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PHONE SCREEN 2: PROJECT CHAT (LANDING FROM TELEGRAM) -->
+      <div>
+        <div class="frame-caption">
+          <span>Экран 2 · Чат проекта (вход из Telegram)</span>
+          <span>390px</span>
+        </div>
+        <div class="phone-frame">
+          <div class="phone-status">
+            <span>15:11 · Telegram → foreman</span>
+            <span>5G · 92%</span>
+          </div>
+
+          <div class="phone-topbar">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="color:var(--accent-bright);font-size:13px;cursor:pointer">‹ Все</span>
+              <strong style="color:#fff;font-size:13.5px">shopping-list</strong>
+            </div>
+            <div class="phone-meters">
+              <span>C: 34%</span>
+              <span style="color:var(--amber)">Agy: 72%⚠</span>
+            </div>
+          </div>
+
+          <!-- Pinned Status Strip (tapping opens Bottom Sheet) -->
+          <div class="pinned-status-strip" style="padding:9px 14px">
+            <div style="font-size:12px;color:var(--text-muted)">
+              Этап: <strong style="color:#fff">ревью PR #48</strong> · 3 сессии · <span style="color:var(--amber);font-family:var(--font-mono);font-weight:600">220k ⚠</span>
+            </div>
+            <span style="color:var(--accent-bright);font-size:11.5px;font-weight:600">Детали ▾</span>
+          </div>
+
+          <div class="chat-messages" style="padding:14px;gap:14px">
+            <div style="font-family:var(--font-mono);font-size:11px;color:var(--accent-bright);background:var(--accent-soft);padding:5px 10px;border-radius:6px">
+              ↳ Переход из Telegram-уведомления #shopping-list
+            </div>
+
+            <div class="event-note">
+              14:42 · impl-sync завершил миграцию v2 (тесты 18/18)
+            </div>
+
+            <div class="msg-card question" style="padding:14px">
+              <div class="msg-meta">
+                <strong>Оркестратор</strong>
+                <span>15:09</span>
+              </div>
+              <div class="msg-body" style="font-size:13px">
+                Сессия <strong>review v2</strong> (Opus) дошла до <strong>220k</strong>, ревью PR #48 закрыто.<br><br>
+                Заморозить её, открыть свежий <strong>Sonnet 4.5</strong> и переслать handoff сообщением?
+              </div>
+              <div class="decision-actions" style="margin-top:12px">
+                <button class="btn btn-primary" style="width:100%;justify-content:center">Да, ротировать на Sonnet</button>
+                <button class="btn" style="flex:1">Нет, оставить</button>
+                <button class="btn" style="flex:1">Ответить…</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="chat-composer" style="padding:10px 14px 14px">
+            <input class="composer-input" type="text" placeholder="Сообщение оркестратору…">
+            <button class="btn" style="padding:7px 11px">➤</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PHONE SCREEN 3: BOTTOM SHEET OPEN (BOARD / SESSIONS) -->
+      <div>
+        <div class="frame-caption">
+          <span>Экран 3 · Bottom Sheet по тапу на полоску</span>
+          <span>390px</span>
+        </div>
+        <div class="phone-frame">
+          <div class="phone-status">
+            <span>15:11 · shopping-list</span>
+            <span>5G · 92%</span>
+          </div>
+
+          <div class="phone-topbar">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="color:var(--accent-bright);font-size:13px">‹ Все</span>
+              <strong style="color:#fff;font-size:13.5px">shopping-list</strong>
+            </div>
+            <div class="phone-meters">
+              <span>C: 34%</span>
+              <span style="color:var(--amber)">Agy: 72%⚠</span>
+            </div>
+          </div>
+
+          <div class="pinned-status-strip" style="padding:9px 14px">
+            <div style="font-size:12px;color:var(--text-muted)">
+              Этап: <strong style="color:#fff">ревью PR #48</strong> · 3 сессии · <span style="color:var(--amber);font-family:var(--font-mono)">220k ⚠</span>
+            </div>
+            <span style="color:var(--accent-bright);font-size:11.5px">Закрыть ▴</span>
+          </div>
+
+          <!-- Затемнённый фон чата под шторкой -->
+          <div class="sheet-backdrop">
+            <div class="bottom-sheet">
+              <div class="sheet-handle"></div>
+
+              <div class="sheet-tabs">
+                <div class="sheet-tab active">Доска и Сессии (3)</div>
+                <div class="sheet-tab">Журнал событий</div>
+              </div>
+
+              <div class="drawer-sec-label" style="margin-top:4px"><span>Доска задач (2)</span><span>Этап</span></div>
+              <div class="d-card warn">
+                <div class="d-card-top">
+                  <span class="d-card-title">v2 оффлайн-синк (PR #48)</span>
+                  <span style="color:var(--amber);font-size:11px;font-family:var(--font-mono)">ревью → гейт</span>
+                </div>
+                <div class="d-card-sub">След. шаг: фикс индекса после ротации</div>
+              </div>
+              <div class="d-card" style="margin-bottom:14px">
+                <div class="d-card-top">
+                  <span class="d-card-title">Дедупликация чеков</span>
+                  <span style="color:var(--green);font-size:11px;font-family:var(--font-mono)">имплементация</span>
+                </div>
+                <div class="d-card-sub">След. шаг: pytest весовых позиций</div>
+              </div>
+
+              <div class="drawer-sec-label"><span>Сессии (3)</span><span>Контекст / 150k</span></div>
+              <div class="d-card warn">
+                <div class="d-card-top">
+                  <span class="d-card-title">review v2 · Opus 4</span>
+                  <span style="color:var(--amber);font-family:var(--font-mono);font-size:11.5px;font-weight:600">220k ⚠</span>
+                </div>
+                <div class="d-card-sub">
+                  ID: <code>b88f566b</code> · orca · кэш TTL 47м<br>
+                  Q&amp;A по тёплому кэшу ~22k (холодный ~440k)
+                </div>
+              </div>
+              <div class="d-card">
+                <div class="d-card-top">
+                  <span class="d-card-title">impl-sync · Sonnet 4.5</span>
+                  <span style="color:var(--green);font-family:var(--font-mono);font-size:11.5px">64k ● busy</span>
+                </div>
+                <div class="d-card-sub">ID: <code>c19a04e2</code> · orca · пишет тесты</div>
+              </div>
+              <div class="d-card">
+                <div class="d-card-top">
+                  <span class="d-card-title">orchestrator · Opus 4</span>
+                  <span style="color:var(--text-muted);font-family:var(--font-mono);font-size:11.5px">68k ○ ждёт</span>
+                </div>
+                <div class="d-card-sub">ID: <code>a0172d76</code> · #topic-12</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+function toggleDesktopDrawer() {
+  const drawer = document.getElementById('interactiveDrawer');
+  const layout = document.getElementById('desktopMainLayout');
+  const label = document.getElementById('drawerToggleLabel');
+  const isHidden = drawer.style.display === 'none';
+  if (isHidden) {
+    drawer.style.display = 'flex';
+    layout.style.gridTemplateColumns = '270px minmax(0, 1fr) 340px';
+    label.textContent = 'Скрыть шторку ✕';
+  } else {
+    drawer.style.display = 'none';
+    layout.style.gridTemplateColumns = '270px minmax(0, 1fr)';
+    label.textContent = 'Доска и сессии ▸';
+  }
+}
+</script>
+</body>
+</html>
