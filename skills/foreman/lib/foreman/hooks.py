@@ -252,7 +252,8 @@ def _on_stop(agent, ad, rec, norm):
             raise
         sessions.set_state(sid, "busy")  # the agent continues with the digest as its next input
         return out
-    if rec.get("role") == "worker":
+    if rec.get("role") == "worker" and (rec.get("owner") or "orchestrator") == "orchestrator":
+        # only workers the orchestrator owns; a user-owned session wakes it just on stuck/gone/threshold (watch)
         try:
             wake.queue_for_orchestrator(rec["project"], _wake_text(rec, norm), sender="foreman", kind="wake",
                                         key="stop:" + sid, background=True)

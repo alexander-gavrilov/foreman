@@ -71,3 +71,15 @@ class SingleOrchestratorTest(SessionTestCase):
         sessions.set_state(orch["sid"], "idle")
         code, out, err = run_main("rotate", orch["sid"])
         self.assertEqual(code, 0, err)
+
+
+class StopWakeOwnerTest(__import__("tests.test_hooks", fromlist=["HookCase"]).HookCase):
+    def test_user_owned_session_stop_does_not_wake_but_orchestrator_owned_does(self):
+        from tests.test_hooks import claude
+        orch, _ = self.pending_launch(role="orchestrator", title="orch", state="busy")
+        self.sessions.create_session(self.slug, "claude", title="mine", owner="user", agent_session_id="u1")
+        self.hook("claude", "Stop", claude("Stop", sid="u1", cwd=self.proj["path"], last_assistant_message="hi"))
+        self.assertEqual(self.sessions.inbox_pending(orch["sid"]), [])
+        self.sessions.create_session(self.slug, "claude", title="owned", owner="orchestrator", agent_session_id="o1")
+        self.hook("claude", "Stop", claude("Stop", sid="o1", cwd=self.proj["path"], last_assistant_message="hi"))
+        self.assertEqual(len(self.sessions.inbox_pending(orch["sid"])), 1)

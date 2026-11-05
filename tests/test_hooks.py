@@ -384,15 +384,14 @@ class WakeOnWorkerStopTest(HookCase):
         self.assertEqual(len(pend), 1)
         self.assertTrue(pend[0]["text"].endswith("second turn"))
 
-    def test_orchestrators_do_not_wake_themselves_but_user_owned_workers_do(self):
+    def test_orchestrators_do_not_wake_themselves_nor_do_user_owned_sessions(self):
         o_rec, o_env = self.pending_launch(role="orchestrator", title="orch2", state="busy")
         self.hook("claude", "Stop", claude("Stop", sid="o2", cwd=self.proj["path"]), o_env)
         self.assertEqual(self.sessions.inbox_pending(o_rec["sid"]), [])  # (o_rec is now the project's orchestrator)
         self.sessions.create_session(self.slug, "claude", title="mine", owner="user", agent_session_id="u1")
         self.hook("claude", "Stop", claude("Stop", sid="u1", cwd=self.proj["path"], last_assistant_message="hi"))
-        pend = self.sessions.inbox_pending(o_rec["sid"])
-        self.assertEqual(len(pend), 1)
-        self.assertIn("mine", pend[0]["text"])
+        # review 3a F9: a turn of the user's own session costs the orchestrator nothing
+        self.assertEqual(self.sessions.inbox_pending(o_rec["sid"]), [])
 
     def test_agy_not_fully_idle_does_not_wake(self):
         rec, env = self.pending_launch(title="agy-w", agent="antigravity")
