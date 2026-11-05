@@ -264,6 +264,10 @@ def _on_stop(agent, ad, rec, norm):
             sessions.inbox_release(sid, [m["id"] for m in claimed])
             raise
         sessions.set_state(sid, "busy")  # the agent continues with the digest as its next input
+        if provisional:
+            # real agy repeats the turn's user prompt as lastUserInput on every hook, also on the
+            # continuation's own PreInvocation: remember it to tell a continuation from a new user prompt
+            sessions.update_session(sid, provisional_input=norm["prompt"] or "")
         return out
     if rec.get("role") == "worker" and (rec.get("owner") or "orchestrator") == "orchestrator":
         # only workers the orchestrator owns; a user-owned session wakes it just on stuck/gone/threshold (watch)
@@ -298,6 +302,17 @@ def _unbound_pre_tool(ad, norm, env):
     return {}
 
 
+def _foreign_prompt(rec, norm):
+    """A PreInvocation that starts a new user turn while a continuation was claimed provisionally: its
+    lastUserInput differs from the one remembered at the claim and is not a foreman digest. invocationNum > 1 is
+    a model call inside the running turn, i.e. the continuation itself."""
+    if norm["kind"] != "prompt" or not norm["prompt"] or "[foreman \u00b7" in norm["prompt"]:
+        return False
+    if (norm.get("invocation_num") or 0) > 1:
+        return False
+    return norm["prompt"] != rec.get("provisional_input")
+
+
 def _process(agent, event, payload, env):
     try:
         ad = adapters.get(agent)
@@ -323,7 +338,7 @@ def _process(agent, event, payload, env):
 
     if norm["kind"] in BUSY_KINDS and agent in PROVISIONAL_AGENTS:
         try:
-            if norm["kind"] == "prompt" and norm["prompt"] and "[foreman \u00b7" not in norm["prompt"]:
+            if _foreign_prompt(rec, norm):
                 # the agent started on someone else's prompt: the continuation was NOT taken; give the rows back
                 sessions.inbox_release(sid, [m["id"] for m in sessions.inbox_provisional(sid)])
             else:

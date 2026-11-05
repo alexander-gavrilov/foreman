@@ -25,7 +25,7 @@ def blank(native_event):
     return {"kind": None, "native_event": native_event, "agent_session_id": None, "cwd": None,
             "transcript_path": None, "model": None, "prompt": None, "tool_name": None, "tool_input": None,
             "command": None, "last_assistant_message": None, "stop_hook_active": False, "fully_idle": None,
-            "reason": None, "source": None, "agent_id": None}
+            "reason": None, "source": None, "agent_id": None, "invocation_num": None}
 
 
 def as_text(value):

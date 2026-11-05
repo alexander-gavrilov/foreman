@@ -16,6 +16,8 @@ def normalise(event, payload):
     n["transcript_path"] = as_text(payload.get("transcriptPath"))
     n["model"] = as_text(payload.get("modelName"))
     n["prompt"] = as_text(payload.get("lastUserInput"))
+    num = payload.get("invocationNum")
+    n["invocation_num"] = num if isinstance(num, int) and not isinstance(num, bool) else None
     call = payload.get("toolCall")
     if isinstance(call, dict):
         n["tool_name"] = as_text(call.get("name"))
