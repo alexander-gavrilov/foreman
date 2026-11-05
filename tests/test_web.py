@@ -156,6 +156,46 @@ class StateViewTest(ForemanTestCase):
         self.assertEqual(p5_state["line"], "Merge PR #12?")
         self.assertEqual(p5_state["unanswered"], 1)
 
+    def test_closed_and_rotated_sessions_do_not_count(self):
+        from foreman import sessions
+        from foreman.web import state_view
+
+        self.init_project("p-closed")
+        orch = sessions.create_session("p-closed", "claude", role="orchestrator", state="idle")
+        w = sessions.create_session("p-closed", "claude", role="worker", state="gone")
+        sessions.set_lifecycle(w["sid"], "closed")
+        r = sessions.create_session("p-closed", "claude", role="worker", state="stuck")
+        sessions.set_lifecycle(r["sid"], "rotated")
+        st = state_view.build_state()
+        self.assertEqual(next(p for p in st["projects"] if p["slug"] == "p-closed")["group"], "quiet")
+
+        # a gone session that is still open (terminal vanished, not yet closed) does make the project stuck
+        self.init_project("p-gone")
+        sessions.create_session("p-gone", "claude", role="orchestrator", state="idle")
+        sessions.create_session("p-gone", "claude", role="worker", state="gone")
+        st = state_view.build_state()
+        self.assertEqual(next(p for p in st["projects"] if p["slug"] == "p-gone")["group"], "stuck")
+
+        # strip: heaviest and the session count come from live sessions only
+        sessions.update_session(w["sid"], context_tokens=900000)
+        detail = state_view.build_project("p-closed")
+        self.assertEqual(detail["strip"]["sessions"], 1)
+        sessions.update_session(orch["sid"], context_tokens=100)
+        detail = state_view.build_project("p-closed")
+        self.assertEqual(detail["strip"]["heaviest"]["context_tokens"], 100)
+        self.assertEqual(len(detail["sessions"]), 3)  # the drawer still lists all of them
+
+    def test_strip_of_project_with_only_closed_sessions(self):
+        from foreman import sessions
+        from foreman.web import state_view
+
+        self.init_project("p-onlyclosed")
+        w = sessions.create_session("p-onlyclosed", "claude", role="worker", state="idle")
+        sessions.set_lifecycle(w["sid"], "closed")
+        detail = state_view.build_project("p-onlyclosed")
+        self.assertEqual(detail["strip"]["sessions"], 0)
+        self.assertIsNone(detail["strip"]["heaviest"])
+
     def test_state_shape_matches_web_api(self):
         from foreman import projects, sessions, store, paths
         from foreman.web import state_view

@@ -126,7 +126,9 @@ def _triage_project(proj, proj_sessions, chat_messages):
     unanswered_count = len(unanswered_questions)
 
     # 2. Check sessions state
-    has_stuck_or_gone = any(s.get("state") in ("stuck", "gone") for s in proj_sessions)
+    # closed and rotated-out sessions are history: a dead terminal there must not strand the project in "stuck"
+    has_stuck_or_gone = any(s.get("state") in ("stuck", "gone") and s.get("lifecycle") not in ("closed", "rotated")
+                            for s in proj_sessions)
     has_busy = any(s.get("state") in ("busy", "starting") for s in proj_sessions
                    if sessions.is_live(s))
 
@@ -300,7 +302,7 @@ def build_project(slug):
             "replaced_by": s.get("replaced_by"),
         })
 
-        if tokens is not None and tokens > max_tokens:
+        if is_live and tokens is not None and tokens > max_tokens:
             max_tokens = tokens
             heaviest = {
                 "title": s.get("title") or s.get("sid"),
@@ -308,9 +310,10 @@ def build_project(slug):
                 "level": lvl,
             }
 
-    # If no tokens known, heaviest can still show a session with unknown level if sessions exist
-    if heaviest is None and formatted_sessions:
-        first = formatted_sessions[0]
+    # If no tokens known, heaviest can still show a live session with unknown level
+    live_formatted = [f for f, s in zip(formatted_sessions, proj_sessions) if sessions.is_live(s)]
+    if heaviest is None and live_formatted:
+        first = live_formatted[0]
         heaviest = {
             "title": first["title"],
             "context_tokens": first["context_tokens"],
@@ -320,7 +323,7 @@ def build_project(slug):
     active_stage = _get_active_stage(slug)
     strip = {
         "stage": active_stage,
-        "sessions": live_count if live_count > 0 or not formatted_sessions else len(formatted_sessions),
+        "sessions": live_count,
         "heaviest": heaviest,
     }
 
