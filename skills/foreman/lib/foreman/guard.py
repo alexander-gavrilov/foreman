@@ -423,6 +423,9 @@ def _check_gh_arguments(args, project):
             continue
         if a.startswith("-b") and not a.startswith("--") and a[2:].lstrip("=").startswith("@"):
             raise _Reject("gh -b @file reads a local file")
+        if re.match(r"^-[^-R b]", a) and re.search(r"[Rb]", a[2:]):
+            # a short-flag cluster such as -aR or -sb hides the repo/body flags behind another letter
+            raise _Reject("combined short flags containing -R or -b are not allowed")
         if "://" in a and not a.startswith("-"):
             m = re.match(r"^https?://([^/]+)/([^/]+)/([^/]+)/(?:pull|issues)/\d+/?$", a)
             if not m or not same_repo("%s/%s/%s" % m.groups()):
