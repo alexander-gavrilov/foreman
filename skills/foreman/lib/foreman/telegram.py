@@ -261,6 +261,28 @@ def send_message(thread_id, text, buttons=None, msg_id=None, timeout=15):
     return res
 
 
+_CONTENT_TYPES = ("photo", "sticker", "video", "video_note", "voice", "audio", "document", "animation", "location",
+                  "venue", "contact", "poll", "dice", "game")
+_SERVICE_TYPES = ("forum_topic_created", "forum_topic_edited", "forum_topic_closed", "forum_topic_reopened",
+                  "general_forum_topic_hidden", "general_forum_topic_unhidden", "new_chat_members",
+                  "left_chat_member", "new_chat_title", "new_chat_photo", "delete_chat_photo", "pinned_message",
+                  "message_auto_delete_timer_changed", "write_access_allowed")
+
+
+def _message_text(msg):
+    """The text to route to the orchestrator: text or caption; a marker for media without a caption; None for
+    service messages (topic renamed, member joined, pin…), which are not user input."""
+    text = msg.get("text") or msg.get("caption") or ""
+    if text.strip():
+        return text
+    for kind in _CONTENT_TYPES:
+        if msg.get(kind):
+            return "[non-text message: %s]" % kind
+    if any(k in msg for k in _SERVICE_TYPES):
+        return None
+    return "[non-text message: unknown]"
+
+
 def _find_project_by_topic_id(thread_id):
     if thread_id is None:
         return None
@@ -359,7 +381,9 @@ def poll_once(timeout=0):
                 })
                 continue
 
-            text = msg.get("text") or msg.get("caption") or ""
+            text = _message_text(msg)
+            if text is None:
+                continue
             thread_id = msg.get("message_thread_id")
             proj = _find_project_by_topic_id(thread_id)
 

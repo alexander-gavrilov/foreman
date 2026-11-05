@@ -150,6 +150,40 @@ class TelegramTestCase(ForemanTestCase):
         self.assertEqual(len(inbox), 1)
         self.assertEqual(inbox[0]["text"], "Here is my input")
 
+    def _topic_project(self):
+        self.init_project("demo")
+        thread_id = telegram.create_project_topic("demo")
+        orch = sessions.create_session("demo", "claude", role="orchestrator", state="idle")
+        proj = projects.load_project("demo")
+        proj["orchestrator"] = orch["sid"]
+        projects.save_project(proj)
+        return thread_id, orch
+
+    def _raw_topic_message(self, thread_id, **fields):
+        msg = {"message_id": 900, "from": {"id": 12345}, "chat": {"id": self.server.chat_id, "type": "supergroup"},
+               "date": 1700000000, "message_thread_id": thread_id, "is_topic_message": True}
+        msg.update(fields)
+        self.server.enqueue_update({"message": msg})
+
+    def test_non_text_topic_message_is_delivered_as_a_marker(self):
+        thread_id, orch = self._topic_project()
+        self._raw_topic_message(thread_id, sticker={"file_id": "x"})
+        self._raw_topic_message(thread_id, photo=[{"file_id": "y"}])                     # no caption
+        self._raw_topic_message(thread_id, photo=[{"file_id": "y"}], caption="look")      # caption is text
+        self._raw_topic_message(thread_id, voice={"file_id": "v"})
+        telegram.poll_once(timeout=0)
+        texts = [m["text"] for m in projects.chat_list("demo") if m["from"] == "user"]
+        self.assertEqual(texts, ["[non-text message: sticker]", "[non-text message: photo]", "look",
+                                 "[non-text message: voice]"])
+        self.assertNotIn("", [m["text"] for m in sessions.inbox_all(orch["sid"])])
+
+    def test_service_messages_are_not_delivered(self):
+        thread_id, orch = self._topic_project()
+        self._raw_topic_message(thread_id, forum_topic_edited={"name": "renamed"})
+        self._raw_topic_message(thread_id, pinned_message={"message_id": 1})
+        telegram.poll_once(timeout=0)
+        self.assertEqual(projects.chat_list("demo"), [])
+
     def test_poll_reply_to_bot_message_maps_reply_to(self):
         self.init_project("demo")
         thread_id = telegram.create_project_topic("demo")
