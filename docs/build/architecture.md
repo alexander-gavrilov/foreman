@@ -82,10 +82,13 @@ Session id (`sid`): `s-` + 6 hex chars, assigned by foreman. Record:
 {"sid": "s-1a2b3c", "project": "foreman", "agent": "claude|antigravity|codex", "model": "...", "effort": null,
  "role": "orchestrator|worker", "owner": "orchestrator|user", "purpose": "one line", "title": "fm-api",
  "transport": {"kind": "orca|herdr|fake", "handle": "term_..."}, "agent_session_id": "...", "cwd": "...",
- "transcript_path": "...", "state": "starting|busy|idle|waiting_input|waiting_permission|stuck|gone|rotated|closed",
+ "transcript_path": "...", "state": "starting|busy|idle|waiting_input|waiting_permission|stuck|gone",
+ "lifecycle": "active|rotated|closed",
  "state_since": "...", "last_event_at": "...", "context_tokens": 123456, "context_at": "...",
  "replaces": null, "replaced_by": null, "opened_at": "...", "closed_at": null}
 ```
+`state` is activity (written by hooks and the watch loop); `lifecycle` is set only by `open`/`rotate`/`close`, so a
+rotated session keeps showing "old → new" while its activity is still tracked (it must not be interrupted).
 `context_tokens: null` means **unknown** and is rendered as "unknown", never 0.
 
 **Binding a hook to a session** (in order): (1) `agent_session_id` already known; (1b) a live record with the same
@@ -117,19 +120,28 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
   - *shell*: parsed with `shlex`; any command substitution (`$(`, backticks), process substitution, heredoc, or
     output redirection other than to `/dev/null` is denied; each segment of `|`, `;`, `&&`, `||` must start with an
     allowlisted command: `foreman` with an orchestrator-safe subcommand (`status limits send ask reply say open close
-    rotate board(show/add/set) log stage watch(list) clean(--dry-run) work report gate orchestrator`; `board done`
-    only without `--check`), `orca`/`herdr` read-only subcommands (`terminal list|show|read|wait`, `worktree ps|list`,
+    rotate compact board(show/add/set without `check`) log stage watch(list) clean(--dry-run) work report gate orchestrator`; `board done`
+    only without `--check`; not `orchestrator adopt`, which is user-only), `orca`/`herdr` read-only subcommands (`terminal list|show|read|wait`, `worktree ps|list`,
     `pane list|read`, `agent list|read|wait`), `gh pr|issue|run|repo` (view, list, create, merge, review, checks,
     comment, diff), `git` read-only subcommands (`status log diff show branch(no args)/--list remote(-v) fetch
-    rev-parse ls-files blame`) with `--output` denied, and `ls cat head tail grep rg wc jq date echo pwd which tree
-    stat file` (`find` only without `-delete -exec -execdir -ok -fprint* -fls`).
-  - Sending text to terminals is possible only through `foreman send/ask`, which accepts only registered sessions.
-  - **Fail closed**: if classification raises for an orchestrator `pre_tool`, the tool is denied. Every other hook path
+    rev-parse ls-files blame`) with `--output`, global `-c`/`--config-env`/`--exec-path` and `--upload-pack` denied,
+    and `ls cat head tail grep rg wc jq date echo pwd which tree stat file` (`find` only without `-delete -exec
+    -execdir -ok -fprint* -fls`; `rg` without `--pre`/`--pre-glob`; `tree` without `-o`; `file` without `-C`).
+  - The guard applies to every tool call in the orchestrator's session, including calls made by its subagents
+    (same `session_id`, with `agent_id` in the payload).
+  - Sending text to terminals is possible only through `foreman send/ask/compact`, which accept only registered
+    sessions whose transport reports an agent (Orca `agentIdentity`, Herdr `agent`), never a plain shell.
+  - **Fail closed**: if classification raises for an orchestrator `pre_tool`, or the role cannot be determined for a
+    hook whose handle or session id matches a recorded orchestrator, the tool is denied. Every other hook path
     fails open (exit 0, logged).
-- Objective checks (`board done`) run only the task's stored check (set when the task is created or by
-  `board set check=` when none exists); the orchestrator cannot replace a check while marking a task done.
+- Objective checks (`board done`) run only the task's stored check. A check is set by a worker or the user
+  (`board set check=` when none exists); the orchestrator can neither set nor replace one, so it cannot use a check
+  to run commands.
 - **Wake on worker stop**: when a worker goes idle after a turn, a one-line wake (`title`, last message excerpt)
-  is queued for its project's orchestrator.
+  is queued for its project's orchestrator and delivered at once if the orchestrator is idle (no wait for the watch
+  loop); if the watch heartbeat is stale, a "watch loop not running" event is logged and shown in `watch list`.
+- **The project rule** (spec §4.9) reaches every agent through the SessionStart hook (Claude/Codex
+  `additionalContext`, agy `injectSteps`), so `init` does not edit any committed file.
 - **Delivery at idle**: on `stop` of any session with queued inbox messages, foreman delivers them.
   For Claude Code the Stop hook returns `{"decision":"block","reason":<digest>}` so the agent continues with the
   digest as input (no terminal typing). For other agents a detached `foreman deliver <sid>` process waits for
@@ -183,7 +195,8 @@ A reading with missing/empty/null values never overwrites the last good one; eac
 `{used_pct, resets_at, observed_at}`. Status levels per window: `ok < 70 ≤ warn < 90 ≤ stop`; age is reported
 next to every value. `foreman open` enforces the policy (spec §4.4): a provider at `stop` is refused (exit 5, even
 when named explicitly); at `warn` the other provider is chosen when a fitting model exists, and the routing note
-says so; a reading older than the window's reset time counts as `unknown`. A provider's effective level is the max over windows, the weekly window first in
+says so; a reading older than the window's reset time counts as `unknown`; `unknown` allows the provider, and the note
+says the reading is unknown. A provider's effective level is the max over windows, the weekly window first in
 the summary. `foreman limits --line` is the one-line summary appended to every status report.
 
 ## 7. Messaging
@@ -209,18 +222,20 @@ the summary. `foreman limits --line` is the one-line summary appended to every s
    wait for the handoff message; batch all questions to the old session into ONE `foreman ask` within ~1 h;
    later prefer re-reading the handoff, then searching the old transcript, then asking only "why" questions;
 2. queues for the old session: "write your handoff and deliver it with `foreman send <new> -`";
-3. old: `replaced_by = new`, state `rotated` (left idle, never closed by the janitor or watch); the board
+3. old: `replaced_by = new`, `lifecycle: rotated` (left idle, never closed by the janitor or watch); the board
    shows `old → new`. `foreman ask` to a rotated session whose last event is > 55 min old warns that its
    cache is cold. The orchestrator closes the old session later like any other (owner rules apply).
-Compaction in place: `foreman send <sid> /compact <what to keep>` typed at idle (Claude Code and Codex support
+Compaction in place: `foreman compact <sid> [what to keep]` types the bare `/compact …` command at idle, without the
+message framing (Claude Code and Codex support
 `/compact`; agy has no compact command → rotate instead).
 
 ## 8. Watch loop (`foreman watch run` = one pass; `foreman serve` runs it every 60 s)
 
 Per pass, no model calls: write heartbeat; one `list()` per transport; for each live session detect
 `gone`, `stuck` (busy with no event for `stuck_after_s`), `waiting too long`, context crossing soft/hard;
-limits crossing 70/90 (at ≥ 90 % every running session of that provider also gets a queued "wind down and
-hand off at your next idle point" message); each condition is reported **once** per crossing (dedupe key in `watch/state.json`) as a
+limits crossing 70/90 (at ≥ 90 % every running worker session of that provider also gets a queued "wind down and
+hand off at your next idle point" message; the orchestrator itself is not wound down — it is told, and keeps
+running, because no orchestrator-capable alternative may exist); each condition is reported **once** per crossing (dedupe key in `watch/state.json`) as a
 wake for the orchestrator. Then: deliver queued inbox messages to idle sessions; janitor (daily); weekly lessons
 reminder. `foreman watch list` prints the active watches: the loop (from the heartbeat; "NOT RUNNING" if stale),
 each watched session with its conditions, and the limit watches.
@@ -257,8 +272,10 @@ everything else is ignored and logged. It routes a message in a topic to that pr
 - `foreman clean [--dry-run]`: folders under `agent-work/` idle ≥ `work_ttl_days`. The janitor announces a
   folder (journal + General notification) when it reaches TTL−1 days and deletes it at TTL if it was announced.
 - `foreman work new <topic>` prints a fresh work folder; `foreman work close <dir> [--promote <summary>]`.
-- `foreman init`: project state + board; hooks per agent present (project-local, not committed: Claude
-  `.claude/settings.local.json` …); the work-file rule block in `AGENTS.md`/`CLAUDE.md` between markers;
+- `foreman init`: project state + board; hooks per agent present (project-local files, each added to
+  `.git/info/exclude`, so the working tree stays clean: Claude `.claude/settings.local.json`, agy `.agents/hooks.json`,
+  Codex `.codex/hooks.json`); no committed file is edited (the rule arrives by the SessionStart hook); agy workspace
+  trust and Codex hook trust are one-time user steps;
   Telegram topic; registers already-open sessions in the project folder as `owner: user`. Idempotent.
 - `foreman install`: `~/.local/bin/foreman` symlink, `FOREMAN_HOME`, config defaults for this OS, service unit,
   statusline taps, prints the pairing code. Idempotent; `foreman uninstall` reverts.

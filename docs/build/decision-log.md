@@ -91,3 +91,19 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
 - D35 · macOS notifications need `terminal-notifier` for click-through; `install` provides it via Homebrew, or
   lists it as a user step. — `osascript` notifications cannot open a URL (spec §5.3 / acceptance 6).
 - D36 · Antigravity becomes orchestrator-capable only after an e2e test with the user's Orca hook present.
+
+## After review 1b
+
+- D37 · The orchestrator cannot set objective checks; checks come from workers or the user. — Otherwise
+  `board set check=<shell>` + `board done` is a shell for the orchestrator (verified bypass).
+- D38 · More exec-capable flags denied in the guard (`git -c/--config-env/--exec-path/--upload-pack`, `rg --pre`,
+  `tree -o`, `file -C`); the guard covers subagent tool calls; `send`/`compact` only reach agent terminals;
+  `orchestrator adopt` is user-only.
+- D39 · `foreman compact <sid>` types the raw `/compact` at idle (framed messages cannot carry slash commands).
+- D40 · Sessions have `lifecycle` (active/rotated/closed) separate from activity `state`. — Hooks of a rotated
+  session must not erase "old → new", and its busy/idle state is still needed to avoid interrupting it.
+- D41 · The project's work-file rule is injected by the SessionStart hook instead of editing CLAUDE.md/AGENTS.md;
+  hook files are listed in `.git/info/exclude`. — Spec anti-goal "foreman's files pollute other agents' context"
+  and work repos must stay clean; the rule still reaches every agent on every session start.
+- D42 · At ≥ 90 % the orchestrator is not wound down (it is informed); only workers are. — With Claude at ≥ 90 %
+  and Codex not orchestrator-capable, there may be nowhere to hand off.
