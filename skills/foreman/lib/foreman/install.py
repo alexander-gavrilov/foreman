@@ -342,7 +342,21 @@ def remove_project_hooks():
     return changes
 
 
+def check_purge_target(root, home=None):
+    """--purge deletes a whole tree, so only a folder that is recognisably foreman's own state qualifies: named
+    `foreman` and holding config.json or projects/. FOREMAN_HOME=~/.local/state must never wipe ~/.local/state."""
+    root = os.path.abspath(root or os.sep)
+    if root in (os.sep, user_home(home)) or os.path.basename(root) != "foreman":
+        raise InstallError("refusing to purge %s: it is not a folder named 'foreman'" % root)
+    if os.path.isdir(root) and not (os.path.isfile(os.path.join(root, "config.json"))
+                                    or os.path.isdir(os.path.join(root, "projects"))):
+        raise InstallError("refusing to purge %s: it holds neither config.json nor projects/" % root)
+    return root
+
+
 def uninstall(purge=False, home=None, platform=None, runner=None):
+    if purge:
+        check_purge_target(paths.home(), home)  # before anything is undone
     changes = remove_project_hooks()
     changes += untap_statuslines(home)
     changes += uninstall_service(home, platform, runner)
@@ -352,8 +366,6 @@ def uninstall(purge=False, home=None, platform=None, runner=None):
         changes.append("removed %s" % link)
     if purge:
         root = paths.home()
-        if root in ("", os.sep, user_home(home)):
-            raise InstallError("refusing to purge %s" % root)
         if os.path.isdir(root):
             shutil.rmtree(root)
             changes.append("deleted the state folder %s" % root)

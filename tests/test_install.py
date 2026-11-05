@@ -156,12 +156,45 @@ class InstallTest(_InstallBase):
             install.install(platform="linux", runner=Runner())
         self.assertEqual(open(link).read(), "#!/bin/sh\n")
 
-    def test_purge_removes_state(self):
+    def use_state_dir(self, name, files=("config.json",), dirs=()):
+        root = os.path.join(self.tmp, name)
+        os.makedirs(root)
+        for f in files:
+            write(os.path.join(root, f), "{}")
+        for d in dirs:
+            os.makedirs(os.path.join(root, d))
+        os.environ["FOREMAN_HOME"] = root  # restored by ForemanTestCase
+        return root
+
+    def test_purge_removes_a_foreman_state_dir(self):
         os.environ["FOREMAN_INSTALL_DRY_SERVICES"] = "1"
         self.addCleanup(os.environ.pop, "FOREMAN_INSTALL_DRY_SERVICES", None)
+        root = self.use_state_dir("foreman")
         install.install(platform="linux")
         install.uninstall(purge=True, platform="linux")
-        self.assertFalse(os.path.exists(self.foreman_home))
+        self.assertFalse(os.path.exists(root))
+
+    def test_purge_accepts_a_dir_with_projects_only(self):
+        root = self.use_state_dir("elsewhere/foreman", files=(), dirs=("projects",))
+        install.uninstall(purge=True, platform="linux", runner=lambda argv: 0)
+        self.assertFalse(os.path.exists(root))
+
+    def test_purge_refuses_anything_that_is_not_a_foreman_state_dir(self):
+        cases = {
+            "state": dict(files=("config.json",)),                      # wrong name (e.g. FOREMAN_HOME=~/.local/state)
+            "foreman-data": dict(files=("config.json",)),
+            "foreman": dict(files=("notes.txt",)),                      # right name, not foreman's content
+        }
+        for name, kw in cases.items():
+            with self.subTest(name):
+                root = self.use_state_dir("case-" + name + "/" + name, **kw)
+                with self.assertRaises(install.InstallError):
+                    install.uninstall(purge=True, platform="linux", runner=lambda argv: 0)
+                self.assertTrue(os.path.isdir(root))
+        for bad in ("", os.sep, self.home):
+            os.environ["FOREMAN_HOME"] = bad or "/"
+            with self.assertRaises(install.InstallError):
+                install.uninstall(purge=True, platform="linux", runner=lambda argv: 0)
 
     def test_cli_install_output(self):
         env = {"FOREMAN_INSTALL_DRY_SERVICES": "1"}
