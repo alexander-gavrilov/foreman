@@ -1,4 +1,5 @@
 """Session records and per-session inbox queues (architecture §3)."""
+import json
 import os
 
 from foreman import ids, paths, store, timeutil
@@ -114,10 +115,23 @@ def set_state(sid, state, at=None):
 
 # ---------------------------------------------------------------- inbox
 
-def inbox_enqueue(sid, text, sender="orchestrator", kind="message"):
-    msg = {"id": ids.new_msg_id(), "ts": timeutil.now_iso(), "from": sender, "text": text, "kind": kind,
-           "delivered_at": None}
-    return store.append_jsonl(paths.inbox_file(sid), msg)
+def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, msg_id=None):
+    """Queue a message. With `key`, a message with the same key that is still undelivered suppresses the
+    new one (returns None). `msg_id` lets the caller embed the id in the text before queueing."""
+    msg = {"id": msg_id or ids.new_msg_id(), "ts": timeutil.now_iso(), "from": sender, "text": text,
+           "kind": kind, "delivered_at": None}
+    if key is None:
+        return store.append_jsonl(paths.inbox_file(sid), msg)
+    msg["key"] = key
+    path = paths.inbox_file(sid)
+    with store.locked(path):
+        if any(m.get("key") == key and not m.get("delivered_at") for m in store.read_jsonl(path)):
+            return None
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    return msg
 
 
 def inbox_all(sid):
