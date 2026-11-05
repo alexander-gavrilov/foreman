@@ -292,7 +292,23 @@ class GuardHookTest(HookCase):
         self.assertIn("foreman open", out["reason"])
         out = self.hook("antigravity", "PreToolUse",
                         dict(base, toolCall={"name": "run_command", "args": {"CommandLine": "git log -1"}}), env)
-        self.assertEqual(out, {})
+        # live E4: agy's interactive TUI denies a PreToolUse answered with `{}` ("denied by pre-tool hook: "), so an
+        # allowed call is answered like Orca's own hook does: defer to agy's normal permission flow
+        self.assertEqual(out, {"decision": "ask"})
+
+    def test_agy_pre_tool_is_never_answered_with_an_empty_object(self):
+        """Live E4: `{}` from a PreToolUse hook makes the interactive agy TUI deny the call with an empty reason.
+        Every agy PreToolUse that foreman does not block (worker, unknown session, internal error) answers `ask`;
+        other hooks and other agents keep `{}`."""
+        base = {"conversationId": "ag-9", "workspacePaths": [self.proj["path"]]}
+        call = dict(base, toolCall={"name": "run_command", "args": {"CommandLine": "ls"}})
+        rec, env = self.pending_launch(title="agy-w", agent="antigravity")
+        self.assertEqual(self.hook("antigravity", "PreToolUse", call, env), {"decision": "ask"})
+        self.assertEqual(self.hook("antigravity", "PreToolUse", dict(call, conversationId="stranger"), {}),
+                         {"decision": "ask"})
+        self.assertEqual(self.hook("antigravity", "PreToolUse", "not json", {}), {"decision": "ask"})
+        self.assertEqual(self.hook("antigravity", "PostToolUse", call, env), {})
+        self.assertEqual(self.hook("antigravity", "PreInvocation", dict(base, lastUserInput="go"), env), {})
 
     def test_codex_dialect(self):
         rec, env = self.orch("codex")
@@ -306,7 +322,7 @@ class GuardHookTest(HookCase):
         run = lambda cmd: self.hook("antigravity", "PreToolUse", dict(  # noqa: E731
             base, toolCall={"name": "run_command", "args": {"CommandLine": cmd}}), env)
         for ok in ("git status", "foreman board show", "orca terminal list --json", "ls | head -3"):
-            self.assertEqual(run(ok), {}, ok)
+            self.assertEqual(run(ok), {"decision": "ask"}, ok)
         for bad in ("foreman board done t1 --check 'make'", "herdr pane run w1:p1 'rm -rf x'", "git push",
                     "echo $(id)", "cat <<EOF\nx\nEOF", "git diff --output=x"):
             self.assertEqual(run(bad)["decision"], "deny", bad)

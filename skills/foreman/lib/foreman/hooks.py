@@ -365,6 +365,15 @@ def _fail_closed(agent, event, raw, env):
     return {}
 
 
+def _passed(agent, event, out):
+    """`out` for a hook that blocks nothing: an adapter may need a non-empty answer (agy PreToolUse)."""
+    try:
+        render = getattr(adapters.get(agent), "render_pass", None)
+        return render(event) if render and not out else out
+    except Exception:
+        return out
+
+
 def run_hook(agent, event, raw, env=None):
     """Process one hook invocation (`raw` = the stdin text). Returns the JSON-able output; never raises."""
     env = os.environ if env is None else env
@@ -374,7 +383,7 @@ def run_hook(agent, event, raw, env=None):
         except ValueError:
             payload = {}
         out = _process(agent, event, payload if isinstance(payload, dict) else {}, env)
-        return out if isinstance(out, dict) else {}
+        return _passed(agent, event, out if isinstance(out, dict) else {})
     except Exception as exc:
         _log_error(agent, event, exc)
-        return _fail_closed(agent, event, raw, env)
+        return _passed(agent, event, _fail_closed(agent, event, raw, env))
