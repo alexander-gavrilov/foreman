@@ -65,8 +65,10 @@ The user says it to any supported agent; you do the rest. No manual steps for th
    - Running `foreman init` again changes nothing that is already correct.
 4. Verify: `foreman status` shows the project; `foreman watch list` shows the watch loop running.
 
-Undo: `foreman uninstall` (restores statusline commands, removes the service and the symlink, keeps state);
-`foreman uninstall --purge` also deletes the state folder: ask the user first.
+Undo: `foreman uninstall` (restores statusline commands, removes the service and the symlink, takes foreman's
+hooks out of every initialised project, keeps state); `foreman uninstall --purge` also deletes the state folder:
+ask the user first. One project only: `foreman init --remove` (removes foreman's hook handlers, keeps yours, and
+the `.git/info/exclude` lines init added; project state stays).
 
 ## Orchestrator
 

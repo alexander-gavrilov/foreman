@@ -24,8 +24,8 @@ Linux and macOS, Python 3.9+, standard library only. `foreman uninstall` reverts
 
 | Command | What it does |
 |---|---|
-| `foreman init [--path] [--name]` | Set up a project: state, board, hooks per agent present, work-file rule, Telegram topic |
-| `foreman install` / `uninstall` | Machine setup: symlink, config, service, statusline taps / revert |
+| `foreman init [--path] [--name] [--remove]` | Set up a project: state, board, hooks per agent present, work-file rule, Telegram topic (`--remove` undoes it) |
+| `foreman install` / `uninstall` | Machine setup: symlink, config, service, statusline taps / revert (uninstall also removes foreman's hooks from every initialised project) |
 | `foreman status [--all]` | Sessions, state, context, owner |
 | `foreman limits [--line]` | Subscription windows with usage, reset and reading age |
 | `foreman open` / `close` / `rotate` | Start, stop or replace a worker session |

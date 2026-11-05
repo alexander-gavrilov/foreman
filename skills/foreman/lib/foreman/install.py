@@ -309,8 +309,25 @@ def install(machine_kind=None, bind=None, port=None, base_url=None, home=None, p
     return changes
 
 
+def remove_project_hooks():
+    """Run `init --remove` for every registered project, so no project hook keeps calling a launcher that is
+    about to go away. A project whose folder is gone or unreadable is skipped."""
+    from foreman import initproj, projects
+    changes = []
+    for proj in projects.list_projects():
+        path = proj.get("path")
+        if not path or not os.path.isdir(path):
+            continue
+        try:
+            changes += ["project %s: %s" % (proj.get("slug"), c) for c in initproj.remove_project(path)]
+        except Exception as exc:
+            changes.append("project %s: could not remove hooks (%s)" % (proj.get("slug"), exc))
+    return changes
+
+
 def uninstall(purge=False, home=None, platform=None, runner=None):
-    changes = untap_statuslines(home)
+    changes = remove_project_hooks()
+    changes += untap_statuslines(home)
     changes += uninstall_service(home, platform, runner)
     link = symlink_path(home)
     if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(launcher()):

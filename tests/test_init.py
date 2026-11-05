@@ -187,3 +187,82 @@ class InitTest(ForemanTestCase):
     def test_not_a_folder(self):
         with self.assertRaises(initproj.InitError):
             initproj.init_project(os.path.join(self.tmp, "nope"), agents=[], transports=[])
+
+
+class InitRemoveTest(ForemanTestCase):
+    """F3 (review 3c): `foreman init --remove` takes foreman out of a project again; uninstall runs it."""
+    USER_HANDLER = {"type": "command", "command": "/usr/bin/my-linter --on-stop"}
+
+    def setUp(self):
+        super().setUp()
+        self.proj = self.make_dir("app")
+        os.makedirs(os.path.join(self.proj, ".git", "info"))
+        self.exclude = os.path.join(self.proj, ".git", "info", "exclude")
+        with open(self.exclude, "w") as f:
+            f.write("# mine\n/build/\n")
+
+    def init(self):
+        return initproj.init_project(self.proj, agents=["claude", "antigravity", "codex"], transports=[], fm=FM)
+
+    def put_user_hook(self):
+        path = os.path.join(self.proj, ".claude", "settings.local.json")
+        data = jload(path)
+        data["permissions"] = {"allow": ["Bash(ls)"]}
+        data["hooks"]["Stop"].append({"hooks": [self.USER_HANDLER]})
+        with open(path, "w") as f:
+            json.dump(data, f)
+        return path
+
+    def test_remove_deletes_foreman_only_files_and_exclude_lines(self):
+        self.init()
+        changes = initproj.remove_project(self.proj)
+        for rel in (".claude/settings.local.json", ".agents/hooks.json", ".codex/hooks.json"):
+            self.assertFalse(os.path.exists(os.path.join(self.proj, rel)), rel)
+        self.assertEqual(open(self.exclude).read(), "# mine\n/build/\n")
+        self.assertTrue(changes)
+        self.assertEqual(initproj.remove_project(self.proj), [])  # idempotent
+        # the project record and its state stay
+        self.assertIsNotNone(projects.project_for_path(self.proj))
+
+    def test_remove_keeps_the_users_own_handlers_and_settings(self):
+        self.init()
+        path = self.put_user_hook()
+        agy = os.path.join(self.proj, ".agents", "hooks.json")
+        data = jload(agy)
+        data["mine"] = {"enabled": True}
+        with open(agy, "w") as f:
+            json.dump(data, f)
+        initproj.remove_project(self.proj)
+        left = jload(path)
+        self.assertEqual(left, {"permissions": {"allow": ["Bash(ls)"]},
+                                "hooks": {"Stop": [{"hooks": [self.USER_HANDLER]}]}})
+        self.assertEqual(jload(agy), {"mine": {"enabled": True}})
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ".codex", "hooks.json")))
+
+    def test_remove_does_not_touch_a_project_that_was_never_initialised(self):
+        self.assertEqual(initproj.remove_project(self.proj), [])
+        self.assertEqual(open(self.exclude).read(), "# mine\n/build/\n")
+
+    def test_cli_init_remove(self):
+        self.init()
+        code, out, err = run_cli("init", "--remove", "--path", self.proj)
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ".claude", "settings.local.json")))
+        code, out, err = run_cli("init", "--remove", "--path", self.proj)
+        self.assertEqual(code, 0)
+        self.assertIn("nothing to remove", out)
+
+    def test_uninstall_removes_hooks_of_every_registered_project(self):
+        from foreman import install
+        self.init()
+        other = self.make_dir("other")
+        os.makedirs(os.path.join(other, ".git", "info"))
+        initproj.init_project(other, agents=["claude"], transports=[], fm=FM)
+        gone = self.make_dir("gone")
+        initproj.init_project(gone, agents=["claude"], transports=[], fm=FM)
+        import shutil
+        shutil.rmtree(gone)  # a registered project whose folder vanished must not break uninstall
+        changes = install.uninstall(platform="linux", runner=lambda argv: 0)
+        for root in (self.proj, other):
+            self.assertFalse(os.path.exists(os.path.join(root, ".claude", "settings.local.json")), root)
+        self.assertTrue(any("hooks" in c and "app" in c for c in changes), changes)

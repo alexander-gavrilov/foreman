@@ -124,6 +124,81 @@ def write_hooks(project_path, agent, fm):
     return True
 
 
+_FOREMAN_HANDLER = re.compile(r"\bhook --agent (?:claude|antigravity|codex) --event [A-Za-z]+$")
+
+
+def _is_foreman_handler(h):
+    return isinstance(h, dict) and bool(_FOREMAN_HANDLER.search(h.get("command") or ""))
+
+
+def strip_claude_layout(data):
+    """Remove foreman's handlers (and the groups/events/`hooks` key they leave empty); the user's stay."""
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    changed = False
+    for event in list(hooks):
+        groups = hooks[event]
+        if not isinstance(groups, list):
+            continue
+        kept_groups = []
+        for group in groups:
+            hs = group.get("hooks") if isinstance(group, dict) else None
+            if isinstance(hs, list) and any(_is_foreman_handler(h) for h in hs):
+                changed = True
+                group["hooks"] = [h for h in hs if not _is_foreman_handler(h)]
+                if not group["hooks"]:
+                    continue
+            kept_groups.append(group)
+        if kept_groups:
+            hooks[event] = kept_groups
+        else:
+            del hooks[event]
+    if changed and not hooks:
+        del data["hooks"]
+    return changed
+
+
+def remove_hooks(project_path, agent):
+    """Take foreman's handlers out of the project's hook file for `agent`; delete the file when nothing else is
+    left in it. Returns True when something changed."""
+    path = os.path.join(project_path, HOOK_FILES[agent])
+    data = _load_json(path)
+    if not data:
+        return False
+    if agent == "antigravity":
+        changed = data.pop("foreman", None) is not None
+    else:
+        changed = strip_claude_layout(data)
+    if not changed:
+        return False
+    if data:
+        _save_json(path, data)
+    else:
+        os.unlink(path)
+        try:
+            os.rmdir(os.path.dirname(path))  # only if foreman's file was all that was in it
+        except OSError:
+            pass
+    return True
+
+
+def remove_project(path, home=None):
+    """`foreman init --remove`: foreman's hook handlers out of the project's hook files (the user's stay) and the
+    lines init added out of .git/info/exclude. Project state under FOREMAN_HOME is kept. Idempotent."""
+    path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    changes = []
+    for agent, rel in HOOK_FILES.items():
+        try:
+            if remove_hooks(path, agent):
+                changes.append("removed foreman hooks from %s" % rel)
+        except InitError as exc:
+            changes.append("left %s alone: %s" % (rel, exc))
+    for rel in unexclude_from_git(path, list(HOOK_FILES.values())):
+        changes.append("removed %s from .git/info/exclude" % rel)
+    return changes
+
+
 # ------------------------------------------------------------ git exclude
 
 def _exclude_file(project_path):
@@ -170,6 +245,24 @@ def exclude_from_git(project_path, rel_paths):
         for r in missing:
             f.write("/" + r + "\n")
     return missing
+
+
+def unexclude_from_git(project_path, rel_paths):
+    """Drop the lines exclude_from_git added. Returns the entries removed."""
+    target = _exclude_file(project_path)
+    if not target:
+        return []
+    try:
+        with open(target, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return []
+    drop = {"/" + r for r in rel_paths}
+    removed = [ln.strip()[1:] for ln in lines if ln.strip() in drop]
+    if removed:
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("\n".join(ln for ln in lines if ln.strip() not in drop))
+    return removed
 
 
 # ------------------------------------------------------------ sessions
