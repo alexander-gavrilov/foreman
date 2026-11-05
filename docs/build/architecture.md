@@ -144,8 +144,12 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
   `additionalContext`, agy `injectSteps`), so `init` does not edit any committed file.
 - **Delivery at idle**: on `stop` of any session with queued inbox messages, foreman delivers them.
   For Claude Code the Stop hook returns `{"decision":"block","reason":<digest>}` so the agent continues with the
-  digest as input (no terminal typing). For other agents a detached `foreman deliver <sid>` process waits for
-  transport idle, then types the digest into the terminal.
+  digest as input (no terminal typing); Codex uses the same block, agy `{"decision":"continue"}`. agy ignores a
+  continuation once its consecutive-continuation cap is hit, so its claim is *provisional*
+  (`claimed_by: stop-hook:provisional`): the next agent activity (PreInvocation / tool event) confirms it; if none
+  arrives within 45 s the watch loop gives the messages back and types the digest at idle. `foreman deliver <sid>
+  [--wait S]` (wait = Orca `worktree ps` not `working`, `tui-idle` only as the secondary signal) is the manual
+  form; hooks and wakes spawn it without `--wait` because they only deliver to a session whose record says idle.
 - A hook never breaks the agent: any internal error is logged to `events.jsonl` and the hook exits 0 (except an
   intended block).
 

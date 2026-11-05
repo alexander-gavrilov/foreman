@@ -16,6 +16,9 @@ _CONDITION_PREFIXES = (
 )
 
 
+PROVISIONAL_GRACE_S = 45  # an agy continuation shows agent activity within seconds, or it was not taken
+
+
 def run_pass(interval_s=60):
     """One zero-token watch pass (architecture section 8). Returns a summary dict."""
     now_iso = timeutil.now_iso()
@@ -215,6 +218,19 @@ def run_pass(interval_s=60):
         c for c in dedupe
         if not any(c.startswith(pfx) for pfx in _CONDITION_PREFIXES) or c in active_conditions
     }
+
+    # 5b. agy continuations that were never taken (consecutive-continuation cap): give the messages back and
+    # let step 6 type them at idle (architecture 4a fallback).
+    for s in all_sessions:
+        if sessions.is_open(s) and s.get("agent") in ("antigravity", "agy"):
+            stuck = sessions.inbox_provisional(s["sid"])
+            claimed_at = min((timeutil.age_seconds(m.get("delivered_at")) or 0) for m in stuck) if stuck else None
+            if stuck and claimed_at >= PROVISIONAL_GRACE_S:
+                sessions.inbox_release(s["sid"], [m["id"] for m in stuck])
+                if s.get("state") == "busy":  # the Stop hook set busy for a continuation that never started
+                    sessions.set_state(s["sid"], "idle")
+                s = dict(s, state="idle")
+                all_sessions = [s if x["sid"] == s["sid"] else x for x in all_sessions]
 
     # 6. Deliver pending inbox messages for idle sessions
     for s in all_sessions:

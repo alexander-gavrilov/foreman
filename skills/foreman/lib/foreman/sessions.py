@@ -250,6 +250,32 @@ def inbox_claim(sid, limit=None, claimer=None):
     return claimed
 
 
+PROVISIONAL = "stop-hook:provisional"  # claimed for an agent continuation that may still be ignored (agy)
+
+
+def inbox_provisional(sid):
+    """Messages claimed provisionally (see PROVISIONAL) and not confirmed or given back yet."""
+    return [m for m in inbox_all(sid) if m.get("claimed_by") == PROVISIONAL]
+
+
+def inbox_confirm(sid):
+    """The continuation was taken: provisional claims become final. -> number of messages confirmed."""
+    path = paths.inbox_file(sid)
+    if not os.path.exists(path):
+        return 0
+    n = []
+
+    def fn(rows):
+        for m in rows:
+            if m.get("claimed_by") == PROVISIONAL:
+                m["claimed_by"] = "stop-hook"
+                n.append(1)
+        return rows
+    if any(m.get("claimed_by") == PROVISIONAL for m in inbox_all(sid)):  # cheap read first: runs on every event
+        store.rewrite_jsonl(path, fn)
+    return len(n)
+
+
 def inbox_release(sid, msg_ids):
     """Undo a claim for messages whose delivery failed: they become pending again."""
     wanted = set(msg_ids)
