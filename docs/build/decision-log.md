@@ -151,7 +151,15 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   within 180 s binds as the pending orchestrator (guard active) and is absorbed into the real record. — Live test E2
   showed the agent's first hooks arrive before foreman has its terminal handle, so the orchestrator briefly ran as an
   unguarded worker (acceptance 3).
-- D55 · Antigravity orchestrator (revisits D36): the guard is proven for agy via workspace-level `.agents/hooks.json`
-  with the user's own Orca/Herdr hooks present and ~/.gemini untouched (live E3). agy becomes orchestrator-capable once
-  a live e2e also shows worker events reaching an agy orchestrator (Stop `continue` delivery / re-type fallback);
-  until then `orchestrator start --agent antigravity` stays refused.
+- D55 · Antigravity orchestrators are allowed (closes D36). Live E3/E4 with the user's own Orca/Herdr hooks present and
+  no change to agy's hook config: the guard denies writes in `-p` and in the interactive TUI, a worker's Stop reaches an
+  idle agy orchestrator (typed), an event during a busy turn arrives once through Stop `continue`, and a user reply
+  arrives. Not exercised live: the continuation cap and its re-type fallback (tests only). Workspace trust stays a
+  one-time user step.
+- D56 · Upstream `auto` is two layers: the scrubber, then a fail-safe gate. If the scrubbed text still looks suspicious
+  (high-entropy token, secret-like residue) or too little useful text survives, the finding stays a local draft with
+  the reason and is never sent automatically. — Review 4 showed one pattern list both leaks (PEM, quoted passwords,
+  unknown token prefixes) and over-scrubs (empty issues filed); a blacklist cannot alone guarantee spec §8.10, while
+  spec §4.11 keeps `auto` at home.
+- D57 · An agy PreToolUse hook that blocks nothing answers `{"decision":"ask"}`, not `{}`. — Live E4: the interactive TUI
+  denies every call on `{}`, which also stopped agy workers in any initialised project (`-p` mode does not show this).
