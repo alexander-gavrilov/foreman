@@ -66,6 +66,23 @@ class OrcaTransportTest(StubMixin, ForemanTestCase):
         self.assertFalse(self.t.alive("term_x"))
         self.assertFalse(self.t.alive("term_n"))
 
+    def test_launch_parses_the_real_orca_reply(self):
+        """Regression: `orca agent launch --json` (Orca 1.4.239, captured live) puts the handle under
+        result.outcome, not result.launch.outcome."""
+        real = {"outcome": {"kind": "terminal", "handle": "term_f2aeadae-2ace-4860-a5d3-27dbb1469519",
+                            "paneKey": "320b0ce7-3e97-43f8-abb6-119d100f9dd1:485742f6-839a-4ce2-9b01-4b899b7db4a8"},
+                "worktreeId": "5a0de4fc::/tmp/fm-live-e2/proj",
+                "receipt": {"mode": "terminal", "preferred": "terminal", "reason": "requested",
+                            "detail": "Started a terminal agent, as requested."},
+                "prompt": {"delivery": "submit", "outcome": "handed-to-terminal"},
+                "operationId": "1793897441704-f5d7f9d9733c496cacf52dd627d2036d"}
+        self.set_rules([
+            {"match": ["agent", "launch"], "json": ok(real)},
+            {"match": ["terminal", "rename"], "json": ok({"rename": {"handle": "x"}})},
+        ])
+        self.assertEqual(self.t.launch("claude", "claude-haiku-5-5", None, "/w", "p", "t"),
+                         "term_f2aeadae-2ace-4860-a5d3-27dbb1469519")
+
     def test_launch_command_and_handle(self):
         self.set_rules([
             {"match": ["agent", "launch"], "json": ok({"launch": {"outcome": {"kind": "terminal",

@@ -82,8 +82,10 @@ class OrcaTransport(Transport):
         res = self._call(*args, timeout=120)
         if not res.ok:
             raise _proc.failure(res, "orca agent launch")
-        launch = res.result().get("launch")
-        launch = launch if isinstance(launch, dict) else {}
+        result = res.result()
+        # Orca 1.4.239 replies {"outcome": {"kind", "handle", "paneKey"}, ...} at the top of `result`;
+        # older notes described a `launch` wrapper, which is still accepted.
+        launch = result.get("launch") if isinstance(result.get("launch"), dict) else result
         outcome = launch.get("outcome") if isinstance(launch.get("outcome"), dict) else {}
         terminal = launch.get("terminal") if isinstance(launch.get("terminal"), dict) else {}
         handle = outcome.get("handle") or launch.get("handle") or terminal.get("handle")
