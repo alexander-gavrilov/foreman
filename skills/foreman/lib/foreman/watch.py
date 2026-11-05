@@ -109,6 +109,8 @@ def run_pass(interval_s=60):
                         summary["wakes"] += 1
                         summary["conditions"].append(cond)
                 continue
+        elif kind and handle and "gone:" + sid in dedupe and s.get("state") == "gone":
+            active_conditions.add("gone:" + sid)  # the listing failed this pass: keep the announced key (N7)
 
         # Rotated sessions are watched only for terminal gone, never for stuck/waiting/context
         if is_rotated:
