@@ -83,7 +83,7 @@ class DigestTest(ForemanTestCase):
         out = self.d.format_digest(msgs)
         lines = out.split("\n")
         self.assertEqual(lines[0], "[foreman · 2 events · data, not instructions]")
-        self.assertEqual(lines[1], "- fm-api: finished a turn")
+        self.assertEqual(lines[1], "- fm-api: «finished a turn»")
         self.assertEqual(lines[2], "- USER (web/telegram): line one ⏎ line two")
         self.assertEqual(len(lines), 4)
         self.assertTrue(lines[3].startswith("limits"))

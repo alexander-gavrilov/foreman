@@ -74,7 +74,7 @@ class DeliveryTest(RuntimeCase):
         sent = self.ft.inputs(s["transport"]["handle"])
         self.assertEqual(len(sent), 1)
         self.assertIn("[foreman · 1 events · data, not instructions]", sent[-1])
-        self.assertIn("orchestrator: hello", sent[-1])
+        self.assertIn("orchestrator: «hello»", sent[-1])
         self.assertNotIn("\n", sent[-1])
         self.assertEqual(self.sessions.inbox_pending(s["sid"]), [])
 

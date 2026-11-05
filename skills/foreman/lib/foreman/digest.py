@@ -16,8 +16,21 @@ def _label(msg):
     return "session " + name if _USERISH.match(name) else name
 
 
+_USER_LABEL = re.compile(r"\buser\s*\(", re.I)
+
+
+def _quote(text):
+    """Text of a non-user row: wrapped in « » (the characters are removed from the text, so it cannot close the
+    quote early) and 'USER (' is neutralised, so even the one-line typed form cannot contain a user row."""
+    text = text.replace("«", "<").replace("»", ">")
+    text = _USER_LABEL.sub(lambda m: "usr" + m.group(0)[4:].lstrip(), text)
+    return "«%s»" % text
+
+
 def _line(msg):
     text = " ⏎ ".join(part.strip() for part in str(msg.get("text") or "").splitlines() if part.strip())
+    if msg.get("kind") != "user":
+        text = _quote(text)
     return "- %s: %s" % (_label(msg), text)
 
 
