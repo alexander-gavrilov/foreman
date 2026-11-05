@@ -1,0 +1,12 @@
+{
+  "name": "foreman",
+  "description": "Agent-agnostic orchestration of AI agent sessions (Claude Code, Antigravity, Codex) over Orca and Herdr: one orchestrator per project, hooks, limits, board, web UI and Telegram.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Alexander Gavrilov",
+    "email": "alexander.v.gavrilov@gmail.com"
+  },
+  "homepage": "https://github.com/alexander-gavrilov/foreman",
+  "repository": "https://github.com/alexander-gavrilov/foreman",
+  "keywords": ["orchestration", "agents", "claude-code", "antigravity", "codex", "orca", "herdr", "sessions"]
+}

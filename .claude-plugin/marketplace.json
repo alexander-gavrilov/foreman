@@ -1,0 +1,14 @@
+{
+  "name": "foreman",
+  "owner": {
+    "name": "Alexander Gavrilov",
+    "email": "alexander.v.gavrilov@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "foreman",
+      "source": "./",
+      "description": "Agent-agnostic orchestration of AI agent sessions: one orchestrator per project, hooks, limits, board, web UI and Telegram."
+    }
+  ]
+}
