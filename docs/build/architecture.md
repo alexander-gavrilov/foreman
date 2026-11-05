@@ -165,7 +165,7 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
 | waiting for permission | Notification `permission_prompt`, PermissionRequest | not visible to hooks (Herdr `blocked` status when on Herdr) | PermissionRequest |
 | context | transcript tail `usage` (sum of input + cache_creation + cache_read + output) or statusline `context_window` | statusline `context_window` only | unknown in v1 (no statusline command) |
 | limits | statusline `rate_limits.five_hour/seven_day.{used_percentage, resets_at epoch s}` | statusline `quota.<key>.{remaining_fraction, reset_time}`; keys `gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly` | not read in v1 (spec §10.1: shown only if exposed) |
-| orchestrator-capable | yes (verified) | only after an e2e test proves `deny` works with the user's Orca hook present and Stop `continue` delivers; when the continuation cap is hit, delivery falls back to typing at idle | worker only in v1: hooks could not be run here (not logged in) |
+| orchestrator-capable | yes (verified) | yes (verified live E4, interactive TUI on Orca: `deny` works next to the user's Orca hook, a worker Stop is typed at idle, an event during a busy turn is delivered by Stop `continue`, user replies arrive); when the continuation cap is hit, delivery falls back to typing at idle. A hook that blocks nothing must answer a PreToolUse with `{"decision":"ask"}`: `{}` makes the interactive TUI deny the call with an empty reason | worker only in v1: hooks could not be run here (not logged in) |
 
 Hook outputs always print valid JSON (`{}` when nothing) because agy requires it. Legacy snapshots in
 `~/.cache/agent-limits/` (written by the user's existing statusline scripts) are also imported as a limits

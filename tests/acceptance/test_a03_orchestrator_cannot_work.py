@@ -83,8 +83,8 @@ class OrchestratorCannotWorkTest(AcceptanceCase):
         self.assertTrue(denied_agy(self.pre_tool_agy(orch, "replace_file_content", {"TargetFile": self.target})))
         self.assertTrue(denied_agy(self.pre_tool_agy(orch, "run_command", {"CommandLine": "rm -rf ."})))
         self.assertTrue(denied_agy(self.pre_tool_agy(orch, "run_command", {"CommandLine": "echo x >> app.py"})))
-        self.assertEqual(self.pre_tool_agy(orch, "run_command", {"CommandLine": "git status"}), {})
-        self.assertEqual(self.pre_tool_agy(orch, "view_file", {"AbsolutePath": self.target}), {})
+        self.assertEqual(self.pre_tool_agy(orch, "run_command", {"CommandLine": "git status"}), {"decision": "ask"})
+        self.assertEqual(self.pre_tool_agy(orch, "view_file", {"AbsolutePath": self.target}), {"decision": "ask"})
 
     def test_workers_and_user_sessions_are_not_restricted(self):
         worker = self.open_worker(self.slug, "fm-api")
