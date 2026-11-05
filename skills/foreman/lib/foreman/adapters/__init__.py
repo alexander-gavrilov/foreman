@@ -4,7 +4,7 @@ foreman's decisions in the agent's own output dialect.
 A normalised event is a dict with these keys (all may be None except `kind`/`native_event`):
   kind, native_event, agent_session_id, cwd, transcript_path, model, prompt, tool_name, tool_input,
   command (shell command text when the tool is a shell), last_assistant_message, stop_hook_active,
-  fully_idle, reason.
+  fully_idle, reason, source (SessionStart: startup|resume|clear|compact|fork).
 `kind` is one of session_start, prompt, pre_tool, post_tool, stop, wait_input, wait_permission,
 session_end, or None for an event foreman does not track.
 """
@@ -23,7 +23,7 @@ def blank(native_event):
     return {"kind": None, "native_event": native_event, "agent_session_id": None, "cwd": None,
             "transcript_path": None, "model": None, "prompt": None, "tool_name": None, "tool_input": None,
             "command": None, "last_assistant_message": None, "stop_hook_active": False, "fully_idle": None,
-            "reason": None}
+            "reason": None, "source": None}
 
 
 def as_text(value):

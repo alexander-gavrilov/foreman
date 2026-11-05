@@ -32,7 +32,8 @@ BLOCKED = [
     "gh pr checkout 12", "gh api repos/x/y -X DELETE", "gh repo delete x", "gh auth login",
     "gh issue delete 1", "gh release create v1", "rg --pre ./script foo", "date -s '2020-01-01'",
     "FOO=bar ls", "(ls)", "ls <(cat x)", "ls > /etc/passwd", "cat <<EOF\n$(rm -rf x)\nEOF",
-    "foreman status & rm x", "xargs rm", "env rm x", "/bin/rm x", "./foreman status", "",
+    "git ls-remote --upload-pack=./evil.sh /some/repo", "git ls-remote --exec=./evil.sh .",
+    "git diff --ext-diff", "git grep -O less foo", "git help -m log", "foreman status & rm x", "xargs rm", "env rm x", "/bin/rm x", "./foreman status", "",
 ]
 
 

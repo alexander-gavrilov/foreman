@@ -37,6 +37,7 @@ def normalise(event, payload):
     n["last_assistant_message"] = as_text(payload.get("last_assistant_message"))
     n["stop_hook_active"] = bool(payload.get("stop_hook_active"))
     n["reason"] = as_text(payload.get("reason"))
+    n["source"] = as_text(payload.get("source"))
     return n
 
 

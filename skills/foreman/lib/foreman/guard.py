@@ -8,7 +8,7 @@ small quote-aware scanner (not plain shlex: shlex cannot tell a quoted ">" from 
 import re
 
 SHELL_TOOLS = {"bash", "run_command", "shell", "local_shell", "exec_command", "shell_command",
-               "execute_command", "run_shell_command"}
+               "execute_command", "run_shell_command", "unified_exec", "container.exec"}
 EDIT_MARKERS = ("write", "edit", "patch", "replace", "create_file", "delete")
 NOT_EDITING = {"todowrite"}  # bookkeeping tools whose names merely contain a marker
 
@@ -20,7 +20,10 @@ FIND_FORBIDDEN = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-
 GIT_READONLY = {"status", "log", "diff", "show", "rev-parse", "rev-list", "ls-files", "ls-tree", "ls-remote",
                 "cat-file", "blame", "describe", "shortlog", "whatchanged", "diff-tree", "name-rev",
                 "merge-base", "for-each-ref", "show-ref", "grep", "check-ignore", "count-objects",
-                "show-branch", "cherry", "diff-index", "diff-files", "version", "help"}
+                "show-branch", "cherry", "diff-index", "diff-files", "version"}
+# options of the read-only subcommands that write a file or run a program
+GIT_FORBIDDEN_OPTIONS = ("--output", "--upload-pack", "--receive-pack", "--exec", "--ext-diff",
+                         "--open-files-in-pager", "--textconv")
 GIT_GLOBAL_OK = {"--no-pager", "--no-optional-locks", "-P"}
 GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "review", "checks", "comment", "diff", "status"},
               "issue": {"view", "list", "create", "comment", "status"},
@@ -236,9 +239,8 @@ def _check_git(args):
     sub, rest = args[i], args[i + 1:]
     if sub in GIT_READONLY:
         for a in rest:
-            if a.startswith("--output") or (sub == "grep" and (a.startswith("-O") or
-                                                              a.startswith("--open-files-in-pager"))):
-                raise _Reject("git %s %s writes or runs a program" % (sub, a))
+            if a.startswith(GIT_FORBIDDEN_OPTIONS) or (sub == "grep" and a.startswith("-O")):
+                raise _Reject("git %s %s writes a file or runs a program" % (sub, a))
         return
     if sub in ("branch", "tag"):
         flags = {"-a", "-r", "-v", "-vv", "--list", "-l", "--show-current", "--all", "--remotes", "--verbose",
