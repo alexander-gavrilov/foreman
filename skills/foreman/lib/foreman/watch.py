@@ -52,14 +52,20 @@ def run_pass(interval_s=60):
         for s in non_closed
     } - {None, ""}
 
+    # A failed list() (Orca restart, timeout) is "unknown", never "everything is gone": that kind is skipped.
     live_handles_by_kind = {}
+    transport_by_kind = {}
     for kind in transport_kinds:
         try:
             t = transports.get_transport(kind)
-            term_list = t.list()
-            live_handles_by_kind[kind] = {item.handle for item in term_list}
+            live_handles_by_kind[kind] = {item.handle for item in t.list()}
+            transport_by_kind[kind] = t
         except Exception:
-            live_handles_by_kind[kind] = set()
+            continue
+
+    # Consecutive passes in which a session's handle was missing from list() AND alive(handle) was False.
+    gone_miss_prev = state.get("gone_miss") if isinstance(state.get("gone_miss"), dict) else {}
+    gone_miss = {}
 
     # 3. Per non-closed session checks
     for s in non_closed:
@@ -71,19 +77,34 @@ def run_pass(interval_s=60):
         handle = tr.get("handle")
         is_rotated = (s.get("lifecycle") == "rotated")
 
-        # Terminal gone (watched for all non-closed sessions, including rotated)
-        if kind and kind in live_handles_by_kind and handle and handle not in live_handles_by_kind[kind]:
-            cond = "gone:" + sid
-            active_conditions.add(cond)
-            if s.get("state") != "gone":
-                # Mark state gone, but never change lifecycle of a rotated session to closed
-                sessions.set_state(sid, "gone")
-            if cond not in dedupe:
-                wake.wake(project, "terminal gone: " + title)
-                dedupe.add(cond)
-                summary["wakes"] += 1
-                summary["conditions"].append(cond)
-            continue
+        # Terminal gone (watched for all non-closed sessions, including rotated). Gone only after the handle is
+        # missing from list() and alive(handle) is False on two consecutive passes (or a hook already said gone).
+        if kind in live_handles_by_kind and handle:
+            seen = handle in live_handles_by_kind[kind]
+            if not seen:
+                try:
+                    seen = bool(transport_by_kind[kind].alive(handle))
+                except Exception:
+                    seen = True  # cannot tell: not evidence of death
+            if seen:
+                if s.get("state") == "gone":
+                    sessions.set_state(sid, "idle")  # the terminal is back; the next hook event refines this
+                    s = dict(s, state="idle")
+            else:
+                misses = int(gone_miss_prev.get(sid) or 0) + 1
+                gone_miss[sid] = misses
+                if misses >= 2 or s.get("state") == "gone":
+                    cond = "gone:" + sid
+                    active_conditions.add(cond)
+                    if s.get("state") != "gone":
+                        # Mark state gone, but never change lifecycle of a rotated session to closed
+                        sessions.set_state(sid, "gone")
+                    if cond not in dedupe:
+                        wake.wake(project, "terminal gone: " + title)
+                        dedupe.add(cond)
+                        summary["wakes"] += 1
+                        summary["conditions"].append(cond)
+                continue
 
         # Rotated sessions are watched only for terminal gone, never for stuck/waiting/context
         if is_rotated:
@@ -237,6 +258,7 @@ def run_pass(interval_s=60):
 
     # Save state
     state["dedupe"] = sorted(list(dedupe))
+    state["gone_miss"] = gone_miss
     store.write_json(paths.watch_state_file(), state)
 
     return summary
