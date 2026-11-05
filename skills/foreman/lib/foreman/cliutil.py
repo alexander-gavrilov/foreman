@@ -3,16 +3,15 @@ import json
 import os
 import sys
 
-from foreman import projects
+from foreman import projects, sessions
+from foreman.errors import ForemanError
 
 
-class CliError(Exception):
+class CliError(ForemanError):
     """A user-facing error: printed as `foreman: <message>` to stderr, process exits with `code`."""
 
     def __init__(self, message, code=2):
-        super().__init__(message)
-        self.message = message
-        self.code = code
+        super().__init__(message, code)
 
 
 def add_project_arg(parser):
@@ -33,6 +32,27 @@ def resolve_project(args, cwd=None):
         raise CliError("no foreman project here: %s is not inside an initialised project "
                        "(run `foreman init` or pass --project <slug>)" % (cwd or os.getcwd()))
     return proj
+
+
+def caller_project(args, cwd=None):
+    """The --project slug if given, else the slug of the project containing the cwd, else None (no error)."""
+    slug = getattr(args, "project", None)
+    if slug:
+        return slug
+    proj = projects.project_for_path(cwd or os.getcwd())
+    return proj["slug"] if proj else None
+
+
+def find_session(ref, args, cwd=None):
+    """Resolve a session reference for a command: titles are scoped to the caller's project; an ambiguous
+    title across projects, or no match at all, is a CliError."""
+    try:
+        rec = sessions.find(ref, project=caller_project(args, cwd))
+    except sessions.AmbiguousSession as exc:
+        raise CliError(exc.message, exc.code)
+    if rec is None:
+        raise CliError("no session %r" % ref)
+    return rec
 
 
 def dump_json(obj):
