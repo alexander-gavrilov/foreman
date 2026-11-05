@@ -42,7 +42,7 @@ def detect_agents(home=None, which=None):
 
 
 def _cmd(fm, agent, event):
-    return "%s hook --agent %s --event %s" % (shlex.quote(fm), agent, event)
+    return "%s%s hook --agent %s --event %s" % (machine.env_prefix(), shlex.quote(fm), agent, event)
 
 
 def _load_json(path):

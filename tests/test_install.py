@@ -58,8 +58,8 @@ class InstallTest(_InstallBase):
         self.assertIn("Restart=always", unit)
         self.assertEqual(r.calls[0], ["systemctl", "--user", "daemon-reload"])
         self.assertEqual(r.calls[1], ["systemctl", "--user", "enable", "--now", "foreman.service"])
-        self.assertEqual(self.sl(self.claude), "%s tap statusline --agent claude -- sh -c 'bash ~/sl.sh'" % link)
-        self.assertEqual(self.sl(self.agy), "%s tap statusline --agent antigravity -- sh -c 'bash ~/agy.sh'" % link)
+        self.assertEqual(self.sl(self.claude), "%s%s tap statusline --agent claude -- sh -c 'bash ~/sl.sh'" % (install.env_prefix(), link))
+        self.assertEqual(self.sl(self.agy), "%s%s tap statusline --agent antigravity -- sh -c 'bash ~/agy.sh'" % (install.env_prefix(), link))
         self.assertTrue(os.path.exists(self.claude + ".foreman-bak"))
         cfg = json.load(open(paths.config_file()))
         self.assertEqual(cfg["web"], {"bind": ["127.0.0.1", "10.8.0.2"], "port": 9000, "base_url": "http://h.lan:9000"})
@@ -309,3 +309,24 @@ class StatuslineBackupTest(_InstallBase):
         self.assertEqual(json.load(open(self.claude))["theme"], "light")
         self.assertEqual(self.sl(self.claude), "bash ~/sl.sh")
         self.assertTrue(os.path.exists(self.claude + ".foreman-bak"))
+
+
+class StatuslineForemanHome(_InstallBase):
+    def test_tap_command_carries_a_custom_foreman_home_and_unwraps_cleanly(self):
+        import shlex
+        install.install(platform="linux", runner=Runner())
+        link = os.path.join(self.home, ".local", "bin", "foreman")
+        want = "FOREMAN_HOME=%s %s tap statusline --agent claude -- sh -c 'bash ~/sl.sh'" % (
+            shlex.quote(self.foreman_home), link)
+        self.assertEqual(self.sl(self.claude), want)
+        self.assertEqual(install.unwrap_command(want), "bash ~/sl.sh")
+        # the wrapped statusline still runs and records into that state
+        import subprocess
+        r = subprocess.run(["sh", "-c", want], input=json.dumps({"rate_limits": {"seven_day": {
+            "used_percentage": 12, "resets_at": 4102444800}}}), capture_output=True, text=True,
+            env=dict(os.environ, HOME=self.home, FOREMAN_HOME="/nonexistent-wrong/foreman"))
+        self.assertIn(r.returncode, (0, 127), r.stderr)  # bash ~/sl.sh does not exist; the tap itself ran
+        from foreman import limits
+        self.assertEqual(limits.load_provider_limits("claude")["seven_day"]["used_pct"], 12)
+        install.uninstall(platform="linux", runner=Runner())
+        self.assertEqual(self.sl(self.claude), "bash ~/sl.sh")

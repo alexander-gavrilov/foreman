@@ -17,8 +17,17 @@ npx skills add alexander-gavrilov/foreman -g -y
 foreman init                                      # once per project
 ```
 
-Linux and macOS, Python 3.9+, standard library only. `foreman uninstall` reverts the install
-(`--purge` also deletes the state).
+Linux and macOS, Python 3.9+, standard library only. `foreman uninstall` reverts the install, including
+foreman's hooks in every initialised project (`--purge` also deletes the state, and only a folder named `foreman`).
+
+Install with `npx skills add` only. `foreman install` links `~/.local/bin/foreman` to the skill folder it runs
+from, and the Claude Code plugin manifest (`.claude-plugin/`) installs into a versioned cache folder that
+disappears on update, which would leave the link, the service and every hook pointing at nothing. If you use
+the manifest for the skills, still run `install` from the `npx` copy.
+
+A non-default `FOREMAN_HOME` is written into every hook and statusline command (`FOREMAN_HOME=... foreman hook ...`)
+and into the service unit, so hooks and the daemon share one state. Move the state, then run `foreman install` and
+`foreman init` again to refresh them.
 
 ## Commands
 

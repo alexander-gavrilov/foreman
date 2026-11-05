@@ -3,13 +3,17 @@ so tests can point FOREMAN_HOME / HOME at temporary directories."""
 import os
 
 
+def default_home():
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "foreman")
+
+
 def home():
     """$FOREMAN_HOME, else ${XDG_STATE_HOME:-~/.local/state}/foreman."""
     explicit = os.environ.get("FOREMAN_HOME")
     if explicit:
         return os.path.abspath(os.path.expanduser(explicit))
-    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    return os.path.join(state, "foreman")
+    return default_home()
 
 
 def _name(value):

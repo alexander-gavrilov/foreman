@@ -88,12 +88,21 @@ def _template(name):
         return f.read()
 
 
+def env_prefix():
+    """`FOREMAN_HOME=<dir> ` when the state folder is not the default one, else "". Hook and tap commands start
+    with it, so an agent's hook and the daemon always share one state (the service unit carries it already)."""
+    if not os.environ.get("FOREMAN_HOME") or os.path.abspath(paths.home()) == os.path.abspath(paths.default_home()):
+        return ""
+    return "FOREMAN_HOME=%s " % shlex.quote(paths.home())
+
+
 # ------------------------------------------------------------ statusline taps
 
 def wrap_command(original, fm, agent):
     """`<fm> tap statusline --agent A -- sh -c '<original>'`: the original may use shell syntax (env prefix,
     $(...), ;, &&); tap runs it as an argv, so the quoting here is the only shell layer."""
-    return "%s tap statusline --agent %s -- sh -c %s" % (shlex.quote(fm), agent, shlex.quote(original))
+    return "%s%s tap statusline --agent %s -- sh -c %s" % (env_prefix(), shlex.quote(fm), agent,
+                                                          shlex.quote(original))
 
 
 def unwrap_command(command):

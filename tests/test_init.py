@@ -3,9 +3,15 @@ import os
 
 from tests.helpers import ForemanTestCase, run_cli
 from foreman import initproj, projects, sessions  # noqa: E402
+from foreman import install as machine_install  # noqa: E402
 from foreman.transports.fake import FakeTransport  # noqa: E402
 
 FM = "/opt/foreman/bin/foreman"
+
+
+def fmh():
+    """The launcher as it appears at the start of a hook command (with FOREMAN_HOME=... when not the default)."""
+    return machine_install.env_prefix() + FM
 
 
 def jload(path):
@@ -43,15 +49,15 @@ class InitTest(ForemanTestCase):
         self.assertTrue(os.path.exists(os.path.join(self.foreman_home, "projects", "app", "board.json")))
         claude = jload(os.path.join(self.proj, ".claude", "settings.local.json"))["hooks"]
         self.assertEqual(sorted(claude), sorted(initproj.CLAUDE_EVENTS))
-        self.assertEqual(claude["Stop"][0]["hooks"][0]["command"], FM + " hook --agent claude --event Stop")
+        self.assertEqual(claude["Stop"][0]["hooks"][0]["command"], fmh() + " hook --agent claude --event Stop")
         self.assertEqual(claude["PreToolUse"][0]["matcher"], "*")
         agy = jload(os.path.join(self.proj, ".agents", "hooks.json"))["foreman"]
         self.assertTrue(agy["enabled"])
         self.assertEqual(agy["Stop"], [{"type": "command", "timeout": 10,
-                                        "command": FM + " hook --agent antigravity --event Stop"}])
+                                        "command": fmh() + " hook --agent antigravity --event Stop"}])
         self.assertEqual(agy["PreToolUse"][0]["matcher"], "*")
         self.assertEqual(agy["PostToolUse"][0]["hooks"][0]["command"],
-                         FM + " hook --agent antigravity --event PostToolUse")
+                         fmh() + " hook --agent antigravity --event PostToolUse")
         self.assertEqual(sorted(agy), sorted(["enabled", "SessionStart", "PreInvocation", "Stop", "PreToolUse",
                                               "PostToolUse"]))
         codex = jload(os.path.join(self.proj, ".codex", "hooks.json"))["hooks"]
@@ -104,9 +110,9 @@ class InitTest(ForemanTestCase):
         self.assertEqual(data["permissions"], mine["permissions"])
         self.assertEqual(data["hooks"]["Custom"], [{"hooks": []}])
         stop = [h["command"] for g in data["hooks"]["Stop"] for h in g["hooks"]]
-        self.assertEqual(stop, ["echo mine", FM + " hook --agent claude --event Stop"])
+        self.assertEqual(stop, ["echo mine", fmh() + " hook --agent claude --event Stop"])
         pre = [h["command"] for g in data["hooks"]["PreToolUse"] for h in g["hooks"]]
-        self.assertEqual(pre, ["lint.sh", FM + " hook --agent claude --event PreToolUse"])
+        self.assertEqual(pre, ["lint.sh", fmh() + " hook --agent claude --event PreToolUse"])
         before = open(path).read()
         self.init(agents=["claude"])
         self.assertEqual(open(path).read(), before)
@@ -116,7 +122,7 @@ class InitTest(ForemanTestCase):
         self.init(agents=["claude"])
         data = jload(os.path.join(self.proj, ".claude", "settings.local.json"))
         self.assertEqual(len(data["hooks"]["Stop"]), 1)
-        self.assertEqual(data["hooks"]["Stop"][0]["hooks"][0]["command"], FM + " hook --agent claude --event Stop")
+        self.assertEqual(data["hooks"]["Stop"][0]["hooks"][0]["command"], fmh() + " hook --agent claude --event Stop")
 
     def test_invalid_json_is_not_clobbered(self):
         path = os.path.join(self.proj, ".claude", "settings.local.json")
@@ -331,3 +337,53 @@ class InitSkipsTrackedHookFiles(_GitSubfolderBase):
         self.assertNotIn("codex/hooks.json", open(os.path.join(self.repo, ".git", "info", "exclude")).read())
         # the untracked claude file was still written and excluded
         self.assertTrue(os.path.exists(os.path.join(self.sub, ".claude", "settings.local.json")))
+
+
+class HookCommandsCarryForemanHome(ForemanTestCase):
+    """F11 (review 3c): with a non-default FOREMAN_HOME, the hook commands carry it, so hooks and the daemon
+    share one state."""
+
+    def init(self, name):
+        proj = self.make_dir(name)
+        initproj.init_project(proj, agents=["claude", "antigravity", "codex"], transports=[], fm=FM)
+        return proj
+
+    def commands(self, proj):
+        out = []
+        for rel in (".claude/settings.local.json", ".codex/hooks.json"):
+            for groups in jload(os.path.join(proj, rel))["hooks"].values():
+                out += [h["command"] for g in groups for h in g["hooks"]]
+        agy = jload(os.path.join(proj, ".agents", "hooks.json"))["foreman"]
+        for ev, v in agy.items():
+            if isinstance(v, list):
+                out += [h["command"] if "command" in h else h["hooks"][0]["command"] for h in v]
+        return out
+
+    def test_custom_foreman_home_is_in_every_hook_command(self):
+        import shlex
+        proj = self.init("custom")
+        prefix = "FOREMAN_HOME=%s " % shlex.quote(self.foreman_home)
+        cmds = self.commands(proj)
+        self.assertGreater(len(cmds), 15)
+        for c in cmds:
+            self.assertTrue(c.startswith(prefix + FM + " hook --agent "), c)
+
+    def test_default_foreman_home_adds_nothing(self):
+        os.environ.pop("FOREMAN_HOME")
+        os.environ["XDG_STATE_HOME"] = os.path.join(self.tmp, "xdg")  # default location, under the temp dir
+        proj = self.init("plain")
+        for c in self.commands(proj):
+            self.assertTrue(c.startswith(FM + " hook --agent "), c)
+        # and explicitly naming the default is the same thing
+        os.environ["FOREMAN_HOME"] = os.path.join(self.tmp, "xdg", "foreman")
+        proj = self.init("plain2")
+        for c in self.commands(proj):
+            self.assertTrue(c.startswith(FM + " hook --agent "), c)
+
+    def test_refresh_after_changing_foreman_home_rewrites_the_commands(self):
+        proj = self.init("moved")
+        os.environ["FOREMAN_HOME"] = os.path.join(self.tmp, "other-state", "foreman")
+        initproj.init_project(proj, agents=["claude"], transports=[], fm=FM)
+        for c in jload(os.path.join(proj, ".claude", "settings.local.json"))["hooks"]["Stop"][0]["hooks"]:
+            self.assertIn("other-state", c["command"])
+            self.assertNotIn(self.foreman_home, c["command"])
