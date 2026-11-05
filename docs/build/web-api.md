@@ -43,7 +43,7 @@ The weekly window is always first in `windows`. A window with `used_pct: null` i
   "board": {"tasks": [{"id": "t1", "title": "...", "stage": "...", "owner": "fm-api (s-1a2b3c)", "next": "...",
             "links": [{"label": "PR #12", "url": "https://..."}], "status": "open|blocked|waiting|done"}]},
   "sessions": [{"sid": "s-1a2b3c", "title": "fm-api", "agent": "claude", "model": "sonnet-5-5", "role": "worker",
-                "owner": "orchestrator|user", "state": "busy", "state_age": "3m", "context_tokens": 152000,
+                "owner": "orchestrator|user", "state": "busy", "lifecycle": "active|rotated|closed", "state_age": "3m", "context_tokens": 152000,
                 "context_level": "ok|warn|unknown", "replaces": null, "replaced_by": null}],
   "watches": [{"what": "watch loop", "status": "running, last pass 23s ago"}]
 }
