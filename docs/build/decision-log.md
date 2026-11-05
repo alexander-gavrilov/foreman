@@ -50,3 +50,6 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
 - D21 · Project gates (spec §9 syntax): `project.json` `gates` is a list of named gates
   (`spec-approval`, `pr-merge`, `close-user-session`, `expensive-model`, or free text); the orchestrator briefing
   lists them and `foreman gate <name>` answers "ask the user" or "proceed".
+- D4 · 2026-11-05 · Platforms stay Linux + macOS (spec §6). A control-panel message (foreman-ac, 13:00) says any
+  Windows work goes to the Orca tab "foreman-win"; Windows is not a v1 target unless the user adds it. At the time
+  of the message no such tab or Windows host was visible to `orca terminal list` / `orca host list`.
