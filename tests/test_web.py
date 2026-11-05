@@ -474,6 +474,11 @@ class ServerHttpTest(ForemanTestCase):
         status, hdrs, body = self._http("/api/state", headers={"Host": "attacker.site:8765"})
         self.assertIn(status, (421, 403))
 
+        # wildcard bind addresses are not names a browser uses to reach us
+        for host in ("0.0.0.0:%d" % self.port, "0.0.0.0", "[::]:%d" % self.port):
+            status, hdrs, body = self._http("/api/state", headers={"Host": host})
+            self.assertEqual(status, 421, host)
+
         # Valid Host headers (localhost or 127.0.0.1) pass Host check (even if unauth -> 401)
         status, hdrs, body = self._http("/api/state", headers={"Host": "127.0.0.1:%d" % self.port})
         self.assertEqual(status, 401)

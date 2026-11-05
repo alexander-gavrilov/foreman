@@ -34,7 +34,7 @@ def is_allowed_host(host_hdr):
         hostname = host.lower()
 
     # Always allowed local hostnames
-    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::"):
+    if hostname in ("localhost", "127.0.0.1", "::1"):
         return True
 
     cfg = config.load()
