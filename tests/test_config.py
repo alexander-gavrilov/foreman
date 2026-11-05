@@ -66,11 +66,24 @@ class ConfigTest(ForemanTestCase):
         self.assertIsNone(self.c.get("nope.nothing"))
         self.assertEqual(self.c.get("nope.nothing", 5), 5)
 
-    def test_corrupt_config_falls_back_to_defaults(self):
+    def test_corrupt_config_is_reported_then_defaults_apply(self):
         import os
-        with open(os.path.join(self.foreman_home, "config.json"), "w") as f:
+        from foreman import store
+        path = os.path.join(self.foreman_home, "config.json")
+        with open(path, "w") as f:
             f.write("{oops")
-        self.assertEqual(self.c.load(platform="linux")["web"]["port"], 8765)
+        with self.assertRaises(store.StateCorrupt):
+            self.c.load(platform="linux")
+        self.assertTrue([n for n in os.listdir(self.foreman_home) if n.startswith("config.json.corrupt-")])
+        self.assertEqual(self.c.load(platform="linux")["web"]["port"], 8765)  # moved aside -> defaults
+
+    def test_config_must_be_an_object(self):
+        import os
+        from foreman import store
+        with open(os.path.join(self.foreman_home, "config.json"), "w") as f:
+            f.write("[1]")
+        with self.assertRaises(store.StateCorrupt):
+            self.c.load(platform="linux")
 
     def test_defaults_not_mutated_between_calls(self):
         cfg = self.c.load(platform="linux")

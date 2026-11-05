@@ -3,7 +3,6 @@
 Collected by research workers (Claude Sonnet 5.5: hooks; Gemini 3.8 Flash: transports) on the build machine.
 Versions: claude 2.1.318, agy 1.5.1, codex-cli 0.146.1, Orca 1.4.239, Herdr 0.9.5. Tags: [V-run] verified by running, [V-file] read from files, [V-doc]/[S-doc] documentation, UNVERIFIED.
 
-Date 2026-11-05. Versions: claude 2.1.318, agy 1.5.1, codex-cli 0.146.1. Tags: [V-run]=verified by running the CLI in /tmp/foreman-research-*; [V-file]=read from local file/binary; [V-doc]=official doc verbatim; [S-doc]=doc summary (model-extracted); UNVERIFIED=not confirmed.
 Caveat: agy test run inherited ORCA_* env, so the user's real Orca/Herdr agy hooks may have posted 1-2 spurious events for this pane. Claude test was run with ORCA_/HERDR_ env stripped and --setting-sources project.
 
 ## 1. CLAUDE CODE
@@ -23,7 +22,7 @@ Context injection [S-doc]: UserPromptSubmit/SessionStart/PostToolUse hookSpecifi
 Per-turn: Stop = every turn end; UserPromptSubmit = every prompt [V-run]. IDLE/WAITING detection: Stop (turn done, idle); Notification matcher permission_prompt (fires ~6s after prompt shown) / idle_prompt (60s+ idle); PermissionRequest fires when a dialog appears. Non-hook alt [V-file]: ~/.claude/sessions/<pid>.json {pid,sessionId,cwd,startedAt,procStart,version,kind,entrypoint,name,status,statusUpdatedAt,updatedAt,messagingSocketPath}; status values seen: idle|busy|shell (no "waiting" seen; undocumented, may change).
 Context window: (a) statusline stdin context_window{context_window_size,used_percentage,remaining_percentage,total_input_tokens,total_output_tokens,current_usage{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}} + exceeds_200k_tokens [V-doc; used by ~/.claude/statusline-command.sh]; used_percentage excludes output tokens, fields may be null early. (b) transcript JSONL last main-chain assistant message .message.usage {input_tokens,cache_creation_input_tokens,cache_read_input_tokens,output_tokens}; ctx = sum [V-file: docs/prior-art/shopping-list-orchestrator/ctx_monitor.py]. (c) `claude -p --output-format json` -> modelUsage.<model>.contextWindow (1000000 for haiku-5-5) [V-run].
 Limits (statusline stdin only): rate_limits{five_hour{used_percentage 0-100,resets_at epoch SECONDS},seven_day{same},spend_limit{used_percentage,resets_at,used_usd,limit_usd,period}} [V-doc]; present only for claude.ai plans and only after first API response. Local snapshot ~/.cache/agent-limits/claude.json = {"at":epoch,"rate_limits":{"five_hour":{"used_percentage":8,"resets_at":1793530800},"seven_day":{...}},"model":"claude-opus-5-5"} [V-file]. Other statusline keys [V-doc]: cwd,session_id,session_name,prompt_id,transcript_path,model{id,display_name},workspace{current_dir,project_dir,...},version,output_style{name},cost{total_cost_usd,total_duration_ms,total_api_duration_ms,total_lines_added,total_lines_removed},effort{level},thinking{enabled},prompt_cache{...},fast_mode,vim,agent,pr,worktree. Runs at session start, after each assistant message, /compact, permission-mode change, refreshInterval timer; debounced 300ms; may go quiet while idle.
-Statusline config: ~/.claude/settings.json key statusLine {"type":"command","command":"bash /home/alexander/.claude/statusline-command.sh","padding"?,"refreshInterval"?} [V-file/V-doc]. Wrapper: read stdin once, tee to file, pipe to original script. (~/.claude/statusline-command.sh already snapshots to ~/.cache/agent-limits/ [V-file]; fancy-statusline plugin overwrote earlier patch per memory.) Not run in -p mode.
+Statusline config: ~/.claude/settings.json key statusLine {"type":"command","command":"bash ~/.claude/statusline-command.sh","padding"?,"refreshInterval"?} [V-file/V-doc]. Wrapper: read stdin once, tee to file, pipe to original script. (~/.claude/statusline-command.sh already snapshots to ~/.cache/agent-limits/ [V-file]; fancy-statusline plugin overwrote earlier patch per memory.) Not run in -p mode.
 
 ## 2. ANTIGRAVITY CLI (agy)
 Hooks config [V-file/V-run]: user ~/.gemini/config/hooks.json (shared TUI+backend; NOT ~/.gemini/antigravity-cli/settings.json, which has no hooks key); workspace <ws>/.agents/hooks.json (needs trusted workspace; loaded in -p with --settings '{"trustedWorkspaces":[..]}'); plugins' hooks.json; `agy -p "/hooks"` lists active hooks. NOT Claude layout: top-level key = hook NAME, then event:
@@ -35,7 +34,7 @@ Stop continue: {"decision":"continue","reason":"text"} -> re-enters loop, reason
 Per-turn/idle: Stop fires at end of each turn with fullyIdle (verified, fired once in -p). No Notification/PermissionRequest event => "waiting for permission" NOT detectable via hooks; PreToolUse fires before the permission decision. Herdr uses screen detection for agy ("Lifecycle state comes from Herdr's screen detection", ~/.gemini/config/hooks/herdr-agent-state.sh). Env in hook process [V-run]: ANTIGRAVITY_CONVERSATION_ID plus inherited ORCA_*/HERDR_*.
 Context window: ONLY via statusline stdin context_window{total_input_tokens,total_output_tokens,context_window_size,used_percentage,remaining_percentage,current_usage{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}} [V-file: ~/.cache/agent-limits/agy-ctx/term_<uuid>.json, e.g. size 1048576, used_percentage 1.857]. Not in hook payload.
 Limits (statusline stdin) [V-file: ~/.cache/agent-limits/agy.json]: {"quota":{"<key>":{"remaining_fraction":0..1,"reset_time":"2026-11-05T17:54:33Z","reset_in_seconds":17965}},"plan_tier":"Google AI Pro","model":..}. Keys seen: gemini-5h, gemini-weekly, 3p-5h, 3p-weekly, gemini-argon-wtu-weekly. Unit: fraction REMAINING (used% = 100*(1-remaining_fraction)); reset_in_seconds relative to snapshot time. quota can be null (known agy-statusbar bug per .remember). Other keys: model{id,display_name,effort}, cycle_mode, cwd, workspace.current_dir, conversation_title, cost.
-Statusline config: ~/.gemini/antigravity-cli/settings.json key statusLine {"type":"command","command":"bash /home/alexander/.gemini/antigravity-cli/statusline-command.sh","enabled":true}; `--settings <json|file>` overrides per session. NOT run in -p mode. That script already tees to ~/.cache/agent-limits/agy.json and agy-ctx/$ORCA_TERMINAL_HANDLE.json [V-file].
+Statusline config: ~/.gemini/antigravity-cli/settings.json key statusLine {"type":"command","command":"bash ~/.gemini/antigravity-cli/statusline-command.sh","enabled":true}; `--settings <json|file>` overrides per session. NOT run in -p mode. That script already tees to ~/.cache/agent-limits/agy.json and agy-ctx/$ORCA_TERMINAL_HANDLE.json [V-file].
 Print mode: `agy -p ... --output-format json|stream-json` (+finished_reason), `--model gemini-3.8-flash-low` (cheapest), --dangerously-skip-permissions.
 
 ## 3. CODEX CLI (codex-cli 0.146.1) — NOT LOGGED IN here (401), so NO runtime verification; all UNVERIFIED unless stated
@@ -67,7 +66,7 @@ Runtime status: operational (v1.4.239, verified via `orca status --json`).
   - Source: `orca skills get orca-cli`, `orca agent launch --help`, `orca agent-context --json`.
 - **Rename tab**: `orca terminal rename --terminal <handle> --title "<new-title>" --json`
   - Key fields in `result.rename`: `handle`, `tabId`, `title`.
-  - Source: verified on scratch terminal `term_b6ae49a1-4976-4f1d-ba6f-1f61c5e41787`.
+  - Source: verified on scratch terminal `term_<uuid>`.
 - **Read bounded output**: `orca terminal read --terminal <handle> [--cursor <n>] [--limit <n>] [--screen] --json`
   - Key fields in `result.terminal`: `handle`, `status` (`"running"`), `tail` (array of strings), `oldestCursor`, `nextCursor`, `latestCursor`, `returnedLineCount`, `source` (`"stream"` | `"screen"`).
   - Source: verified on scratch terminal via `orca terminal read`.
@@ -90,7 +89,7 @@ Runtime status: operational (v1.4.239, verified via `orca status --json`).
   - Source: `orca terminal show`, `orca terminal list`, `orca worktree ps --json`.
 
 ## 2. Herdr Transport (`~/.local/bin/herdr`)
-Runtime status: operational (v0.9.5, socket `/home/alexander/.config/herdr/herdr.sock`, verified via `herdr status --json`).
+Runtime status: operational (v0.9.5, socket `~/.config/herdr/herdr.sock`, verified via `herdr status --json`).
 
 - **List live terminals/panes**: `herdr pane list` (or `herdr agent list`).
   - Key fields in `result.panes[]`: `pane_id` (e.g. `"w8:p1"`), `tab_id`, `workspace_id`, `terminal_id`, `terminal_title`, `cwd`, `foreground_cwd`, `agent` (`"claude"`, `"agy"`, `"opencode"`), `agent_status` (`"idle"`, `"working"`, `"blocked"`, `"done"`, `"unknown"`), `label`.
@@ -126,21 +125,21 @@ Runtime status: operational (v0.9.5, socket `/home/alexander/.config/herdr/herdr
 
 ## 3. Shell-Level Claude Code Inter-Session Messaging
 - **`claude` CLI Subcommand**: **None exists**. `claude --help` lists subcommands (`agents`, `attach`, `doctor`, `logs`, `mcp`, `plugin`, `rm`, `stop`, etc.) with no CLI `send` or `message` command.
-- **In-Session Agent Tool**: Built-in `SendMessage` tool (`to`, `message`, optional `notify_when_idle`). Supports messaging named local sessions, subagents, teammates, or remote sessions. (Source: string analysis of `/home/alexander/.local/bin/claude` chunk bytecode).
+- **In-Session Agent Tool**: Built-in `SendMessage` tool (`to`, `message`, optional `notify_when_idle`). Supports messaging named local sessions, subagents, teammates, or remote sessions. (Source: string analysis of `~/.local/bin/claude` chunk bytecode).
 - **Session Registry & Discovery**:
   - `claude agents --json` lists active sessions: `[{"pid": ..., "sessionId": "...", "name": "...", "cwd": "...", "status": "idle"|"busy"}]`.
   - `~/.claude/sessions/<pid>.json` publishes metadata: `pid`, `sessionId`, `name`, `status`, and `"messagingSocketPath": "/run/user/<uid>/cc-socks/<pid>.sock"`.
   - `~/.claude/sessions/<pid>.<hash>.key` publishes authentication: `{"peerToken": "<32-char-hex-token>", ...}`.
 - **Shell-Level Socket Injection Protocol**:
-  Claude Code sessions bind a Unix domain socket at `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock` (e.g. `/run/user/1000/cc-socks/<pid>.sock`; fallback `/tmp/cc-socks-<uid>/<pid>.sock`).
+  Claude Code sessions bind a Unix domain socket at `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock` (e.g. `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`; fallback `/tmp/cc-socks-<uid>/<pid>.sock`).
   An external shell script sends messages directly by connecting to the socket with the peer token (verified via Claude Code binary embedded diagnostic string):
   ```bash
   {
     echo '{"type":"auth","token":"'"$PEER_TOKEN"'"}'
     echo '{"type":"user","message":{"role":"user","content":"<PROMPT>"}}'
-  } | socat - UNIX-CONNECT:"/run/user/1000/cc-socks/<PID>.sock"
-  # Alternatively: nc -N -U "/run/user/1000/cc-socks/<PID>.sock"
+  } | socat - UNIX-CONNECT:"$XDG_RUNTIME_DIR/cc-socks/<PID>.sock"
+  # Alternatively: nc -N -U "$XDG_RUNTIME_DIR/cc-socks/<PID>.sock"
   ```
   - Sockets under `~/.claude`: Only `~/.claude/remote/run/<id>/rpc.sock` exists (for daemon/remote control), not for inter-session chat.
-  - Source: `/home/alexander/.local/bin/claude` binary strings, `~/.claude/sessions/*.json`, `/run/user/1000/cc-socks/`.
+  - Source: `~/.local/bin/claude` binary strings, `~/.claude/sessions/*.json`, `$XDG_RUNTIME_DIR/cc-socks/`.
 

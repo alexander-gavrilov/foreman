@@ -36,7 +36,9 @@ def deep_merge(base, override):
 def load(platform=None):
     """Defaults + overrides from config.json, with derived defaults filled in. A fresh dict every call."""
     overrides = store.read_json(paths.config_file(), {})
-    cfg = deep_merge(DEFAULTS, overrides if isinstance(overrides, dict) else {})
+    if not isinstance(overrides, dict):
+        store.quarantine(paths.config_file(), "not a JSON object")
+    cfg = deep_merge(DEFAULTS, overrides)
     machine = cfg["machine"]
     if not machine.get("kind"):
         machine["kind"] = default_machine_kind(platform)
