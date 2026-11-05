@@ -25,7 +25,12 @@ def inspect(rec):
                 return "shell", transport
             idle = info.idle if info.idle is not None else rec.get("state") == "idle"
             return ("idle" if idle else "busy"), transport
-    return "gone", transport
+    # D49: one listing without the handle is no proof. Only a terminal the transport itself reports dead is gone.
+    try:
+        alive = bool(transport.alive(tr["handle"]))
+    except Exception:
+        alive = True
+    return ("busy" if alive else "gone"), transport
 
 
 def deliver_pending(sid):
@@ -37,7 +42,7 @@ def deliver_pending(sid):
     if rec is None:
         raise KeyError(sid)
     if not sessions.inbox_pending(sid):
-        return "nothing"
+        return "nothing"  # (rows claimed provisionally for a continuation in flight are left alone)
     if not sessions.is_open(rec):
         return "terminal_gone"
     status, transport = inspect(rec)
@@ -46,6 +51,11 @@ def deliver_pending(sid):
         return "terminal_gone"
     if status != "idle":
         return "queued"
+    # N6: an agy continuation claimed provisionally was never confirmed; type those rows now, with the new ones,
+    # so that a later unrelated event cannot confirm (= lose) them
+    provisional = sessions.inbox_provisional(sid)
+    if provisional:
+        sessions.inbox_release(sid, [m["id"] for m in provisional])
     claimed = sessions.inbox_claim(sid, claimer="deliver")
     if not claimed:
         return "nothing"  # another deliverer got there first

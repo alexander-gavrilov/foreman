@@ -323,7 +323,11 @@ def _process(agent, event, payload, env):
 
     if norm["kind"] in BUSY_KINDS and agent in PROVISIONAL_AGENTS:
         try:
-            sessions.inbox_confirm(sid)  # the agent is working again: its continuation was taken
+            if norm["kind"] == "prompt" and norm["prompt"] and "[foreman \u00b7" not in norm["prompt"]:
+                # the agent started on someone else's prompt: the continuation was NOT taken; give the rows back
+                sessions.inbox_release(sid, [m["id"] for m in sessions.inbox_provisional(sid)])
+            else:
+                sessions.inbox_confirm(sid)  # the agent is working again: its continuation was taken
         except Exception as exc:
             _log_error(agent, "confirm", exc)
 
