@@ -151,6 +151,11 @@ def check():
     if not chat_id:
         missing.append("telegram.chat_id in config.json missing")
 
+    if not get_allowed_user_ids():
+        missing.append("telegram.allowed_user_ids in config.json is empty: every reply would be dropped "
+                       "(send a message in the group, then `foreman telegram set-chat` again, or "
+                       "`foreman telegram allow-user <id>`)")
+
     if missing:
         return {"ok": False, "missing": missing}
 

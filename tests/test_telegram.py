@@ -61,6 +61,13 @@ class TelegramTestCase(ForemanTestCase):
         self.assertTrue(res["ok"], f"Expected ok, got: {res}")
         self.assertEqual(res["bot"]["username"], "foreman_bot")
 
+    def test_check_fails_without_allowed_user_ids(self):
+        self.write_config({"telegram": {"chat_id": -1001234567890, "api_base": self.server.base_url,
+                                        "allowed_user_ids": []}})
+        res = telegram.check()
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("allowed_user_ids" in m for m in res["missing"]), res)
+
     def test_check_fails_if_not_forum(self):
         self.server.is_forum = False
         res = telegram.check()
