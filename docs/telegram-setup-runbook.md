@@ -87,28 +87,22 @@ The bot requires topic creation and management rights:
 
 ---
 
-## Step 6: Obtain the Supergroup Chat ID
+## Step 6: Send Setup Message & Obtain Supergroup Chat ID
 
-To find the numerical chat ID (supergroups typically start with `-100`):
+To associate the chat and authorize your user account:
 
-### Option A: From Telegram Web URL
-1. Click the group in the chat list.
-2. Inspect the browser address bar:
-   - URL format: `https://web.telegram.org/a/#-1001234567890` or `https://web.telegram.org/k/#-1001234567890`
-   - The numerical segment (including `-100...`) is the chat ID:
-     `-1001234567890`
-
-### Option B: Via Telegram Bot API getUpdates
-1. Send any message in the group's General topic (e.g. `setup`).
-2. Run in terminal:
-   ```bash
-   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[-1].message.chat.id'
-   ```
-   *(Returns `-1001234567890`)*
+1. Send any message (e.g. `setup`) in the group's **General** topic from the user account that will control foreman.
+2. Obtain the numerical chat ID (supergroups typically start with `-100`):
+   - **Option A (Browser URL)**: Inspect the browser URL in Telegram Web:
+     `https://web.telegram.org/a/#-1001234567890` -> `-1001234567890`.
+   - **Option B (Bot API)**:
+     ```bash
+     curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[-1].message.chat.id'
+     ```
 
 ---
 
-## Step 7: Configure foreman CLI
+## Step 7: Configure foreman CLI & Inbound User Filtering
 
 On the machine where foreman is installed:
 
@@ -119,13 +113,21 @@ On the machine where foreman is installed:
    ```
    This creates/updates `$FOREMAN_HOME/secrets.json` with permissions `0600`.
 
-2. **Set Supergroup Chat ID**:
+2. **Set Supergroup Chat ID & Authorize Setup User**:
    ```bash
    foreman telegram set-chat -1001234567890
    ```
    This stores `telegram.chat_id` in `$FOREMAN_HOME/config.json`.
+   It automatically inspects recent updates to record the user ID who sent the setup message into `telegram.allowed_user_ids`.
 
-3. **Verify Setup**:
+3. **Authorize Additional Users (Optional)**:
+   Foreman strictly filters inbound updates: messages and button callbacks are accepted **only** from the configured `chat_id` AND user IDs listed in `telegram.allowed_user_ids`. To allow another user:
+   ```bash
+   foreman telegram allow-user <USER_ID>
+   ```
+   When `foreman telegram poll` encounters a message from an unlisted user or foreign chat, it prints a notice to stderr (`telegram: update from unknown user <ID> in chat <CHAT_ID>`) and logs it to `events.jsonl`, allowing the setup agent or administrator to pick up the ID.
+
+4. **Verify Setup**:
    Run the diagnostics check:
    ```bash
    foreman telegram check

@@ -32,20 +32,70 @@ def set_token(token):
 
 
 def set_chat(chat_id):
-    """Store the supergroup chat_id in config.json."""
+    """Store the supergroup chat_id in config.json and record user from setup message if available."""
     path = paths.config_file()
     try:
         cid = int(chat_id)
     except (ValueError, TypeError):
         cid = chat_id
 
+    # Try to find setup user from recent updates if token is available
+    found_users = []
+    token = get_token()
+    if token:
+        try:
+            res = _api_call("getUpdates", {"limit": 10}, timeout=5)
+            if res and res.get("ok"):
+                for u in reversed(res.get("result", [])):
+                    msg = u.get("message") or {}
+                    if str(msg.get("chat", {}).get("id")) == str(cid):
+                        user = msg.get("from", {})
+                        if user.get("id"):
+                            found_users.append(user["id"])
+                            break
+        except Exception:
+            pass
+
     def apply(cfg):
         cfg = cfg if isinstance(cfg, dict) else {}
-        cfg.setdefault("telegram", {})["chat_id"] = cid
+        tg = cfg.setdefault("telegram", {})
+        tg["chat_id"] = cid
+        if found_users:
+            allowed = tg.setdefault("allowed_user_ids", [])
+            for u in found_users:
+                if u not in allowed and str(u) not in [str(x) for x in allowed]:
+                    allowed.append(u)
         return cfg
 
     store.update_json(path, apply, default={})
     return cid
+
+
+def allow_user(user_id):
+    """Add a user_id to config telegram.allowed_user_ids."""
+    path = paths.config_file()
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        uid = user_id
+
+    def apply(cfg):
+        cfg = cfg if isinstance(cfg, dict) else {}
+        tg = cfg.setdefault("telegram", {})
+        allowed = tg.setdefault("allowed_user_ids", [])
+        if uid not in allowed and str(uid) not in [str(x) for x in allowed]:
+            allowed.append(uid)
+        return cfg
+
+    store.update_json(path, apply, default={})
+    return uid
+
+
+def get_allowed_user_ids():
+    raw = config.get("telegram.allowed_user_ids") or []
+    if isinstance(raw, (int, str)):
+        raw = [raw]
+    return [str(x) for x in raw]
 
 
 def get_token():
@@ -289,6 +339,7 @@ def poll_once(timeout=0):
         return 0
 
     max_update_id = offset or 0
+    allowed_users = get_allowed_user_ids()
 
     for u in updates:
         uid = u.get("update_id")
@@ -299,11 +350,29 @@ def poll_once(timeout=0):
         msg = u.get("message")
         if msg:
             cid = msg.get("chat", {}).get("id")
+            from_uid = msg.get("from", {}).get("id")
             if str(cid) != str(chat_id):
+                import sys
+                sys.stderr.write(f"telegram: update from unknown chat {cid}\n")
+                sys.stderr.flush()
                 store.append_jsonl(paths.events_file(), {
                     "ts": timeutil.now_iso(),
                     "kind": "telegram_foreign_chat",
                     "chat_id": cid,
+                    "user_id": from_uid,
+                    "from": msg.get("from"),
+                })
+                continue
+
+            if str(from_uid) not in allowed_users:
+                import sys
+                sys.stderr.write(f"telegram: update from unknown user {from_uid} in chat {cid}\n")
+                sys.stderr.flush()
+                store.append_jsonl(paths.events_file(), {
+                    "ts": timeutil.now_iso(),
+                    "kind": "telegram_unauthorized",
+                    "chat_id": cid,
+                    "user_id": from_uid,
                     "from": msg.get("from"),
                 })
                 continue
@@ -332,12 +401,35 @@ def poll_once(timeout=0):
             cb_id = cb.get("id")
             cb_msg = cb.get("message", {})
             cid = cb_msg.get("chat", {}).get("id")
+            from_uid = cb.get("from", {}).get("id")
             if str(cid) != str(chat_id):
+                import sys
+                sys.stderr.write(f"telegram: callback from unknown chat {cid}\n")
+                sys.stderr.flush()
                 store.append_jsonl(paths.events_file(), {
                     "ts": timeutil.now_iso(),
                     "kind": "telegram_foreign_chat",
                     "chat_id": cid,
+                    "user_id": from_uid,
+                    "from": cb.get("from"),
                 })
+                if cb_id:
+                    _api_call("answerCallbackQuery", {"callback_query_id": cb_id})
+                continue
+
+            if str(from_uid) not in allowed_users:
+                import sys
+                sys.stderr.write(f"telegram: callback from unknown user {from_uid} in chat {cid}\n")
+                sys.stderr.flush()
+                store.append_jsonl(paths.events_file(), {
+                    "ts": timeutil.now_iso(),
+                    "kind": "telegram_unauthorized",
+                    "chat_id": cid,
+                    "user_id": from_uid,
+                    "from": cb.get("from"),
+                })
+                if cb_id:
+                    _api_call("answerCallbackQuery", {"callback_query_id": cb_id})
                 continue
 
             cb_data = cb.get("data", "")

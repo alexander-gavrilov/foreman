@@ -20,6 +20,7 @@ class TelegramTestCase(ForemanTestCase):
             "telegram": {
                 "chat_id": -1001234567890,
                 "api_base": self.server.base_url,
+                "allowed_user_ids": [12345],
             }
         })
         telegram.set_token("TEST_TOKEN")
@@ -257,6 +258,50 @@ class TelegramTestCase(ForemanTestCase):
 
         telegram.poll_once(timeout=0)
         self.assertEqual(len(self.server.sent_messages), 0)
+
+    def test_non_allowed_user_in_right_chat_is_ignored(self):
+        self.init_project("demo")
+        thread_id = telegram.create_project_topic("demo")
+        proj = projects.load_project("demo")
+        orch = sessions.create_session("demo", "claude", role="orchestrator", state="idle")
+        proj["orchestrator"] = orch["sid"]
+        projects.save_project(proj)
+
+        # Enqueue text message from non-allowed user 99999 in the right chat
+        self.server.enqueue_text_message("Malicious or unknown input", thread_id=thread_id, user_id=99999)
+
+        count = telegram.poll_once(timeout=0)
+        self.assertEqual(count, 1)
+
+        # Project chat and orchestrator inbox must be empty
+        chat = projects.chat_list("demo")
+        self.assertEqual(len(chat), 0)
+        inbox = sessions.inbox_all(orch["sid"])
+        self.assertEqual(len(inbox), 0)
+
+        # Event must be logged
+        events = store.read_jsonl(paths.events_file())
+        self.assertTrue(any(e.get("kind") in ("telegram_unauthorized", "telegram_foreign_user") and e.get("user_id") == 99999 for e in events))
+
+    def test_allow_user_command_and_api(self):
+        from tests.helpers import run_cli
+        # Call allow-user CLI
+        code, out, err = run_cli("telegram", "allow-user", "444555")
+        self.assertEqual(code, 0)
+        self.assertIn("444555", out)
+
+        cfg = config.load()
+        self.assertIn(444555, [int(u) for u in cfg["telegram"]["allowed_user_ids"]])
+
+    def test_set_chat_records_allowed_user_from_setup_message(self):
+        # User 888999 sends setup message in the chat
+        self.server.enqueue_text_message("setup", chat_id=-100888999000, user_id=888999)
+        telegram.set_chat("-100888999000")
+
+        cfg = config.load()
+        self.assertEqual(cfg["telegram"]["chat_id"], -100888999000)
+        self.assertIn(888999, [int(u) for u in cfg["telegram"].get("allowed_user_ids", [])])
+
 
 
     def test_cli_telegram_commands(self):

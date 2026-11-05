@@ -29,6 +29,10 @@ def register(subparsers):
     p_chat = sub.add_parser("set-chat", help="set supergroup chat id in config.json")
     p_chat.add_argument("chat_id", help="supergroup chat ID (e.g. -1001234567890)")
 
+    # allow-user <id>
+    p_allow = sub.add_parser("allow-user", help="add a Telegram user ID to allowed_user_ids")
+    p_allow.add_argument("user_id", help="Telegram user numerical ID")
+
 
 def run(args):
     subcmd = getattr(args, "subcommand", None)
@@ -78,5 +82,10 @@ def run(args):
         print(f"telegram chat set to {cid}")
         return 0
 
-    sys.stderr.write("foreman telegram: missing subcommand (check, topic, poll, set-token, set-chat)\n")
+    if subcmd == "allow-user":
+        uid = telegram.allow_user(args.user_id)
+        print(f"allowed telegram user {uid}")
+        return 0
+
+    sys.stderr.write("foreman telegram: missing subcommand (check, topic, poll, set-token, set-chat, allow-user)\n")
     return 2
