@@ -112,11 +112,14 @@ class PendingOrchestratorMarkerTest(RuntimeCase):
         self.assertIn("created_at", marker)
         self.assertIsNone(self.sessions.pending_orchestrator(self.slug))
 
-    def test_marker_removed_and_stray_closed_when_the_launch_fails(self):
+    def test_marker_removed_and_stray_demoted_when_the_launch_fails(self):
         rec, seen = self._open_orchestrator(lambda h: self._hook("SessionStart", {"source": "startup"}, h), fail=True)
         self.assertIsNone(rec)
         self.assertIsNone(self.sessions.pending_orchestrator(self.slug))
-        self.assertEqual([r for r in self.sessions.list_sessions() if self.sessions.is_open(r)], [])
+        # review 4 N1: not closed (it may be the user's own terminal) but a plain, unguarded user worker again
+        left = [r for r in self.sessions.list_sessions() if self.sessions.is_open(r)]
+        self.assertEqual([(r["role"], r["owner"], "pending_orchestrator" in r) for r in left],
+                         [("worker", "user", False)])
 
     def test_a_marker_older_than_180_seconds_is_ignored(self):
         self.sessions.mark_pending_orchestrator(self.slug, "claude", self.proj["path"])

@@ -37,6 +37,7 @@ def _is_live_orch(rec):
         isinstance(rec, dict)
         and rec.get("role") == "orchestrator"
         and sessions.is_open(rec)
+        and not sessions.is_stray(rec)
         and rec.get("lifecycle") != "rotated"
         and rec.get("state") != "gone"
     )

@@ -173,6 +173,7 @@ def absorb_strays(rec):
         update_session(other["sid"], lifecycle="closed", closed_at=timeutil.now_iso(), merged_into=rec["sid"],
                        agent_session_id=None)
         merged.append(other["sid"])
+    demote_strays(rec.get("project"), keep=rec["sid"])
     return merged
 
 
@@ -227,15 +228,33 @@ def clear_pending_orchestrator(slug):
             pass
 
 
-def discard_pending_strays(slug):
-    """A launch that failed leaves no orchestrator: close what the hooks bound as the pending one. Returns sids."""
+def is_stray(rec):
+    """A session the hooks bound as the PENDING orchestrator during a launch and that was not (yet) absorbed:
+    not an orchestrator for any lookup (find_orchestrator, orchestrator start/show, the board)."""
+    return bool(rec.get("pending_orchestrator"))
+
+
+def demote_strays(slug, keep=None):
+    """Turn every pending-orchestrator stray of the project (except `keep`) back into the user's own worker
+    session: role worker, owner user, flag cleared. Idempotent; the caller holds the hook binding lock (or is
+    the launcher closing its window). Returns the sids demoted. (Review 4 N1.)"""
     out = []
-    with store.locked(_bind_lock()):
-        for rec in list_sessions(slug):
-            if rec.get("pending_orchestrator") and is_open(rec):
-                set_lifecycle(rec["sid"], "closed")
-                out.append(rec["sid"])
+    for rec in list_sessions(slug):
+        if rec["sid"] != keep and is_stray(rec) and is_open(rec):
+            def demote(r):
+                r.update(role="worker", owner="user")
+                r.pop("pending_orchestrator", None)
+                return r
+            store.update_json(paths.session_file(rec["sid"]), demote, default=None)
+            out.append(rec["sid"])
     return out
+
+
+def discard_pending_strays(slug):
+    """A launch that failed leaves no orchestrator: what the hooks bound as the pending one is a user session
+    after all (it may be the user's own terminal); it goes back to being a plain worker. Returns sids."""
+    with store.locked(_bind_lock()):
+        return demote_strays(slug)
 
 
 def is_open(rec):

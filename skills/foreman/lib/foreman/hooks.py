@@ -131,6 +131,8 @@ def _bind(agent, norm, env):
         if holder is None:
             transport = {"kind": _terminal_kind(key), "handle": handle}
             break
+    if not asid and not transport["handle"]:
+        return None, False, False  # nothing to identify the session by: never create a record per event (N1)
     # D54: while `foreman open` is launching this project's orchestrator and has not recorded it yet, an unknown
     # session of that agent in the project IS that orchestrator: bind it as one (guarded), `open` absorbs it
     rec = sessions.create_session(

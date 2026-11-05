@@ -3,7 +3,7 @@ from foreman import delivery, projects, sessions
 
 
 def _usable(rec):
-    return sessions.is_open(rec) and rec.get("state") != "gone"
+    return sessions.is_open(rec) and rec.get("state") != "gone" and not sessions.is_stray(rec)
 
 
 def find_orchestrator(project):

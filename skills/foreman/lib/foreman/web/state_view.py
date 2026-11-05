@@ -138,7 +138,7 @@ def _triage_project(proj, proj_sessions, chat_messages):
     if orch_sid:
         orch_session = sessions.find(orch_sid, project=slug)
     if not orch_session:
-        candidates = [s for s in proj_sessions if s.get("role") == "orchestrator"]
+        candidates = [s for s in proj_sessions if s.get("role") == "orchestrator" and not sessions.is_stray(s)]
         orch_session = sessions._prefer_live(candidates)
 
     orch_is_live = (orch_session is not None
