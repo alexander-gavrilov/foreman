@@ -139,3 +139,11 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   windows past their reset time count as unknown. Antigravity's 3p windows only gate its Claude models.
 - D50 · The integration branch keeps the original PR commits (incl. two "wip" commits from a worker handover) so that
   merging #12 marks #4 #6–#11 merged; pushed history is not rewritten.
+- D51 · The project's Telegram topic mirrors the project chat (spec §5.2 "the same conversation"): orchestrator
+  messages and web replies are posted there (web replies marked "user (web):"), Telegram replies are not echoed back,
+  and a "terminal closed" notice reaches every channel. — Architecture §7 had narrowed the topic to questions only,
+  so a Telegram reply to a closed orchestrator vanished silently (review 3b).
+- D52 · `foreman serve` always runs the Telegram poller and re-reads the configuration each pass. — Telegram is set up
+  after install; the poller previously started only if configured at daemon start (review 3b).
+- D53 · The web Origin check compares scheme, host and port. — Same-site pages on another local port (e.g. a dev
+  server showing untrusted content) could otherwise POST as the user; SameSite ignores the port.
