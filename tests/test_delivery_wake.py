@@ -92,7 +92,8 @@ class DeliveryTest(RuntimeCase):
 
     def test_closed_session_is_gone(self):
         from foreman import delivery
-        s = self.session(state="closed")
+        s = self.session()
+        self.sessions.set_lifecycle(s["sid"], "closed")
         self.sessions.inbox_enqueue(s["sid"], "hello")
         self.assertEqual(delivery.deliver_pending(s["sid"]), "terminal_gone")
 

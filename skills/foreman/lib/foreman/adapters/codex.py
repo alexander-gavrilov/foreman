@@ -17,3 +17,4 @@ def normalise(event, payload):
 
 render_deny = claude.render_deny
 render_continue = claude.render_continue
+render_context = claude.render_context

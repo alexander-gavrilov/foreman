@@ -1,7 +1,6 @@
 """Session context size and last-message excerpts from transcripts (architecture 4)."""
 import json
 import os
-import re
 
 TAIL_BYTES = 4 * 1024 * 1024
 USAGE_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")

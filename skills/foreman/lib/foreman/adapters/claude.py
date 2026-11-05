@@ -38,6 +38,7 @@ def normalise(event, payload):
     n["stop_hook_active"] = bool(payload.get("stop_hook_active"))
     n["reason"] = as_text(payload.get("reason"))
     n["source"] = as_text(payload.get("source"))
+    n["agent_id"] = as_text(payload.get("agent_id"))
     return n
 
 
@@ -49,3 +50,8 @@ def render_deny(reason):
 def render_continue(digest):
     """Stop hook: block the stop so the agent continues with `digest` as its next input."""
     return {"decision": "block", "reason": digest}
+
+
+def render_context(text):
+    """SessionStart: add `text` to the agent's context."""
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}

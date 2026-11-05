@@ -53,7 +53,7 @@ class SendTest(RuntimeCase):
     def test_send_unknown_session(self):
         code, _, err = foreman("send", "nobody", "hi")
         self.assertEqual(code, 2)
-        self.assertIn("unknown session", err)
+        self.assertIn("no session", err)
 
     def test_send_reads_stdin(self):
         w = self.session(title="fm-api", idle=False, state="busy")
@@ -72,17 +72,32 @@ class SendTest(RuntimeCase):
 
 
 class AskReplyTest(RuntimeCase):
-    def test_ask_times_out_with_exit_4(self):
+    def test_ask_is_asynchronous_and_prints_the_msgid(self):
         w = self.session(title="fm-api", idle=False, state="busy")
-        code, _, err = foreman("ask", "fm-api", "status?", "--timeout", "0.3")
-        self.assertEqual(code, 4)
-        self.assertIn("no reply", err)
+        code, out, _ = foreman("ask", "fm-api", "status?")
+        self.assertEqual(code, 0)
         pend = self.sessions.inbox_pending(w["sid"])[0]
+        self.assertEqual(out.strip(), pend["id"])
         self.assertEqual(pend["kind"], "ask")
         self.assertIn("Reply with: foreman reply %s <answer>" % pend["id"], pend["text"])
 
-    def test_reply_unblocks_ask(self):
+    def test_wait_times_out_with_exit_4(self):
+        self.session(title="fm-api", idle=False, state="busy")
+        code, out, err = foreman("ask", "fm-api", "status?", "--wait", "0.3")
+        self.assertEqual(code, 4)
+        self.assertIn("no reply", err)
+        self.assertRegex(out.strip(), r"^m-[0-9a-f]{8}$")
+
+    def test_wait_over_100_is_refused(self):
+        self.session(title="fm-api", idle=False, state="busy")
+        code, _, err = foreman("ask", "fm-api", "status?", "--wait", "101")
+        self.assertEqual(code, 2)
+        self.assertIn("100", err)
+        self.assertEqual(self.sessions.inbox_pending(self.sessions.find("fm-api")["sid"]), [])
+
+    def test_reply_unblocks_wait_and_is_not_delivered_twice(self):
         w = self.session(title="fm-api", idle=False, state="busy")
+        asker = self.session(role="orchestrator", title="orch", idle=False, state="busy")
 
         def answer():
             deadline = time.time() + 5
@@ -94,21 +109,47 @@ class AskReplyTest(RuntimeCase):
                 time.sleep(0.05)
         t = threading.Thread(target=answer)
         t.start()
-        code, out, _ = foreman("ask", "fm-api", "status?", "--timeout", "10")
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": asker["transport"]["handle"]}):
+            code, out, _ = foreman("ask", "fm-api", "status?", "--wait", "10")
         t.join()
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "all green")
+        self.assertEqual(out.strip().splitlines()[1], "all green")
+        self.assertEqual(self.sessions.inbox_pending(asker["sid"]), [])  # answered inline: nothing queued twice
+
+    def test_reply_is_queued_into_the_askers_inbox(self):
+        w = self.session(title="fm-api", idle=False, state="busy")
+        asker = self.session(role="orchestrator", title="orch", idle=False, state="busy")
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": asker["transport"]["handle"]}):
+            foreman("ask", "fm-api", "status?")
+        mid = self.sessions.inbox_pending(w["sid"])[0]["id"]
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": w["transport"]["handle"]}):
+            code, _, _ = foreman("reply", mid, "all green")
+        self.assertEqual(code, 0)
+        pend = self.sessions.inbox_pending(asker["sid"])
+        self.assertEqual(len(pend), 1)
+        self.assertEqual((pend[0]["from"], pend[0]["kind"]), ("fm-api", "reply"))
+        self.assertIn("all green", pend[0]["text"])
+        self.assertIn(mid, pend[0]["text"])
+
+    def test_reply_to_idle_asker_is_typed_at_once(self):
+        w = self.session(title="fm-api", idle=False, state="busy")
+        asker = self.session(role="orchestrator", title="orch", idle=True, state="idle")
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": asker["transport"]["handle"]}):
+            foreman("ask", "fm-api", "status?")
+        mid = self.sessions.inbox_pending(w["sid"])[0]["id"]
+        foreman("reply", mid, "done")
+        self.assertIn("done", self.ft.inputs(asker["transport"]["handle"])[-1])
 
     def test_ask_terminal_gone(self):
         w = self.session(title="fm-api")
         self.ft.kill(w["transport"]["handle"])
-        code, _, err = foreman("ask", "fm-api", "status?", "--timeout", "1")
+        code, _, err = foreman("ask", "fm-api", "status?")
         self.assertEqual(code, 3)
         self.assertIn("terminal gone", err)
 
     def test_reply_record_and_unknown_id(self):
         w = self.session(title="fm-api", idle=False, state="busy")
-        foreman("ask", "fm-api", "q", "--timeout", "0.1")
+        foreman("ask", "fm-api", "q")
         mid = self.sessions.inbox_pending(w["sid"])[0]["id"]
         code, _, _ = foreman("reply", mid, "yes")
         self.assertEqual(code, 0)

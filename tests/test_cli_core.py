@@ -6,9 +6,9 @@ from tests.helpers import ForemanTestCase, run_cli, BIN, ROOT
 
 ALL_COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "board", "log",
                 "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
-                "hook", "tap", "deliver", "gate", "telegram", "orchestrator"]
+                "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact"]
 # implemented commands (each work package removes its own from the stub list)
-IMPLEMENTED = ("board", "log", "status", "gate", "hook", "deliver", "send", "ask", "reply", "say", "stage")
+IMPLEMENTED = ("board", "log", "status", "gate", "hook", "deliver", "send", "ask", "reply", "say", "stage", "compact")
 STUBS = [c for c in ALL_COMMANDS if c not in IMPLEMENTED]
 
 

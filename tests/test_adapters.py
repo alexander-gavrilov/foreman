@@ -72,6 +72,15 @@ class ClaudeAdapterTest(unittest.TestCase):
         self.assertIsNone(n["agent_session_id"])
         self.assertIsNone(n["cwd"])
 
+    def test_agent_id_marks_subagent_calls(self):
+        n = self.n("PreToolUse", dict(CLAUDE_PRE, agent_id="sub-1", agent_type="Explore"))
+        self.assertEqual(n["agent_id"], "sub-1")
+        self.assertIsNone(self.n("PreToolUse", CLAUDE_PRE)["agent_id"])
+
+    def test_render_context(self):
+        self.assertEqual(self.a.render_context("rule"), {"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": "rule"}})
+
     def test_render(self):
         self.assertEqual(self.a.render_deny("no"), {"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "no"}})
@@ -105,6 +114,9 @@ class AntigravityAdapterTest(unittest.TestCase):
         self.assertTrue(self.a.normalise("Stop", AGY_STOP)["fully_idle"])
         self.assertFalse(self.a.normalise("Stop", dict(AGY_STOP, fullyIdle=False))["fully_idle"])
 
+    def test_render_context(self):
+        self.assertEqual(self.a.render_context("rule"), {"injectSteps": [{"ephemeralMessage": "rule"}]})
+
     def test_render(self):
         self.assertEqual(self.a.render_deny("no"), {"decision": "deny", "reason": "no"})
         self.assertEqual(self.a.render_continue("d"), {"decision": "continue", "reason": "d"})
@@ -131,6 +143,9 @@ class CodexAdapterTest(unittest.TestCase):
         n = self.a.normalise("PreToolUse", {"session_id": "c", "tool_name": "shell",
                                             "tool_input": {"command": ["git", "status"]}})
         self.assertEqual(n["command"], "git status")
+
+    def test_render_context_is_the_claude_layout(self):
+        self.assertEqual(self.a.render_context("rule")["hookSpecificOutput"]["additionalContext"], "rule")
 
     def test_render(self):
         self.assertEqual(self.a.render_deny("no")["hookSpecificOutput"]["permissionDecision"], "deny")

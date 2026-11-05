@@ -17,8 +17,15 @@ ALLOWED = [
     "gh pr review 12 --approve", "gh pr checks 12", "gh pr comment 12 --body ok", "gh issue list",
     "gh issue create --title t", "gh run list", "gh run view 5", "gh repo view",
     "ls && git status", "git status; git log -1", "cat a.txt | grep x | wc -l", "ls || echo none",
-    "foreman send s-1 - <<'EOF'\nline one > two\n$(not run)\nEOF",
-    "cat <<EOF\nplain text\nEOF",
+    "echo 'line one' | foreman send s-1 -", "pwd", "which git", "tree -L 2", "stat README.md", "file README.md",
+    "foreman board show", "foreman board add 'new task' --stage plan", "foreman board set t1 stage=review",
+    "foreman board done t1", "foreman compact s-1 keep the plan", "foreman watch list", "foreman clean --dry-run",
+    "foreman orchestrator start", "foreman gate check merge", "foreman work new topic", "foreman report 'x'",
+    "foreman --version", "foreman open --project demo --agent claude",
+    "orca terminal list --json", "orca terminal read --terminal t1", "orca terminal wait --terminal t1",
+    "orca worktree ps --json", "herdr pane list", "herdr agent wait w1 --until idle", "herdr agent read w1",
+    "git fetch origin", "git -C /repo log -3", "git remote -v", "git blame README.md",
+    "git diff --stat --name-only", "git grep -n foo -- src",
 ]
 
 BLOCKED = [
@@ -29,7 +36,7 @@ BLOCKED = [
     "find . -delete", "find . -name x -exec rm {} ;", "find . -execdir ls ;", "find . -fprint out.txt",
     "git commit -m x", "git push", "git add .", "git checkout main", "git reset --hard", "git merge x",
     "git branch -D old", "git stash", "git stash pop", "git config user.name x", "git clean -fd",
-    "git diff --output=out.patch", "git -c core.pager=evil log", "git rebase main", "git fetch",
+    "git diff --output=out.patch", "git -c core.pager=evil log", "git rebase main",
     "gh pr checkout 12", "gh api repos/x/y -X DELETE", "gh repo delete x", "gh auth login",
     "gh issue delete 1", "gh release create v1", "rg --pre ./script foo", "date -s '2020-01-01'",
     "FOO=bar ls", "(ls)", "ls <(cat x)", "ls > /etc/passwd", "cat <<EOF\n$(rm -rf x)\nEOF",
@@ -38,6 +45,27 @@ BLOCKED = [
     "git ls-remote --upload=./evil.sh .", "git ls-remote --exe=./evil.sh .", "git grep -nOless foo",
     "git grep --open-files=less foo", "git show --textc HEAD",
     "git grep -e -- --open-files-in-pager=less", "git log -- --output=x", "git grep -O less foo", "git help -m log", "foreman status & rm x", "xargs rm", "env rm x", "/bin/rm x", "./foreman status", "",
+    # heredocs and here-strings are denied outright
+    "foreman send s-1 - <<'EOF'\nhello\nEOF", "cat <<EOF\nplain text\nEOF", "cat <<< hello",
+    # foreman: only orchestrator-safe subcommands
+    "foreman board done t1 --check 'true'", "foreman board done t1 --chec 'true'", "foreman board done t1 --c=x",
+    "foreman board set t1 check='rm -rf x'", "foreman board set t1 stage=x check=true",
+    "foreman board add t --check 'make'", "foreman orchestrator adopt s-1", "foreman orchestrator ad s-1",
+    "foreman init", "foreman install", "foreman uninstall", "foreman web pair", "foreman serve",
+    "foreman tap statusline --agent claude -- sh -c evil", "foreman hook --agent claude --event Stop",
+    "foreman deliver s-1", "foreman telegram set-chat", "foreman watch run", "foreman clean", "foreman board",
+    "foreman --project x status", "foreman",
+    # orca / herdr: read-only subcommands only
+    "orca terminal send --terminal t1 --text 'rm -rf /' --enter", "orca terminal close --terminal t1",
+    "orca worktree create --name x", "orca agent launch --agent claude", "orca", "orca terminal",
+    "herdr pane run w1:p1 'rm -rf x'", "herdr pane send-text w1:p1 x", "herdr pane close w1:p1",
+    "herdr agent start x --kind claude", "herdr agent prompt w1 hi", "herdr",
+    # more exec / write capable flags
+    "git --exec-path=/tmp/x log", "git --config-env=core.pager=X log", "git -c alias.x=!sh log",
+    "git ls-remote --upload-pack=./x .", "git fetch --upload-pack=./x origin", "git fetch --upload=./x origin",
+    "tree -o out.txt", "tree -ao out.txt", "tree --output out.txt", "file -C", "file -mC magic", "file --compile",
+    "rg --pre-glob '*.x' foo", "rg --pre=./x foo", "find . -ok rm {} ;", "find . -fls out.txt",
+    "sleep 5", "du -sh .", "whoami", "uname -a", "basename x", "true", "git help log",
 ]
 
 
@@ -63,6 +91,8 @@ class GuardCommandTest(unittest.TestCase):
 
 
 class GuardToolTest(unittest.TestCase):
+    """Deny by default: only allowlisted read-only tools and the shell tool pass (Claude, agy, Codex)."""
+
     def setUp(self):
         from foreman import guard
         self.g = guard
@@ -72,27 +102,47 @@ class GuardToolTest(unittest.TestCase):
         base.update(kw)
         return base
 
-    def test_editing_tools_blocked(self):
+    def test_allowed_read_tools(self):
+        for name in ("Read", "Grep", "Glob", "LS", "TodoWrite", "WebFetch", "WebSearch", "SendMessage", "Agent",
+                     "Task", "ToolSearch", "Skill",                                    # Claude
+                     "view_file", "list_dir", "grep_search", "find_by_name", "read_url_content", "search_web",  # agy
+                     "read_file", "grep_files", "update_plan", "web_search"):          # Codex
+            self.assertIsNone(self.g.check_tool(self.n(tool_name=name)), name)
+
+    def test_editing_and_unknown_tools_denied(self):
         for name in ("Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "edit_file", "write_to_file",
                      "str_replace_editor", "replace_file_content", "create_file", "delete_file",
-                     "multi_replace_file_content", "write_file", "FooPatchBar"):
+                     "multi_replace_file_content", "write_file", "FooPatchBar", "BashOutput", "KillShell",
+                     "Monitor", "ScheduleWakeup", "AskUserQuestion", "SomethingNew", "", None):
             self.assertIsNotNone(self.g.check_tool(self.n(tool_name=name)), name)
 
-    def test_other_tools_allowed(self):
-        for name in ("Read", "Grep", "Glob", "Task", "Agent", "WebFetch", "WebSearch", "SendMessage",
-                     "TodoWrite", "ToolSearch", "view_file", "list_dir", "grep_search", None):
-            self.assertIsNone(self.g.check_tool(self.n(tool_name=name)), name)
+    def test_every_mcp_tool_is_denied(self):
+        for name in ("mcp__github__create_issue", "mcp__aibroker__telegram_send", "mcp__fs__read_file",
+                     "mcp__context7__query-docs", "MCP__x__y"):
+            self.assertIsNotNone(self.g.check_tool(self.n(tool_name=name)), name)
 
     def test_shell_tools_use_command_check(self):
         for name in ("Bash", "run_command", "shell", "local_shell", "exec_command"):
             self.assertIsNone(self.g.check_tool(self.n(tool_name=name, command="git status")), name)
             self.assertIsNotNone(self.g.check_tool(self.n(tool_name=name, command="rm -rf x")), name)
-        self.assertIsNotNone(self.g.check_tool(self.n(tool_name="Bash", command=None)))
+            self.assertIsNotNone(self.g.check_tool(self.n(tool_name=name, command=None)), name)
 
     def test_message_names_project_when_given(self):
         msg = self.g.check_tool(self.n(tool_name="Edit"), project="demo")
         self.assertIn("foreman open", msg)
         self.assertIn("demo", msg)
+
+    def test_fails_closed_on_internal_error(self):
+        from unittest import mock
+        with mock.patch.object(self.g, "_segments", side_effect=RuntimeError("boom")):
+            msg = self.g.check_command("ls")
+        self.assertIsNotNone(msg)
+        self.assertIn("foreman open", msg)
+        with mock.patch.object(self.g, "is_allowed_tool", side_effect=RuntimeError("boom")):
+            self.assertIsNotNone(self.g.check_tool(self.n(tool_name="Read")))
+        # a malformed normalised event is denied, not allowed
+        self.assertIsNotNone(self.g.check_tool(None))
+        self.assertIsNotNone(self.g.check_tool({"tool_name": ["not", "a", "string"]}))
 
 
 if __name__ == "__main__":

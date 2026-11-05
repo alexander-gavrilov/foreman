@@ -7,7 +7,8 @@ from foreman.errors import ForemanError
 
 STATES = ("starting", "busy", "idle", "waiting_input", "waiting_permission", "stuck", "gone", "rotated",
           "closed")
-INACTIVE_STATES = ("closed", "rotated", "gone")
+INACTIVE_STATES = ("closed", "rotated", "gone")  # legacy: lifecycle (below) now carries closed / rotated
+LIFECYCLES = ("active", "rotated", "closed")
 
 
 class AmbiguousSession(ForemanError):
@@ -37,14 +38,14 @@ def save_session(rec):
 
 def create_session(project, agent, model=None, effort=None, role="worker", owner="orchestrator",
                    purpose=None, title=None, transport=None, agent_session_id=None, cwd=None,
-                   transcript_path=None, state="starting", replaces=None):
+                   transcript_path=None, state="starting", replaces=None, lifecycle="active"):
     sid = ids.new_sid(exists=lambda s: os.path.exists(paths.session_file(s)))
     now = timeutil.now_iso()
     rec = {"sid": sid, "project": project, "agent": agent, "model": model, "effort": effort, "role": role,
            "owner": owner, "purpose": purpose, "title": title or sid,
            "transport": transport or {"kind": None, "handle": None},
            "agent_session_id": agent_session_id, "cwd": cwd, "transcript_path": transcript_path,
-           "state": state, "state_since": now, "last_event_at": None,
+           "state": state, "lifecycle": lifecycle, "state_since": now, "last_event_at": None,
            "context_tokens": None, "context_at": None, "replaces": replaces, "replaced_by": None,
            "opened_at": now, "closed_at": None}
     return save_session(rec)
@@ -129,6 +130,31 @@ def update_session(sid, **fields):
     return store.update_json(path, apply, default=None)
 
 
+def is_open(rec):
+    """False once the session's lifecycle is closed (records without the field are active). Activity
+    (`state`) is separate: a rotated session is open and its busy/idle state is still tracked."""
+    return rec.get("lifecycle") != "closed" and rec.get("state") != "closed"
+
+
+def set_lifecycle(sid, lifecycle, at=None):
+    """active | rotated | closed. 'closed' stamps closed_at."""
+    if lifecycle not in LIFECYCLES:
+        raise ValueError("unknown session lifecycle %r" % (lifecycle,))
+    path = paths.session_file(sid)
+    if not os.path.exists(path):
+        raise KeyError(sid)
+    now = at or timeutil.now_iso()
+
+    def apply(rec):
+        if not isinstance(rec, dict):
+            raise KeyError(sid)
+        rec["lifecycle"] = lifecycle
+        if lifecycle == "closed" and not rec.get("closed_at"):
+            rec["closed_at"] = now
+        return rec
+    return store.update_json(path, apply, default=None)
+
+
 def set_state(sid, state, at=None):
     """Change state; state_since moves only when the state actually changes. 'closed' stamps closed_at."""
     if state not in STATES:
@@ -152,11 +178,14 @@ def set_state(sid, state, at=None):
 
 # ---------------------------------------------------------------- inbox
 
-def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, msg_id=None):
+def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, msg_id=None, extra=None):
     """Queue a message. With `key`, a message with the same key that is still undelivered suppresses the
-    new one (returns None). `msg_id` lets the caller embed the id in the text before queueing."""
+    new one (returns None). `msg_id` lets the caller embed the id in the text before queueing; `extra`
+    adds fields (e.g. {"asker": sid} on a question)."""
     msg = {"id": msg_id or ids.new_msg_id(), "ts": timeutil.now_iso(), "from": sender, "text": text,
            "kind": kind, "delivered_at": None}
+    if extra:
+        msg.update(extra)
     if key is None:
         return store.append_jsonl(paths.inbox_file(sid), msg)
     msg["key"] = key

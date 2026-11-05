@@ -113,10 +113,34 @@ class BindingTest(HookCase):
         self.hook("claude", "UserPromptSubmit", claude("UserPromptSubmit", cwd=self.make_dir("elsewhere")), env)
         self.assertEqual(self.rec(rec["sid"])["state"], "starting")
 
-    def test_rotated_state_is_sticky(self):
-        rec, env = self.pending_launch(state="rotated", agent_session_id="cl-1")
+    def test_rotated_lifecycle_is_kept_and_activity_still_tracked(self):
+        rec, env = self.pending_launch(state="idle", agent_session_id="cl-1")
+        self.sessions.set_lifecycle(rec["sid"], "rotated")
         self.hook("claude", "UserPromptSubmit", claude("UserPromptSubmit", cwd=self.proj["path"]), env)
-        self.assertEqual(self.rec(rec["sid"])["state"], "rotated")
+        got = self.rec(rec["sid"])
+        self.assertEqual((got["lifecycle"], got["state"]), ("rotated", "busy"))
+
+    def test_hook_from_a_known_handle_rebinds_and_keeps_role_and_owner(self):
+        """Binding rule 1b: after /clear the agent session id changes, the terminal does not."""
+        rec, env = self.pending_launch(role="orchestrator", title="orch", state="idle", agent_session_id="old")
+        self.sessions.update_session(rec["sid"], owner="user")
+        out = self.hook("claude", "PreToolUse", claude("PreToolUse", sid="new", cwd=self.proj["path"],
+                                                       tool_name="Edit"), env)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")  # still guarded
+        got = self.rec(rec["sid"])
+        self.assertEqual((got["agent_session_id"], got["role"], got["owner"]), ("new", "orchestrator", "user"))
+        self.assertEqual(len(self.sessions.list_sessions()), 1)
+
+    def test_closed_session_is_not_rebound(self):
+        rec, env = self.pending_launch(state="idle", agent_session_id="old")
+        self.sessions.set_lifecycle(rec["sid"], "closed")
+        self.hook("claude", "SessionStart", claude("SessionStart", sid="new", cwd=self.proj["path"],
+                                                   source="startup"), env)
+        recs = self.sessions.list_sessions(self.slug)
+        self.assertEqual(len(recs), 2)
+        self.assertEqual(self.rec(rec["sid"])["lifecycle"], "closed")
+        fresh = [r for r in recs if r["sid"] != rec["sid"]][0]
+        self.assertEqual((fresh["owner"], fresh["role"], fresh["agent_session_id"]), ("user", "worker", "new"))
 
 
 class StateTest(HookCase):
@@ -124,12 +148,15 @@ class StateTest(HookCase):
         rec, env = self.pending_launch()
         cwd = self.proj["path"]
         seq = [("SessionStart", "starting"), ("UserPromptSubmit", "busy"), ("PreToolUse", "busy"),
-               ("PermissionRequest", "waiting_permission"), ("PostToolUse", "busy"), ("Stop", "idle"),
-               ("SessionEnd", "closed")]
+               ("PermissionRequest", "waiting_permission"), ("PostToolUse", "busy"), ("Stop", "idle")]
         for event, state in seq:
             self.hook("claude", event, claude(event, cwd=cwd, tool_name="Read", reason="other"), env)
             self.assertEqual(self.rec(rec["sid"])["state"], state, event)
-        self.assertIsNotNone(self.rec(rec["sid"])["closed_at"])
+        self.assertEqual(self.rec(rec["sid"])["lifecycle"], "active")
+        self.hook("claude", "SessionEnd", claude("SessionEnd", cwd=cwd, reason="other"), env)
+        got = self.rec(rec["sid"])
+        self.assertEqual((got["lifecycle"], got["state"]), ("closed", "idle"))  # activity state is left alone
+        self.assertIsNotNone(got["closed_at"])
 
     def test_notifications(self):
         rec, env = self.pending_launch()
@@ -144,13 +171,15 @@ class StateTest(HookCase):
     def test_session_end_clear_keeps_session(self):
         rec, env = self.pending_launch(state="idle", agent_session_id="cl-1")
         self.hook("claude", "SessionEnd", claude("SessionEnd", cwd=self.proj["path"], reason="clear"), env)
-        self.assertEqual(self.rec(rec["sid"])["state"], "idle")
+        got = self.rec(rec["sid"])
+        self.assertEqual((got["state"], got["lifecycle"]), ("idle", "active"))
 
     def test_session_end_with_dead_terminal_is_gone(self):
         rec, env = self.pending_launch(state="idle", agent_session_id="cl-1")
         self.ft.kill(env["ORCA_TERMINAL_HANDLE"])
         self.hook("claude", "SessionEnd", claude("SessionEnd", cwd=self.proj["path"], reason="other"), env)
-        self.assertEqual(self.rec(rec["sid"])["state"], "gone")
+        got = self.rec(rec["sid"])
+        self.assertEqual((got["state"], got["lifecycle"]), ("gone", "closed"))
 
     def test_agy_events(self):
         rec, env = self.pending_launch(agent="antigravity")
@@ -250,6 +279,40 @@ class GuardHookTest(HookCase):
         out = self.hook("codex", "PreToolUse", {"session_id": "cx-1", "cwd": self.proj["path"],
                                                  "tool_name": "apply_patch", "tool_input": {}}, env)
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_agy_run_command_table(self):
+        rec, env = self.orch("antigravity")
+        base = {"conversationId": "ag-1", "workspacePaths": [self.proj["path"]]}
+        run = lambda cmd: self.hook("antigravity", "PreToolUse", dict(  # noqa: E731
+            base, toolCall={"name": "run_command", "args": {"CommandLine": cmd}}), env)
+        for ok in ("git status", "foreman board show", "orca terminal list --json", "ls | head -3"):
+            self.assertEqual(run(ok), {}, ok)
+        for bad in ("foreman board done t1 --check 'make'", "herdr pane run w1:p1 'rm -rf x'", "git push",
+                    "echo $(id)", "cat <<EOF\nx\nEOF", "git diff --output=x"):
+            self.assertEqual(run(bad)["decision"], "deny", bad)
+        out = self.hook("antigravity", "PreToolUse", dict(base, toolCall={"name": "mcp_anything", "args": {}}), env)
+        self.assertEqual(out["decision"], "deny")
+
+    def test_codex_shell_table(self):
+        rec, env = self.orch("codex")
+        run = lambda command: self.hook("codex", "PreToolUse", {  # noqa: E731
+            "session_id": "cx-1", "cwd": self.proj["path"], "tool_name": "shell",
+            "tool_input": {"command": command}}, env)
+        self.assertEqual(run(["bash", "-lc", "git log -1"]), {})
+        self.assertEqual(run(["git", "status"]), {})
+        for bad in (["bash", "-lc", "git push"], ["rm", "-rf", "x"], ["bash", "-lc", "foreman orchestrator adopt s-1"]):
+            self.assertEqual(run(bad)["hookSpecificOutput"]["permissionDecision"], "deny", bad)
+        out = self.hook("codex", "PreToolUse", {"session_id": "cx-1", "cwd": self.proj["path"],
+                                                 "tool_name": "mcp__x__y", "tool_input": {}}, env)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_claude_bash_with_foreman_table(self):
+        rec, env = self.orch()
+        run = lambda cmd: self.hook("claude", "PreToolUse", claude(  # noqa: E731
+            "PreToolUse", cwd=self.proj["path"], tool_name="Bash", tool_input={"command": cmd}), env)
+        self.assertEqual(run("foreman compact s-1 keep it"), {})
+        for bad in ("foreman board set t1 check='rm -rf /'", "foreman init", "orca terminal send --text x"):
+            self.assertEqual(run(bad)["hookSpecificOutput"]["permissionDecision"], "deny", bad)
 
     def test_workers_and_user_sessions_are_never_guarded(self):
         rec, env = self.pending_launch(role="worker")
@@ -423,3 +486,177 @@ class CliEndToEndTest(HookCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailClosedTest(HookCase):
+    def deny(self, out):
+        return out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    def edit(self, env, sid="cl-1", **extra):
+        return claude("PreToolUse", sid=sid, cwd=self.proj["path"], tool_name="Edit",
+                      tool_input={"file_path": "a.py"}, **extra)
+
+    def test_subagent_calls_in_the_orchestrator_session_are_guarded(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", agent_session_id="cl-1")
+        out = self.hook("claude", "PreToolUse", self.edit(env, agent_id="sub-1", agent_type="general-purpose"), env)
+        self.assertTrue(self.deny(out))
+        out = self.hook("claude", "PreToolUse", claude(
+            "PreToolUse", cwd=self.proj["path"], tool_name="Bash", tool_input={"command": "git status"},
+            agent_id="sub-1", agent_type="Explore"), env)
+        self.assertEqual(out, {})
+
+    def test_mcp_and_unknown_tools_are_denied_for_orchestrators_only(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch")
+        for tool in ("mcp__github__create_issue", "SomethingNew"):
+            out = self.hook("claude", "PreToolUse", claude("PreToolUse", cwd=self.proj["path"], tool_name=tool), env)
+            self.assertTrue(self.deny(out), tool)
+        w, wenv = self.pending_launch(title="w")
+        out = self.hook("claude", "PreToolUse", claude("PreToolUse", sid="cl-w", cwd=self.proj["path"],
+                                                       tool_name="mcp__github__create_issue"), wenv)
+        self.assertEqual(out, {})
+
+    def test_exception_while_classifying_denies(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch")
+        with mock.patch("foreman.guard.check_tool", side_effect=RuntimeError("boom")):
+            out = self.hook("claude", "PreToolUse", claude("PreToolUse", cwd=self.proj["path"], tool_name="Read"), env)
+        self.assertTrue(self.deny(out))
+        self.assertIn("foreman open", out["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_exception_in_the_pipeline_denies_for_a_recorded_orchestrator_only(self):
+        orch, oenv = self.pending_launch(role="orchestrator", title="orch", agent_session_id="cl-1")
+        worker, wenv = self.pending_launch(title="w", agent_session_id="cl-2")
+        with mock.patch("foreman.hooks._bind", side_effect=RuntimeError("boom")):
+            out = self.hook("claude", "PreToolUse", self.edit(oenv), oenv)
+            self.assertTrue(self.deny(out))
+            out = self.hook("claude", "PreToolUse", self.edit(wenv, sid="cl-2"), wenv)
+            self.assertEqual(out, {})  # every other path fails open
+            # matched by agent session id alone (no terminal environment)
+            self.assertTrue(self.deny(self.hook("claude", "PreToolUse", self.edit({}, sid="cl-1"), {})))
+            # a non-tool event never produces a denial
+            self.assertEqual(self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"]), oenv), {})
+
+    def test_undeterminable_role_for_the_recorded_orchestrator_denies(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", agent_session_id="cl-1")
+        self.sessions.update_session(rec["sid"], role=None)
+        proj = self.projects.load_project(self.slug)
+        self.assertEqual(proj["orchestrator"], rec["sid"])
+        self.assertTrue(self.deny(self.hook("claude", "PreToolUse", self.edit(env), env)))
+
+    def test_unreadable_session_file_of_an_orchestrator_still_denies(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", agent_session_id="cl-1")
+        from foreman import paths
+        with open(paths.session_file(rec["sid"])) as f:
+            text = f.read()
+        with open(paths.session_file(rec["sid"]), "w") as f:
+            f.write(text[:-6])  # truncated: no longer JSON
+        self.assertTrue(self.deny(self.hook("claude", "PreToolUse", self.edit(env), env)))
+
+    def test_unrelated_session_without_a_record_is_not_blocked(self):
+        out = self.hook("claude", "PreToolUse", claude("PreToolUse", sid="zzz", cwd=self.make_dir("elsewhere"),
+                                                       tool_name="Edit"), {"ORCA_TERMINAL_HANDLE": "nope"})
+        self.assertEqual(out, {})
+
+
+class SessionStartRuleTest(HookCase):
+    def test_claude_and_codex_get_additional_context(self):
+        for agent, event in (("claude", "SessionStart"), ("codex", "SessionStart")):
+            rec, env = self.pending_launch(agent=agent, title=agent)
+            out = self.hook(agent, event, {"session_id": agent + "-1", "cwd": self.proj["path"],
+                                           "hook_event_name": "SessionStart", "source": "startup"}, env)
+            spec = out["hookSpecificOutput"]
+            self.assertEqual(spec["hookEventName"], "SessionStart")
+            self.assertIn("foreman work new", spec["additionalContext"])
+            self.assertEqual(len(spec["additionalContext"].strip().splitlines()), 6, agent)
+
+    def test_agy_gets_an_inject_step(self):
+        rec, env = self.pending_launch(agent="antigravity", title="agy")
+        out = self.hook("antigravity", "SessionStart", {"conversationId": "ag-1",
+                                                        "workspacePaths": [self.proj["path"]]}, env)
+        steps = out["injectSteps"]
+        self.assertEqual(len(steps), 1)
+        self.assertIn("foreman work new", steps[0]["ephemeralMessage"])
+
+    def test_template_file_wins_over_the_builtin_default(self):
+        from foreman import hooks
+        path = os.path.join(self.tmp, "rule.md")
+        with open(path, "w") as f:
+            f.write("PROJECT RULE FROM TEMPLATE\n")
+        rec, env = self.pending_launch()
+        with mock.patch.object(hooks, "RULE_TEMPLATE", path):
+            out = self.hook("claude", "SessionStart", claude("SessionStart", cwd=self.proj["path"]), env)
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"], "PROJECT RULE FROM TEMPLATE")
+
+    def test_missing_or_empty_template_falls_back(self):
+        from foreman import hooks
+        rec, env = self.pending_launch()
+        with mock.patch.object(hooks, "RULE_TEMPLATE", os.path.join(self.tmp, "absent.md")):
+            out = self.hook("claude", "SessionStart", claude("SessionStart", cwd=self.proj["path"]), env)
+        self.assertIn("foreman work new", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_no_rule_outside_projects_or_on_other_events(self):
+        out = self.hook("claude", "SessionStart", claude("SessionStart", cwd=self.make_dir("elsewhere")))
+        self.assertEqual(out, {})
+        rec, env = self.pending_launch()
+        self.assertEqual(self.hook("claude", "UserPromptSubmit", claude("UserPromptSubmit", cwd=self.proj["path"]), env), {})
+
+    def test_rule_is_given_again_after_compact_and_clear(self):
+        rec, env = self.pending_launch()
+        for source in ("clear", "compact", "resume"):
+            out = self.hook("claude", "SessionStart", claude("SessionStart", cwd=self.proj["path"], source=source), env)
+            self.assertIn("additionalContext", out["hookSpecificOutput"], source)
+
+
+class WatchHeartbeatWarningTest(HookCase):
+    def setUp(self):
+        super().setUp()
+        self.orch, _ = self.pending_launch(role="orchestrator", title="orch", state="busy")
+        self.w, self.env = self.pending_launch(title="fm-api")
+
+    def stop(self):
+        self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"], last_assistant_message="x"), self.env)
+
+    def warnings(self):
+        return [e for e in self.events() if e.get("kind") == "warning"]
+
+    def beat(self, age_s, interval=60):
+        from foreman import paths, store, timeutil
+        from datetime import timedelta
+        at = (timeutil.now() - timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        store.write_json(paths.watch_heartbeat_file(), {"pid": 1, "last_run_at": at, "interval_s": interval})
+
+    def test_stale_heartbeat_logs_a_warning(self):
+        self.beat(age_s=200)  # > 3 intervals
+        self.stop()
+        w = self.warnings()
+        self.assertEqual(len(w), 1)
+        self.assertEqual(w[0]["message"], "watch loop not running")
+
+    def test_fresh_heartbeat_is_quiet(self):
+        self.beat(age_s=100)
+        self.stop()
+        self.assertEqual(self.warnings(), [])
+
+    def test_missing_heartbeat_warns_once_not_on_every_stop(self):
+        self.stop()
+        self.sessions.inbox_mark_delivered(self.orch["sid"])
+        self.stop()
+        self.assertEqual(len(self.warnings()), 1)
+
+    def test_wake_is_delivered_at_once_to_an_idle_orchestrator(self):
+        self.sessions.set_state(self.orch["sid"], "idle")
+        self.ft.set_idle(self.orch["transport"]["handle"], True)
+        self.stop()
+        self.assertIn("finished a turn", self.ft.inputs(self.orch["transport"]["handle"])[-1])
+        self.assertEqual(self.sessions.inbox_pending(self.orch["sid"]), [])
+
+
+class StopClaimTest(HookCase):
+    def test_digest_messages_are_claimed_not_just_marked(self):
+        rec, env = self.pending_launch(role="orchestrator", title="orch", state="busy")
+        self.sessions.inbox_enqueue(rec["sid"], "x")
+        self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"]), env)
+        row = self.sessions.inbox_all(rec["sid"])[0]
+        self.assertTrue(row["delivered_at"])
+        self.assertEqual(row.get("claimed_by"), "stop-hook")
+        # a second Stop finds nothing left to deliver
+        self.assertEqual(self.hook("claude", "Stop", claude("Stop", cwd=self.proj["path"]), env), {})

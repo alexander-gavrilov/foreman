@@ -33,3 +33,7 @@ def render_deny(reason):
 
 def render_continue(digest):
     return {"decision": "continue", "reason": digest}
+
+
+def render_context(text):
+    return {"injectSteps": [{"ephemeralMessage": text}]}

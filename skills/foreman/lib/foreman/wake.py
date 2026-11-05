@@ -2,6 +2,10 @@
 from foreman import delivery, projects, sessions
 
 
+def _usable(rec):
+    return sessions.is_open(rec) and rec.get("state") != "gone"
+
+
 def find_orchestrator(project):
     """The project's orchestrator session record (project.json `orchestrator` is its sid), else the newest
     live session with role orchestrator. None when there is none."""
@@ -11,10 +15,9 @@ def find_orchestrator(project):
         ref = ref.get("sid")
     if isinstance(ref, str):
         rec = sessions.load_session(ref)
-        if rec and rec.get("state") not in sessions.INACTIVE_STATES + ("closed",):
+        if rec and _usable(rec):
             return rec
-    live = [r for r in sessions.list_sessions(project)
-            if r.get("role") == "orchestrator" and r.get("state") not in sessions.INACTIVE_STATES + ("closed",)]
+    live = [r for r in sessions.list_sessions(project) if r.get("role") == "orchestrator" and _usable(r)]
     return live[-1] if live else None
 
 

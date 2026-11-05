@@ -1,6 +1,5 @@
 """foreman deliver <sid>: deliver the session's queued messages now if its terminal is idle."""
 from foreman import delivery, messaging
-from foreman.cliutil import CliError
 
 
 def register(subparsers):

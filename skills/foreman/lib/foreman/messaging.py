@@ -1,9 +1,11 @@
 """Talking to sessions and to the user (spec 4.7, architecture 7)."""
 import os
 import time
+import types
 
 from foreman import delivery, ids, paths, projects, sessions, store, timeutil, wake
-from foreman.cliutil import CliError
+from foreman.cliutil import CliError, find_session
+from foreman.transports.base import TerminalGone
 
 HANDLE_ENV = ("ORCA_TERMINAL_HANDLE", "HERDR_PANE_ID", "FOREMAN_TERMINAL_HANDLE")
 GONE_TEXT = "терминал оркестратора закрыт"
@@ -49,59 +51,124 @@ def resolve_project_slug(explicit=None, cwd=None):
 
 
 def find_target(ref, project=None):
-    rec = sessions.find(ref, project) if project else None
-    rec = rec or sessions.find(ref)
-    if rec is None:
-        raise CliError("unknown session %r" % ref)
-    return rec
+    """Resolve a session reference like every other command: titles are scoped to the caller's project."""
+    return find_session(ref, types.SimpleNamespace(project=project))
 
 
-def send_message(rec, text, sender=None, kind="message", msg_id=None):
+def _require_agent_terminal(rec):
+    """send/ask/compact reach only sessions whose terminal hosts an agent, never a plain shell."""
+    status, _ = delivery.inspect(rec)
+    if status == "shell":
+        raise CliError("%s (%s) is not an agent terminal (its transport reports no agent there); "
+                       "foreman will not type into a shell" % (rec.get("title") or rec["sid"], rec["sid"]))
+
+
+def send_message(rec, text, sender=None, kind="message", msg_id=None, extra=None):
     """Queue `text` for session `rec` and deliver it now if the session is idle.
     Returns (status, message) with status delivered | queued | terminal_gone."""
+    _require_agent_terminal(rec)
     sender = sender or current_sender()
-    msg = sessions.inbox_enqueue(rec["sid"], text, sender=sender, kind=kind, msg_id=msg_id)
+    msg = sessions.inbox_enqueue(rec["sid"], text, sender=sender, kind=kind, msg_id=msg_id, extra=extra)
     return delivery.deliver_pending(rec["sid"]), msg
 
 
-def ask(rec, text, sender=None, timeout=900.0, poll=0.2):
-    """Send a question and wait for `foreman reply`. Returns ("reply", text) | ("timeout", None) |
-    ("terminal_gone", None)."""
+MAX_WAIT_S = 100
+
+
+def ask(rec, text, sender=None):
+    """Send a question; the answer (`foreman reply`) arrives later in the asker's inbox. Asynchronous:
+    returns (status, msg_id) with status delivered | queued | terminal_gone."""
     msg_id = ids.new_msg_id()
     body = "%s\nReply with: foreman reply %s <answer>" % (text, msg_id)
-    status, _ = send_message(rec, body, sender=sender, kind="ask", msg_id=msg_id)
-    if status == "terminal_gone":
-        return "terminal_gone", None
+    asker = current_session()
+    extra = {"asker": asker["sid"]} if asker and asker["sid"] != rec["sid"] else None
+    status, _ = send_message(rec, body, sender=sender, kind="ask", msg_id=msg_id, extra=extra)
+    return status, msg_id
+
+
+def wait_for_reply(msg_id, timeout, poll=0.2):
+    """Block up to `timeout` seconds for the answer to `msg_id`. Returns the text or None. An answer that
+    was already queued into the asker's inbox is marked delivered, so it is not delivered a second time."""
     deadline = time.monotonic() + timeout
     while True:
         answer = store.read_json(paths.reply_file(msg_id))
         if isinstance(answer, dict):
-            return "reply", answer.get("text", "")
+            asker = answer.get("asker")
+            if asker and os.path.exists(paths.inbox_file(asker)):
+                sessions.inbox_mark_delivered(asker, [reply_msg_id(msg_id)])
+            return answer.get("text", "")
         if time.monotonic() >= deadline:
-            return "timeout", None
+            return None
         time.sleep(poll)
 
 
-def _ask_exists(msg_id):
+def reply_msg_id(ask_id):
+    return "re-" + ask_id
+
+
+def _find_ask(msg_id):
     for rec in sessions.list_sessions():
         for m in sessions.inbox_all(rec["sid"]):
             if m.get("id") == msg_id and m.get("kind") == "ask":
-                return True
-    return False
+                return m
+    return None
 
 
 def reply(msg_id, text, sender=None):
-    """Answer an ask. CliError for an unknown or already answered message id."""
+    """Answer an ask: queued into the asker's inbox (delivered at its next idle point, or at once if it is
+    idle now) and recorded in replies/<msgid>.json for `ask --wait`. CliError for an unknown or already
+    answered message id."""
     try:
         path = paths.reply_file(msg_id)
     except ValueError:
         raise CliError("unknown message %r" % msg_id)
     if os.path.exists(path):
         raise CliError("message %s is already answered" % msg_id)
-    if not _ask_exists(msg_id):
+    question = _find_ask(msg_id)
+    if question is None:
         raise CliError("unknown message %r (no pending question with this id)" % msg_id)
-    store.write_json(path, {"id": msg_id, "from": sender or current_sender(), "text": text,
+    sender = sender or current_sender()
+    asker = question.get("asker")
+    asker_rec = sessions.load_session(asker) if asker else None
+    if asker_rec is not None and sessions.is_open(asker_rec):
+        quoted = " ".join(str(question.get("text", "")).split("\nReply with:")[0].split())[:80]
+        sessions.inbox_enqueue(asker, "answer to your question %s («%s»): %s" % (msg_id, quoted, text),
+                               sender=sender, kind="reply", msg_id=reply_msg_id(msg_id))
+    store.write_json(path, {"id": msg_id, "from": sender, "text": text, "asker": asker,
                             "ts": timeutil.now_iso()})
+    if asker_rec is not None and sessions.is_open(asker_rec):
+        try:
+            delivery.deliver_pending(asker)
+        except Exception:
+            pass
+
+
+COMPACT_UNSUPPORTED = {"antigravity": "agy has no /compact command; rotate the session instead "
+                                      "(`foreman rotate <sid>`)"}
+
+
+def compact(rec, what=None):
+    """Type the bare `/compact [what to keep]` into an idle agent terminal (no message framing: a framed
+    message cannot carry a slash command). Never interrupts a busy session. -> "delivered"."""
+    if rec.get("agent") in COMPACT_UNSUPPORTED:
+        raise CliError("%s: %s" % (rec.get("title") or rec["sid"], COMPACT_UNSUPPORTED[rec["agent"]]))
+    status, transport = delivery.inspect(rec)
+    name = "%s (%s)" % (rec.get("title") or rec["sid"], rec["sid"])
+    if status == "shell":
+        _require_agent_terminal(rec)
+    if status == "none":
+        raise CliError("%s has no terminal foreman can type into" % name, code=1)
+    if status == "gone":
+        raise CliError("terminal gone: %s" % name, code=3)
+    if status != "idle":
+        raise CliError("%s is busy; compact it at its next idle point (foreman never interrupts)" % name, code=1)
+    line = "/compact" + (" " + " ".join(what.split()) if what and what.strip() else "")
+    try:
+        transport.send(rec["transport"]["handle"], line)
+    except TerminalGone:
+        sessions.set_state(rec["sid"], "gone")
+        raise CliError("terminal gone: %s" % name, code=3)
+    return "delivered"
 
 
 def say(project, text, question=False, options=None, notify_user=False):

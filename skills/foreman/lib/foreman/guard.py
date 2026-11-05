@@ -9,21 +9,35 @@ import re
 
 SHELL_TOOLS = {"bash", "run_command", "shell", "local_shell", "exec_command", "shell_command",
                "execute_command", "run_shell_command", "unified_exec", "container.exec"}
-EDIT_MARKERS = ("write", "edit", "patch", "replace", "create_file", "delete")
-NOT_EDITING = {"todowrite"}  # bookkeeping tools whose names merely contain a marker
+# Deny by default: only these read-only / coordination tools (and the shell tools above) may be used by an
+# orchestrator. Subagent calls (Agent/Task) are covered because their own tool calls hit the same guard.
+ALLOWED_TOOLS = {
+    # Claude Code
+    "read", "grep", "glob", "ls", "todowrite", "webfetch", "websearch", "sendmessage", "agent", "task",
+    "toolsearch", "skill",
+    # Antigravity
+    "view_file", "list_dir", "grep_search", "find_by_name", "read_url_content", "search_web",
+    # Codex (names unverified, from its documentation)
+    "read_file", "grep_files", "update_plan", "web_search", "view_image",
+}
 
-SIMPLE_COMMANDS = {"ls", "cat", "head", "tail", "grep", "rg", "wc", "jq", "echo", "pwd", "sleep", "which",
-                   "basename", "dirname", "realpath", "stat", "du", "df", "whoami", "uname", "true", "false",
-                   "date", "find"}
-COORDINATION = {"foreman", "orca", "herdr"}
+SIMPLE_COMMANDS = {"ls", "cat", "head", "tail", "grep", "rg", "wc", "jq", "echo", "pwd", "which", "tree",
+                   "stat", "file", "date", "find"}
+COORDINATION_READONLY = {"orca": {("terminal", "list"), ("terminal", "show"), ("terminal", "read"),
+                                  ("terminal", "wait"), ("worktree", "ps"), ("worktree", "list")},
+                         "herdr": {("pane", "list"), ("pane", "read"), ("agent", "list"), ("agent", "read"),
+                                   ("agent", "wait")}}
+# foreman subcommands an orchestrator may run. Value: None = any arguments, or a checker (see _check_foreman).
+FOREMAN_SAFE = {"status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "compact", "board",
+                "log", "stage", "watch", "clean", "work", "report", "gate", "orchestrator"}
 FIND_FORBIDDEN = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
 GIT_READONLY = {"status", "log", "diff", "show", "rev-parse", "rev-list", "ls-files", "ls-tree", "ls-remote",
                 "cat-file", "blame", "describe", "shortlog", "whatchanged", "diff-tree", "name-rev",
                 "merge-base", "for-each-ref", "show-ref", "grep", "check-ignore", "count-objects",
-                "show-branch", "cherry", "diff-index", "diff-files", "version"}
+                "show-branch", "cherry", "diff-index", "diff-files", "version", "fetch"}
 # options of the read-only subcommands that write a file or run a program
 GIT_FORBIDDEN_OPTIONS = ("--output", "--upload-pack", "--receive-pack", "--exec", "--ext-diff",
-                         "--open-files-in-pager", "--textconv")
+                         "--open-files-in-pager", "--textconv", "--config-env")
 GIT_GLOBAL_OK = {"--no-pager", "--no-optional-locks", "-P"}
 GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "review", "checks", "comment", "diff", "status"},
               "issue": {"view", "list", "create", "comment", "status"},
@@ -53,7 +67,6 @@ def _scan(cmd):
     toks = []
     buf = []
     in_word = False
-    pending = []  # heredocs waiting for the next newline: (delimiter, dash, quoted)
     i, n = 0, len(cmd)
 
     def flush():
@@ -77,18 +90,6 @@ def _scan(cmd):
             flush()
             toks.append(("op", ";"))
             i += 1
-            for delim, dash, quoted in pending:
-                body = []
-                while i < n:
-                    j = cmd.find("\n", i)
-                    line = cmd[i:] if j < 0 else cmd[i:j]
-                    i = n if j < 0 else j + 1
-                    if (line.lstrip("\t") if dash else line) == delim:
-                        break
-                    body.append(line)
-                if not quoted and re.search(r"\$\(|`", "\n".join(body)):
-                    raise _Reject("command substitution in a here-document")
-            pending = []
         elif c == "\\":
             if i + 1 < n and cmd[i + 1] == "\n":
                 i += 2
@@ -160,26 +161,8 @@ def _scan(cmd):
         elif c == "<":
             fd_prefix()
             flush()
-            if cmd.startswith("<<<", i):
-                toks.append(("redir", "<<<"))
-                i += 3
-            elif cmd.startswith("<<", i):
-                i += 2
-                dash = cmd.startswith("-", i)
-                if dash:
-                    i += 1
-                while i < n and cmd[i] in " \t":
-                    i += 1
-                word, quoted = [], False
-                while i < n and cmd[i] not in " \t\n;|&<>()":
-                    if cmd[i] in "'\"\\":
-                        quoted = True
-                    else:
-                        word.append(cmd[i])
-                    i += 1
-                if not word:
-                    raise _Reject("malformed here-document")
-                pending.append(("".join(word), dash, quoted))
+            if cmd.startswith("<<", i):
+                raise _Reject("here-document or here-string")
             elif cmd.startswith("<>", i):
                 toks.append(("redir", "<>"))
                 i += 2
@@ -301,14 +284,57 @@ def _check_gh(args):
     raise _Reject("gh %s" % " ".join(args[:2]))
 
 
+def _abbrev_of(arg, option, minimum=3):
+    """True if `arg` (--name or --name=value) is `option` or an abbreviation of it (argparse accepts those)."""
+    name = arg.split("=", 1)[0]
+    return arg.startswith("--") and len(name) >= minimum and option.startswith(name)
+
+
+def _check_foreman(args):
+    if not args:
+        raise _Reject("foreman without a subcommand")
+    sub, rest = args[0], args[1:]
+    if sub.startswith("-"):
+        if args in (["--help"], ["-h"], ["--version"]):
+            return
+        raise _Reject("foreman option %s" % sub)
+    if sub not in FOREMAN_SAFE:
+        raise _Reject("`foreman %s` is not available to an orchestrator" % sub)
+    if sub == "board":
+        action = next((a for a in rest if not a.startswith("-")), None)
+        if action not in ("show", "add", "set", "done"):
+            raise _Reject("foreman board %s" % (action or ""))
+        for a in rest:
+            if _abbrev_of(a, "--check", 3) or a == "--check" or re.match(r"^check\s*=", a, re.I):
+                raise _Reject("an orchestrator cannot set or run board checks")
+    elif sub == "orchestrator":
+        action = next((a for a in rest if not a.startswith("-")), None)
+        if action is None or "adopt".startswith(action):
+            raise _Reject("`foreman orchestrator adopt` is user-only")
+    elif sub == "watch":
+        if next((a for a in rest if not a.startswith("-")), None) != "list":
+            raise _Reject("only `foreman watch list` is allowed")
+    elif sub == "clean":
+        if not any(_abbrev_of(a, "--dry-run", 3) for a in rest):
+            raise _Reject("`foreman clean` needs --dry-run")
+
+
+def _check_coordination(cmd, args):
+    positional = [a for a in args if not a.startswith("-")][:2]
+    if len(positional) < 2 or tuple(positional) not in COORDINATION_READONLY[cmd]:
+        raise _Reject("`%s %s` is not a read-only subcommand" % (cmd, " ".join(positional)))
+
+
 def _check_segment(words):
     while words and ENV_ASSIGN.match(words[0]):
         words = words[1:]
     if not words:
         raise _Reject("nothing to run")
     cmd, args = words[0], words[1:]
-    if cmd in COORDINATION:
-        return
+    if cmd == "foreman":
+        return _check_foreman(args)
+    if cmd in COORDINATION_READONLY:
+        return _check_coordination(cmd, args)
     if cmd == "git":
         return _check_git(args)
     if cmd == "gh":
@@ -321,10 +347,15 @@ def _check_segment(words):
         raise _Reject("rg option that runs a program")
     if cmd == "date" and any(a.startswith("--set") or re.match(r"^-[A-Za-z]*s", a) for a in args):
         raise _Reject("date sets the clock")
+    if cmd == "tree" and any(re.match(r"^-[^-]*o", a) or a.startswith("--o") for a in args):
+        raise _Reject("tree writes its output to a file")
+    if cmd == "file" and any(re.match(r"^-[^-]*C", a) or _abbrev_of(a, "--compile", 3) for a in args):
+        raise _Reject("file -C writes a compiled magic file")
 
 
 def check_command(cmd, project=None):
-    """None if the shell command line is allowed for an orchestrator, else the block message."""
+    """None if the shell command line is allowed for an orchestrator, else the block message.
+    Fails closed: anything unexpected while classifying denies the command."""
     try:
         if not isinstance(cmd, str) or not cmd.strip():
             raise _Reject("empty or unreadable command")
@@ -335,24 +366,32 @@ def check_command(cmd, project=None):
             _check_segment(words)
     except _Reject as why:
         return _block(str(why), project)
+    except Exception as exc:  # fail closed
+        return _block("the command could not be classified (%s)" % type(exc).__name__, project)
     return None
 
 
-def is_editing_tool(name):
-    low = (name or "").lower()
-    if not low or low in NOT_EDITING:
-        return False
-    return any(marker in low for marker in EDIT_MARKERS)
+def unverifiable(project=None):
+    """The block message when the guard itself could not run (fail closed)."""
+    return _block("the guard could not verify this call", project)
+
+
+def is_allowed_tool(name):
+    return isinstance(name, str) and name.lower() in ALLOWED_TOOLS
 
 
 def check_tool(norm, project=None):
-    """Guard a normalised pre_tool event: None = allowed, else the block message."""
-    name = norm.get("tool_name")
-    low = (name or "").lower()
-    if low in SHELL_TOOLS:
-        if not norm.get("command"):
-            return _block("%s without a readable command" % name, project)
-        return check_command(norm["command"], project)
-    if is_editing_tool(name):
-        return _block("%s edits files" % name, project)
-    return None
+    """Guard a normalised pre_tool event: None = allowed, else the block message. Deny by default and fail
+    closed: unknown tools (every mcp__* tool included) and any internal error are denied."""
+    try:
+        name = norm.get("tool_name")
+        low = name.lower() if isinstance(name, str) else ""
+        if low in SHELL_TOOLS:
+            if not norm.get("command"):
+                return _block("%s without a readable command" % name, project)
+            return check_command(norm["command"], project)
+        if is_allowed_tool(name):
+            return None
+        return _block("tool %s is not allowed for an orchestrator" % (name or "(none)"), project)
+    except Exception as exc:
+        return _block("the tool call could not be classified (%s)" % type(exc).__name__, project)
