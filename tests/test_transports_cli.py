@@ -129,8 +129,9 @@ class OrcaTransportTest(StubMixin, ForemanTestCase):
                          "json": err("timeout", "timeout")}])
         self.assertTrue(self.t.wait_idle("term_a", 12.5))
         self.assertFalse(self.t.wait_idle("term_b", 1))
-        self.assertEqual(self.calls("orca")[0], ["terminal", "wait", "--terminal", "term_a", "--for", "tui-idle",
-                                                 "--timeout-ms", "12500", "--json"])
+        # no worktree-ps state for the terminal: tui-idle is the (secondary) signal
+        self.assertIn(["terminal", "wait", "--terminal", "term_a", "--for", "tui-idle", "--timeout-ms", "12500",
+                       "--json"], self.calls("orca"))
 
     def test_close_is_idempotent(self):
         self.set_rules([{"match": ["terminal", "close", "--terminal", "term_a"], "json": ok({"close": {}})},
