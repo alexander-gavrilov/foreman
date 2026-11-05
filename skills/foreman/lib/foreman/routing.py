@@ -1,11 +1,15 @@
 """Model routing (spec §4.4, §4.5): which agent, model and effort a new session gets.
 
 `choose(kind, levels, preferred=None)` returns (agent, model, effort, note). `levels` is limits.levels(),
-{provider: "ok"|"warn"|"stop"|"unknown"}. The tables below are only defaults: config.json `routing.<kind>` (a list
-of {"agent", "model", "effort"} objects or [agent, model, effort] rows, in order of preference) replaces them."""
+{provider: "ok"|"warn"|"stop"|"unknown"} (or per-provider/window reading dicts). The tables below are only defaults:
+config.json `routing.<kind>` (a list of {"agent", "model", "effort"} objects or [agent, model, effort] rows, in order
+of preference) replaces them."""
+from datetime import datetime, timezone
+
 from foreman import config, timeutil
 
 COLD_CACHE_AFTER_S = 55 * 60
+_RANK = {"unknown": 0, "ok": 1, "warn": 2, "stop": 3}
 
 # (agent, model, effort), best first. Antigravity entries may serve Claude models; they still count against
 # the antigravity provider.
@@ -32,6 +36,60 @@ class RoutingError(Exception):
 def provider_of(agent, model=None):
     """The subscription a session spends. Claude models served through Antigravity count as antigravity."""
     return agent
+
+
+def _parse_reset(val):
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            return datetime.fromtimestamp(val, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    return timeutil.parse(val)
+
+
+def window_level(window, now=None):
+    """Level of one limit window dict ({used_pct, resets_at, observed_at, level?}).
+    A reading whose window reset time has already passed counts as 'unknown' (architecture §6)."""
+    if not isinstance(window, dict):
+        return "unknown"
+    reset_dt = _parse_reset(window.get("resets_at"))
+    if reset_dt is not None:
+        ref = now if now is not None else timeutil.now()
+        if ref >= reset_dt:
+            return "unknown"
+    pct = window.get("used_pct")
+    if pct is None:
+        pct = window.get("used_percentage")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+        stop = config.get("thresholds.limit_stop")
+        warn = config.get("thresholds.limit_warn")
+        stop = 90 if stop is None else stop
+        warn = 70 if warn is None else warn
+        if pct >= stop:
+            return "stop"
+        if pct >= warn:
+            return "warn"
+        return "ok"
+    lvl = window.get("level")
+    return lvl if lvl in _RANK else "unknown"
+
+
+def provider_level(value, now=None):
+    """Effective level ('ok'|'warn'|'stop'|'unknown') from a level string or a provider/window reading dict."""
+    if isinstance(value, str):
+        return value if value in _RANK else "unknown"
+    if not isinstance(value, dict):
+        return "unknown"
+    windows = value.get("windows")
+    if isinstance(windows, dict):
+        windows = list(windows.values())
+    elif not isinstance(windows, list):
+        sub = [v for v in value.values() if isinstance(v, dict)]
+        windows = sub if sub else None
+    if windows:
+        levels = [window_level(w, now=now) for w in windows if isinstance(w, dict)]
+        return max(levels, key=lambda k: _RANK.get(k, 0)) if levels else "unknown"
+    return window_level(value, now=now)
 
 
 def _entry(row):
@@ -67,7 +125,7 @@ def _explicit(preferred):
 
 
 def _level(levels, provider):
-    return (levels or {}).get(provider) or "unknown"
+    return provider_level((levels or {}).get(provider))
 
 
 def choose(kind, levels, preferred=None):
@@ -125,7 +183,9 @@ def _note_for(provider, level):
 def cold_cache_warning(session, now=None):
     """Text warning for `foreman ask` to a rotated session whose prompt cache is probably cold (its last event is
     older than 55 minutes), else None."""
-    if not isinstance(session, dict) or session.get("state") != "rotated":
+    if not isinstance(session, dict):
+        return None
+    if session.get("lifecycle") != "rotated" and session.get("state") != "rotated":
         return None
     stamp = session.get("last_event_at") or session.get("state_since")
     age = timeutil.age_seconds(stamp, now=now)

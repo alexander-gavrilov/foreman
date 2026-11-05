@@ -70,10 +70,14 @@ def list_sessions(project=None):
     return out
 
 
+def _is_live(rec):
+    return rec.get("state") not in INACTIVE_STATES and rec.get("lifecycle") not in ("closed", "rotated")
+
+
 def _prefer_live(matches):
     if not matches:
         return None
-    live = [r for r in matches if r.get("state") not in INACTIVE_STATES]
+    live = [r for r in matches if _is_live(r)]
     pool = live or matches
     return pool[-1]  # list_sessions is oldest-first: newest wins
 
@@ -86,7 +90,7 @@ def find_by_handle(handle, kind=None):
 
 
 def _live(recs):
-    return [r for r in recs if r.get("state") not in INACTIVE_STATES]
+    return [r for r in recs if _is_live(r)]
 
 
 def find(ref, project=None):

@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from tests.helpers import ForemanTestCase
@@ -83,6 +84,24 @@ class ChooseTest(ForemanTestCase):
         self.assertEqual(agent, "claude")
         self.assertIn("unknown", note)
 
+    def test_reading_older_than_window_reset_counts_as_unknown(self):
+        os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
+        stale_stop = {
+            "used_pct": 95,
+            "resets_at": "2026-11-05T12:00:00Z",
+            "observed_at": "2026-11-05T11:00:00Z",
+        }
+        agent, _, _, note = self.choose("routine", {"claude": stale_stop, "antigravity": "ok"})
+        self.assertEqual(agent, "claude")
+        self.assertIn("unknown", note)
+        fresh_stop = {
+            "used_pct": 95,
+            "resets_at": "2026-11-05T14:00:00Z",
+            "observed_at": "2026-11-05T12:30:00Z",
+        }
+        agent, _, _, _ = self.choose("routine", {"claude": fresh_stop, "antigravity": "ok"})
+        self.assertEqual(agent, "antigravity")
+
     def test_explicit_agent_and_model(self):
         self.assertEqual(self.choose("routine", OK, preferred=("antigravity", "gemini-4-argon-medium", "x"))[:3],
                          ("antigravity", "gemini-4-argon-medium", "x"))
@@ -142,36 +161,37 @@ class ColdCacheTest(ForemanTestCase):
         return routing.cold_cache_warning(rec)
 
     def test_cold_when_rotated_and_older_than_55_minutes(self):
-        import os
         os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
-        text = self.warn({"sid": "s-aaaaaa", "state": "rotated", "last_event_at": "2026-11-05T11:50:00Z"})
+        text = self.warn({"sid": "s-aaaaaa", "state": "idle", "lifecycle": "rotated",
+                          "last_event_at": "2026-11-05T11:50:00Z"})
         self.assertIn("cold", text)
         self.assertIn("s-aaaaaa", text)
 
     def test_warm_inside_55_minutes(self):
-        import os
         os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
-        self.assertIsNone(self.warn({"sid": "s-a", "state": "rotated", "last_event_at": "2026-11-05T12:10:00Z"}))
-        self.assertIsNone(self.warn({"sid": "s-a", "state": "rotated", "last_event_at": "2026-11-05T12:06:00Z"}))
+        self.assertIsNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": "rotated",
+                                     "last_event_at": "2026-11-05T12:10:00Z"}))
+        self.assertIsNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": "rotated",
+                                     "last_event_at": "2026-11-05T12:06:00Z"}))
 
     def test_boundary(self):
-        import os
         os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
-        self.assertIsNone(self.warn({"sid": "s-a", "state": "rotated", "last_event_at": "2026-11-05T12:05:00Z"}))
-        self.assertIsNotNone(self.warn({"sid": "s-a", "state": "rotated", "last_event_at": "2026-11-05T12:04:59Z"}))
+        self.assertIsNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": "rotated",
+                                     "last_event_at": "2026-11-05T12:05:00Z"}))
+        self.assertIsNotNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": "rotated",
+                                        "last_event_at": "2026-11-05T12:04:59Z"}))
 
     def test_only_rotated_sessions(self):
-        import os
         os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
-        for state in ("idle", "busy", "closed"):
-            self.assertIsNone(self.warn({"sid": "s-a", "state": state, "last_event_at": "2026-11-05T01:00:00Z"}))
+        for lifecycle in ("active", "closed"):
+            self.assertIsNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": lifecycle,
+                                         "last_event_at": "2026-11-05T01:00:00Z"}))
 
     def test_falls_back_to_state_since_then_to_nothing(self):
-        import os
         os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
-        self.assertIsNotNone(self.warn({"sid": "s-a", "state": "rotated", "last_event_at": None,
-                                        "state_since": "2026-11-05T01:00:00Z"}))
-        self.assertIsNone(self.warn({"sid": "s-a", "state": "rotated"}))
+        self.assertIsNotNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": "rotated",
+                                        "last_event_at": None, "state_since": "2026-11-05T01:00:00Z"}))
+        self.assertIsNone(self.warn({"sid": "s-a", "state": "idle", "lifecycle": "rotated"}))
         self.assertIsNone(self.warn(None))
 
 

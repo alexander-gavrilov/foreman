@@ -22,10 +22,10 @@ First load the `foreman-orchestrator` skill and follow it; this briefing is its 
 - Open: `foreman open --project {{slug}} --kind routine|research|design|review|hard --purpose "..." --title T --prompt "..."`.
   The cheapest model that fits; foreman routes by kind and limits. Name --agent/--model only when needed.
 - The reviewer is a different session from the author and gets the files and the spec, not the author's conclusions.
-- Close only your own finished sessions: never a busy one, never a user-owned one without the user's consent,
-  never with messages pending.
-- Context: about 150k tokens is a soft target. Above it choose: continue, compact in place, or `foreman rotate`
-  (task changed or far over). The same applies to your own context. Unknown context is "unknown", never 0.
+- Close only your own finished sessions (`foreman close <sid>`): never a busy one, never a user-owned one without the
+  user's consent, never with messages pending.
+- Context: about 150k tokens is a soft target. Above it choose: continue, compact in place (`foreman compact`), or
+  `foreman rotate` (task changed or far over). The same applies to your own context. Unknown context is "unknown", never 0.
 - Rotation: the old session stays idle and sends a handoff as a direct message (no files). The new one batches ALL
   questions into ONE `foreman ask` within about an hour; later: re-read the handoff, search the old transcript,
   ask only why-questions, batched.

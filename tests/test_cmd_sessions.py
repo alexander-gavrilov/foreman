@@ -45,7 +45,7 @@ class SessionTestCase(ForemanTestCase):
                                   self.project["path"], "first prompt", kw.get("title", "fm-api"))
         fields = dict(project=self.slug, agent="claude", model="sonnet", role="worker", owner="orchestrator",
                       purpose="build the api", title="fm-api", transport={"kind": "fake", "handle": handle},
-                      cwd=self.project["path"], state="idle")
+                      cwd=self.project["path"], state="idle", lifecycle="active")
         fields.update(kw)
         return sessions.create_session(**fields)
 
@@ -62,10 +62,10 @@ class OpenTest(SessionTestCase):
         self.assertIn(rec["sid"], out)
         self.assertIn("fm-api", out)
         self.assertIn("claude/sonnet", out)
-        self.assertEqual((rec["state"], rec["role"], rec["owner"], rec["agent"], rec["model"]),
-                         ("starting", "worker", "orchestrator", "claude", "sonnet"))
+        self.assertEqual((rec["state"], rec["lifecycle"], rec["role"], rec["owner"], rec["agent"], rec["model"]),
+                         ("starting", "active", "worker", "orchestrator", "claude", "sonnet"))
         self.assertEqual((rec["purpose"], rec["title"], rec["cwd"]), ("build the api", "fm-api",
-                                                                    self.project["path"]))
+                                                                      self.project["path"]))
         self.assertEqual(rec["transport"]["kind"], "fake")
         self.assertIsNone(rec["agent_session_id"])
         h = rec["transport"]["handle"]
@@ -184,6 +184,20 @@ class OpenTest(SessionTestCase):
         self.assertEqual(rec["title"], rec["sid"])
         self.assertEqual(self.fake.list()[0].title, rec["sid"])
 
+    def test_plain_shell_handle_is_refused_in_registration_and_rename(self):
+        from foreman.transports.fake import FakeTransport
+        orig = FakeTransport.launch
+
+        def launch_shell(ft, agent, model, effort, cwd, prompt, title):
+            h = orig(ft, None, model, effort, cwd, prompt, None)
+            return h
+
+        with mock.patch.object(FakeTransport, "launch", launch_shell):
+            code, out, err = self.open("--prompt", "p")
+        self.assertEqual(code, 2)
+        self.assertIn("shell", err.lower())
+        self.assertEqual(self.sessions(), [])
+
     def test_launch_failure_leaves_no_record(self):
         with mock.patch.dict(os.environ, {"PATH": "/nonexistent"}):
             os.environ.pop("ORCA_CLI_COMMAND", None)
@@ -226,7 +240,8 @@ class CloseTest(SessionTestCase):
         self.assertIn(rec["sid"], out)
         from foreman import sessions
         now = sessions.load_session(rec["sid"])
-        self.assertEqual(now["state"], "closed")
+        self.assertEqual(now["lifecycle"], "closed")
+        self.assertEqual(now["state"], "idle")  # never put closed into state
         self.assertTrue(now["closed_at"])
         self.assertFalse(self.fake.alive(rec["transport"]["handle"]))
         (row,) = self.journal()
@@ -244,6 +259,7 @@ class CloseTest(SessionTestCase):
         self.assertTrue(self.fake.alive(rec["transport"]["handle"]))
         from foreman import sessions
         self.assertEqual(sessions.load_session(rec["sid"])["state"], "busy")
+        self.assertEqual(sessions.load_session(rec["sid"])["lifecycle"], "active")
 
     def test_user_owned_needs_consent(self):
         rec = self.new_session(owner="user")
@@ -275,7 +291,9 @@ class CloseTest(SessionTestCase):
         code, out, err = run_main("close", rec["sid"])
         self.assertEqual(code, 0, err)
         from foreman import sessions
-        self.assertEqual(sessions.load_session(rec["sid"])["state"], "closed")
+        now = sessions.load_session(rec["sid"])
+        self.assertEqual(now["lifecycle"], "closed")
+        self.assertEqual(now["state"], "idle")
 
     def test_already_closed_is_idempotent(self):
         rec = self.new_session()
@@ -286,8 +304,10 @@ class CloseTest(SessionTestCase):
         self.assertEqual(len(self.journal()), 1)
 
     def test_rotated_session_can_be_closed(self):
-        rec = self.new_session(state="rotated")
+        rec = self.new_session(lifecycle="rotated")
         self.assertEqual(run_main("close", rec["sid"])[0], 0)
+        from foreman import sessions
+        self.assertEqual(sessions.load_session(rec["sid"])["lifecycle"], "closed")
 
     def test_unknown_session(self):
         self.assertEqual(run_main("close", "s-nope00")[0], 2)
@@ -298,6 +318,7 @@ class CloseTest(SessionTestCase):
         self.assertEqual(code, 9)
         from foreman import sessions
         self.assertEqual(sessions.load_session(rec["sid"])["state"], "idle")
+        self.assertEqual(sessions.load_session(rec["sid"])["lifecycle"], "active")
 
     def test_closing_the_orchestrator_clears_the_project_pointer(self):
         from foreman import projects
@@ -328,11 +349,12 @@ class RotateTest(SessionTestCase):
         self.assertEqual((new["role"], new["purpose"], new["project"], new["agent"], new["model"]),
                          ("worker", "build the api", self.slug, "claude", "sonnet"))
         self.assertEqual(new["replaces"], old["sid"])
-        self.assertEqual(new["state"], "starting")
+        self.assertEqual((new["state"], new["lifecycle"]), ("starting", "active"))
         self.assertEqual(new["title"], "fm-api-r2")
         self.assertIn(new["sid"], out)
         now = sessions.load_session(old["sid"])
-        self.assertEqual((now["state"], now["replaced_by"]), ("rotated", new["sid"]))
+        self.assertEqual((now["lifecycle"], now["state"], now["replaced_by"]),
+                         ("rotated", "idle", new["sid"]))  # never put rotated into state
         self.assertTrue(self.fake.alive(old["transport"]["handle"]))  # left idle, not closed
         prompt = self.fake.inputs(new["transport"]["handle"])[0]
         self.assertIn(old["sid"], prompt)
@@ -353,6 +375,17 @@ class RotateTest(SessionTestCase):
         self.assertEqual(row["kind"], "rotate")
         self.assertIn(old["sid"], row["text"])
         self.assertIn(new["sid"], row["text"])
+
+    def test_board_shows_old_arrow_new_after_rotation(self):
+        from foreman import projects
+        old = self.new_session()
+        projects.add_task(self.slug, "Build API", stage="code", owner=old["sid"])
+        code, out, err = self.rotate(old["sid"])
+        self.assertEqual(code, 0, err)
+        new = [r for r in self.sessions() if r["sid"] != old["sid"]][0]
+        code, bout, _ = run_main("board", "show", "--project", self.slug)
+        self.assertEqual(code, 0)
+        self.assertIn("%s → %s" % (old["sid"], new["sid"]), bout)
 
     def test_model_may_change(self):
         old = self.new_session()
@@ -375,12 +408,24 @@ class RotateTest(SessionTestCase):
         self.assertEqual(len(self.sessions()), 1)
         self.deliver.assert_not_called()
 
-    def test_already_rotated_or_closed(self):
-        for state in ("rotated", "closed", "gone"):
-            old = self.new_session(state=state, title="t-" + state)
-            code, out, err = self.rotate(old["sid"])
-            self.assertEqual(code, 2, state)
-        self.assertEqual(len([r for r in self.sessions()]), 3)
+    def test_undelivered_inbox_is_refused(self):
+        from foreman import sessions
+        old = self.new_session()
+        sessions.inbox_enqueue(old["sid"], "finish this first")
+        code, out, err = self.rotate(old["sid"])
+        self.assertEqual(code, 8)
+        self.assertIn("inbox", err.lower() + " " + out.lower())
+        self.assertEqual(len(self.sessions()), 1)
+        self.deliver.assert_not_called()
+
+    def test_already_rotated_or_closed_or_gone(self):
+        old_rot = self.new_session(lifecycle="rotated", title="t-rot")
+        old_cls = self.new_session(lifecycle="closed", title="t-cls")
+        old_gone = self.new_session(state="gone", title="t-gone")
+        for rec in (old_rot, old_cls, old_gone):
+            code, out, err = self.rotate(rec["sid"])
+            self.assertEqual(code, 2, rec["title"])
+        self.assertEqual(len(self.sessions()), 3)
 
     def test_gone_terminal_opens_nothing(self):
         old = self.new_session()
@@ -430,6 +475,32 @@ class RotateTest(SessionTestCase):
         self.assertEqual(code, 0)
         self.assertIn("terminal gone", out + err)
 
+    def test_ask_to_rotated_session_warns_when_cache_is_cold(self):
+        from foreman import sessions
+        os.environ["FOREMAN_NOW"] = "2026-11-05T11:00:00Z"
+        old = self.new_session()
+        sessions.update_session(old["sid"], last_event_at="2026-11-05T11:00:00Z")
+        self.assertEqual(self.rotate(old["sid"])[0], 0)
+        sessions.inbox_mark_delivered(old["sid"])
+        os.environ["FOREMAN_NOW"] = "2026-11-05T13:00:00Z"
+        code, out, err = run_main("ask", old["sid"], "why did you pick X?")
+        self.assertEqual(code, 0, err)
+        self.assertIn("cold", err)
+        self.assertIn(old["sid"], err)
+
+    def test_status_shows_rotated_arrow_and_hides_closed_lifecycle(self):
+        old = self.new_session(title="worker-a")
+        self.assertEqual(self.rotate(old["sid"])[0], 0)
+        new = [r for r in self.sessions() if r["sid"] != old["sid"]][0]
+        closed = self.new_session(title="done-worker")
+        self.assertEqual(run_main("close", closed["sid"])[0], 0)
+        code, out, err = run_main("status", "--project", self.slug)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("done-worker", out)
+        row = [l for l in out.splitlines() if "worker-a " in l][0]
+        self.assertIn("rotated", row)
+        self.assertIn(new["sid"], row)
+
 
 class OrchestratorTest(SessionTestCase):
     def start(self, *extra):
@@ -440,8 +511,8 @@ class OrchestratorTest(SessionTestCase):
         code, out, err = self.start()
         self.assertEqual(code, 0, err)
         (rec,) = self.sessions()
-        self.assertEqual((rec["role"], rec["agent"], rec["model"], rec["state"]),
-                         ("orchestrator", "claude", "sonnet", "starting"))
+        self.assertEqual((rec["role"], rec["agent"], rec["model"], rec["state"], rec["lifecycle"]),
+                         ("orchestrator", "claude", "sonnet", "starting", "active"))
         self.assertEqual(rec["owner"], "user")
         self.assertEqual(rec["title"], "%s-orch" % self.slug)
         self.assertEqual(projects.load_project(self.slug)["orchestrator"], rec["sid"])
@@ -492,6 +563,58 @@ class OrchestratorTest(SessionTestCase):
         self.start()
         code, out, err = run_main("orchestrator", "show", "--project", self.slug)
         self.assertIn(self.sessions()[0]["sid"], out)
+
+    def test_adopt_registered_worker_session(self):
+        from foreman import projects, sessions
+        w = self.new_session(role="worker", owner="user", title="my-claude")
+        code, out, err = run_main("orchestrator", "adopt", w["sid"], "--project", self.slug)
+        self.assertEqual(code, 0, err)
+        self.assertIn(w["sid"], out)
+        now = sessions.load_session(w["sid"])
+        self.assertEqual((now["role"], now["owner"], now["lifecycle"]), ("orchestrator", "user", "active"))
+        self.assertEqual(projects.load_project(self.slug)["orchestrator"], w["sid"])
+
+    def test_adopt_live_unregistered_transport_handle(self):
+        from foreman import projects
+        handle = self.fake.launch("claude", "sonnet", None, self.project["path"], "", "live-tab")
+        code, out, err = run_main("orchestrator", "adopt", handle, "--project", self.slug, "--transport", "fake")
+        self.assertEqual(code, 0, err)
+        (rec,) = self.sessions()
+        self.assertEqual((rec["role"], rec["owner"], rec["agent"]), ("orchestrator", "user", "claude"))
+        self.assertEqual(rec["transport"], {"kind": "fake", "handle": handle})
+        self.assertEqual(projects.load_project(self.slug)["orchestrator"], rec["sid"])
+        self.assertIn(rec["sid"], out)
+
+    def test_adopt_refuses_when_live_orchestrator_already_exists(self):
+        self.assertEqual(self.start()[0], 0)
+        w = self.new_session(role="worker", owner="user", title="second")
+        code, out, err = run_main("orchestrator", "adopt", w["sid"], "--project", self.slug)
+        self.assertEqual(code, 2)
+        self.assertIn("already", err)
+
+    def test_adopt_refuses_plain_shell_handle(self):
+        # Unregistered plain shell (no agent reported by transport)
+        handle = self.fake.launch(None, None, None, self.project["path"], "", "plain-sh")
+        code, out, err = run_main("orchestrator", "adopt", handle, "--project", self.slug, "--transport", "fake")
+        self.assertEqual(code, 2)
+        self.assertIn("shell", err.lower())
+        self.assertEqual(self.sessions(), [])
+        # Registered session whose terminal reports no agent (plain shell)
+        w = self.new_session(role="worker", owner="user", title="became-sh")
+        self.fake._modify(w["transport"]["handle"], lambda r: r.update(agent=None))
+        code, out, err = run_main("orchestrator", "adopt", w["sid"], "--project", self.slug)
+        self.assertEqual(code, 2)
+        self.assertIn("shell", err.lower())
+
+    def test_adopt_refuses_worker_only_agent(self):
+        w = self.new_session(agent="codex", model=None, title="codex-tab")
+        code, out, err = run_main("orchestrator", "adopt", w["sid"], "--project", self.slug)
+        self.assertEqual(code, 2)
+        self.assertIn("worker", err.lower())
+
+    def test_adopt_is_blocked_by_orchestrator_guard(self):
+        from foreman import guard
+        self.assertIsNotNone(guard.check_command("foreman orchestrator adopt s-123456", project=self.slug))
 
     def test_briefing_template(self):
         from foreman.commands import orchestrator
