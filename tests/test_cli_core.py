@@ -7,7 +7,7 @@ from tests.helpers import ForemanTestCase, run_cli, BIN, ROOT
 ALL_COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "board", "log",
                 "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
                 "hook", "tap", "deliver", "gate", "telegram", "orchestrator"]
-STUBS = [c for c in ALL_COMMANDS if c not in ("board", "log", "status", "gate")]
+STUBS = [c for c in ALL_COMMANDS if c not in ("board", "log", "status", "gate", "limits", "tap", "watch", "clean", "work")]
 
 
 class LauncherTest(ForemanTestCase):

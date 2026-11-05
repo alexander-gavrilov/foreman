@@ -64,6 +64,11 @@ def find_by_handle(handle, kind=None):
     return _prefer_live(matches)
 
 
+def find_by_agent_session_id(agent_session_id):
+    matches = [r for r in list_sessions() if r.get("agent_session_id") == agent_session_id]
+    return _prefer_live(matches)
+
+
 def find(ref, project=None):
     """Resolve a sid, title, agent_session_id or transport handle to a session record (or None)."""
     recs = list_sessions(project)
