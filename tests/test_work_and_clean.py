@@ -171,3 +171,15 @@ class WorkAndCleanTest(ForemanTestCase):
         # safe_delete_dir refuses paths outside agent_work_root
         with self.assertRaises(ValueError):
             janitor.safe_delete_dir(outside_dir)
+
+    def test_rotated_sessions_untouched_by_janitor(self):
+        from foreman import janitor, sessions
+
+        s = sessions.create_session("demo", "claude", state="idle", lifecycle="rotated", title="s-rot")
+        watch_state = {}
+        janitor.janitor_pass(watch_state)
+
+        loaded = sessions.load_session(s["sid"])
+        self.assertEqual(loaded["lifecycle"], "rotated")
+        self.assertEqual(loaded["state"], "idle")
+

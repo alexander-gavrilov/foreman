@@ -42,7 +42,10 @@ def run_pass(interval_s=60):
 
     # 2. Transports check
     all_sessions = sessions.list_sessions()
-    non_closed = [s for s in all_sessions if s.get("state") != "closed"]
+    non_closed = [
+        s for s in all_sessions
+        if s.get("lifecycle") != "closed" and s.get("state") != "closed"
+    ]
 
     transport_kinds = {
         (s.get("transport") or {}).get("kind")
@@ -66,18 +69,24 @@ def run_pass(interval_s=60):
         tr = s.get("transport") or {}
         kind = tr.get("kind")
         handle = tr.get("handle")
+        is_rotated = (s.get("lifecycle") == "rotated")
 
-        # Terminal gone
+        # Terminal gone (watched for all non-closed sessions, including rotated)
         if kind and kind in live_handles_by_kind and handle and handle not in live_handles_by_kind[kind]:
             cond = "gone:" + sid
             active_conditions.add(cond)
             if s.get("state") != "gone":
+                # Mark state gone, but never change lifecycle of a rotated session to closed
                 sessions.set_state(sid, "gone")
             if cond not in dedupe:
                 wake.wake(project, "terminal gone: " + title)
                 dedupe.add(cond)
                 summary["wakes"] += 1
                 summary["conditions"].append(cond)
+            continue
+
+        # Rotated sessions are watched only for terminal gone, never for stuck/waiting/context
+        if is_rotated:
             continue
 
         # If not gone, check stuck
@@ -158,6 +167,17 @@ def run_pass(interval_s=60):
                     wake.wake(p["slug"], msg)
                     summary["wakes"] += 1
                 notify.notify(None, msg)
+
+                # Queue wind-down message for every running worker session of that provider
+                wind_down_text = "Лимит %s ≥90%%: wind down and hand off at your next idle point" % prov
+                for ws in all_sessions:
+                    agent = ws.get("agent")
+                    agent_matches = (agent == prov or (prov == "antigravity" and agent == "agy"))
+                    is_worker = (ws.get("role") == "worker")
+                    is_running = (ws.get("lifecycle") != "closed" and ws.get("state") not in ("closed", "gone"))
+                    if agent_matches and is_worker and is_running:
+                        sessions.inbox_enqueue(ws["sid"], wind_down_text, sender="foreman")
+
                 dedupe.add(cond_stop)
                 dedupe.add(cond_warn)
                 summary["conditions"].append(cond_stop)

@@ -17,6 +17,30 @@ def register(subparsers):
     p_list.add_argument("--json", action="store_true", help="Output as JSON")
 
 
+def _last_hook_events():
+    """Return {agent: latest_iso_timestamp or None} across events.jsonl and all sessions."""
+    latest = {"claude": None, "antigravity": None}
+    for s in sessions.list_sessions():
+        agent = s.get("agent")
+        if agent == "agy":
+            agent = "antigravity"
+        ev_at = s.get("last_event_at")
+        if agent in latest and ev_at:
+            if latest[agent] is None or ev_at > latest[agent]:
+                latest[agent] = ev_at
+
+    for ev in store.read_jsonl(paths.events_file()):
+        agent = ev.get("agent")
+        if agent == "agy":
+            agent = "antigravity"
+        ts = ev.get("ts")
+        if agent in latest and ts:
+            if latest[agent] is None or ts > latest[agent]:
+                latest[agent] = ts
+
+    return latest
+
+
 def run(args):
     subcmd = getattr(args, "watch_subcommand", None)
     if not subcmd or subcmd == "run":
@@ -49,10 +73,14 @@ def run(args):
                 age_str = ("%s ago" % timeutil.humanize(age)) if age is not None else "never"
                 loop_info = "NOT RUNNING (last run %s)" % age_str
 
-        non_closed = [s for s in sessions.list_sessions() if s.get("state") != "closed"]
+        non_closed = [
+            s for s in sessions.list_sessions()
+            if s.get("lifecycle") != "closed" and s.get("state") != "closed"
+        ]
         limit_warn = config.get("thresholds.limit_warn", 70)
         limit_stop = config.get("thresholds.limit_stop", 90)
         prov_levels = limits.levels()
+        hook_events = _last_hook_events()
 
         if getattr(args, "json", False):
             cliutil.dump_json({
@@ -66,6 +94,13 @@ def run(args):
                     "stop_threshold": limit_stop,
                     "levels": prov_levels,
                 },
+                "hook_events": {
+                    a: {
+                        "last_event_at": ts,
+                        "age": timeutil.age_text(ts) if ts else "never",
+                    }
+                    for a, ts in hook_events.items()
+                },
             })
             return 0
 
@@ -77,6 +112,13 @@ def run(args):
             for s in non_closed:
                 title = s.get("title") or s["sid"]
                 print("  %s (title: %s, state: %s)" % (s["sid"], title, s.get("state")))
+
+        hook_parts = []
+        for a in ("claude", "antigravity"):
+            ts = hook_events.get(a)
+            age = timeutil.age_text(ts) if ts else "never"
+            hook_parts.append("%s: %s" % (a.capitalize(), age if age == "never" else ("%s ago" % age)))
+        print("Hook events: %s" % ", ".join(hook_parts))
 
         print("Limits: warn >= %d%%, stop >= %d%%" % (limit_warn, limit_stop))
         for prov in ("claude", "antigravity"):

@@ -6,6 +6,7 @@ from foreman.errors import ForemanError
 
 STATES = ("starting", "busy", "idle", "waiting_input", "waiting_permission", "stuck", "gone", "rotated",
           "closed")
+LIFECYCLES = ("active", "rotated", "closed")
 INACTIVE_STATES = ("closed", "rotated", "gone")
 
 
@@ -36,14 +37,14 @@ def save_session(rec):
 
 def create_session(project, agent, model=None, effort=None, role="worker", owner="orchestrator",
                    purpose=None, title=None, transport=None, agent_session_id=None, cwd=None,
-                   transcript_path=None, state="starting", replaces=None):
+                   transcript_path=None, state="starting", replaces=None, lifecycle="active"):
     sid = ids.new_sid(exists=lambda s: os.path.exists(paths.session_file(s)))
     now = timeutil.now_iso()
     rec = {"sid": sid, "project": project, "agent": agent, "model": model, "effort": effort, "role": role,
            "owner": owner, "purpose": purpose, "title": title or sid,
            "transport": transport or {"kind": None, "handle": None},
            "agent_session_id": agent_session_id, "cwd": cwd, "transcript_path": transcript_path,
-           "state": state, "state_since": now, "last_event_at": None,
+           "state": state, "lifecycle": lifecycle, "state_since": now, "last_event_at": None,
            "context_tokens": None, "context_at": None, "replaces": replaces, "replaced_by": None,
            "opened_at": now, "closed_at": None}
     return save_session(rec)
