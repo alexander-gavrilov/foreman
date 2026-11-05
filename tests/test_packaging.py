@@ -37,3 +37,12 @@ class Packaging(ForemanTestCase):
         text = read("README.md")
         for cmd in ("foreman init", "foreman install", "foreman report", "foreman uninstall"):
             self.assertIn(cmd, text)
+
+    def test_project_rule_template_exists_and_fits_budget(self):
+        text = read("skills", "foreman", "templates", "project-rule.md").strip()
+        lines = text.splitlines()
+        self.assertGreaterEqual(len(lines), 4)
+        self.assertLessEqual(len(lines), 10)
+        for part in ("foreman work new", "other agents", "foreman report", "foreman stage"):
+            self.assertIn(part, text)
+        self.assertFalse(os.path.exists(os.path.join(ROOT, "skills", "foreman", "templates", "rules-block.md")))

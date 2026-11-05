@@ -9,9 +9,6 @@ import shutil
 from foreman import install as machine
 from foreman import projects, sessions, store, telegram
 
-MARK_START, MARK_END = "<!-- foreman:rules -->", "<!-- /foreman:rules -->"
-_BLOCK_RE = re.compile(re.escape(MARK_START) + r".*?" + re.escape(MARK_END), re.S)
-
 CLAUDE_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification",
                  "PermissionRequest", "SessionEnd")
 CODEX_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop",
@@ -133,7 +130,8 @@ def _exclude_file(project_path):
     git = os.path.join(project_path, ".git")
     if os.path.isfile(git):  # worktree / submodule: `gitdir: <path>`
         try:
-            line = open(git, encoding="utf-8").read().strip()
+            with open(git, encoding="utf-8") as f:
+                line = f.read().strip()
         except OSError:
             return None
         if not line.startswith("gitdir:"):
@@ -143,7 +141,8 @@ def _exclude_file(project_path):
             gitdir = os.path.join(project_path, gitdir)
         common = os.path.join(gitdir, "commondir")
         if os.path.exists(common):
-            gitdir = os.path.normpath(os.path.join(gitdir, open(common, encoding="utf-8").read().strip()))
+            with open(common, encoding="utf-8") as f:
+                gitdir = os.path.normpath(os.path.join(gitdir, f.read().strip()))
         return os.path.join(gitdir, "info", "exclude")
     if os.path.isdir(git):
         return os.path.join(git, "info", "exclude")
@@ -156,7 +155,8 @@ def exclude_from_git(project_path, rel_paths):
     if not target:
         return []
     try:
-        text = open(target, encoding="utf-8").read()
+        with open(target, encoding="utf-8") as f:
+            text = f.read()
     except OSError:
         text = ""
     have = {ln.strip() for ln in text.splitlines()}
@@ -170,37 +170,6 @@ def exclude_from_git(project_path, rel_paths):
         for r in missing:
             f.write("/" + r + "\n")
     return missing
-
-
-# ------------------------------------------------------------ rule block
-
-def rules_block():
-    with open(os.path.join(machine.skill_dir(), "templates", "rules-block.md"), encoding="utf-8") as f:
-        return f.read().strip()
-
-
-def apply_rules(path, block):
-    """Create the file, append the block, or replace a differing block. Returns 'created'|'added'|'updated'|None."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
-        text = None
-    if text is None:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(block + "\n")
-        return "created"
-    m = _BLOCK_RE.search(text)
-    if m:
-        if m.group(0) == block:
-            return None
-        new, how = text[:m.start()] + block + text[m.end():], "updated"
-    else:
-        sep = "" if not text.strip() else ("\n" if text.endswith("\n\n") else "\n\n" if text.endswith("\n") else "\n\n")
-        new, how = text + sep + block + "\n", "added"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(new)
-    return how
 
 
 # ------------------------------------------------------------ sessions
@@ -265,22 +234,15 @@ def init_project(path, name=None, home=None, agents=None, transports=None, fm=No
         changes.append("renamed project %s to %r" % (project["slug"], name))
 
     agents = detect_agents(home) if agents is None else list(agents)
-    written = []
     for agent in agents:
         if write_hooks(path, agent, fm):
             changes.append("wrote %s hooks (%s)" % (agent, HOOK_FILES[agent]))
             if agent == "codex":
                 notes.append("Codex: approve the foreman hook once in Codex /hooks (foreman never trusts itself)")
-        written.append(HOOK_FILES[agent])
-    for rel in exclude_from_git(path, written):
+            elif agent == "antigravity":
+                notes.append("Antigravity: trust this workspace in Antigravity so .agents/hooks.json can run")
+    for rel in exclude_from_git(path, list(HOOK_FILES.values())):
         changes.append("excluded %s from git (.git/info/exclude)" % rel)
-
-    block = rules_block()
-    for fname in ("AGENTS.md", "CLAUDE.md"):
-        how = apply_rules(os.path.join(path, fname), block)
-        if how:
-            changes.append("%s the work-file rule in %s" % ({"created": "added", "added": "added",
-                                                           "updated": "updated"}[how], fname))
 
     if project.get("telegram_topic_id") is None:
         try:
@@ -294,6 +256,10 @@ def init_project(path, name=None, home=None, agents=None, transports=None, fm=No
         elif not any(n.startswith("Telegram topic") for n in notes):
             notes.append("no Telegram on this machine")
 
-    for sid in register_open_sessions(project, available_transports() if transports is None else transports):
+    trs = available_transports() if transports is None else transports
+    for sid in register_open_sessions(project, trs):
         changes.append("registered the open session %s (owner user)" % sid)
+    open_recs = [r for r in sessions.list_sessions(project["slug"]) if sessions.is_open(r)]
+    if open_recs:
+        notes.append("next: run `foreman orchestrator adopt <handle|sid>` to make an open session the orchestrator")
     return changes, notes

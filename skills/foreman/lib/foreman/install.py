@@ -240,7 +240,23 @@ def uninstall_service(home=None, platform=None, runner=None):
 
 # ------------------------------------------------------------ install / uninstall
 
-def install(machine_kind=None, bind=None, port=None, base_url=None, home=None, platform=None, runner=None):
+def install_terminal_notifier(platform=None, runner=None, which=None):
+    if (platform or sys.platform) != "darwin":
+        return []
+    which = which or shutil.which
+    if which("terminal-notifier"):
+        return []
+    if not which("brew"):
+        return ["user step: install terminal-notifier (e.g. `brew install terminal-notifier`) for macOS notifications"]
+    if dry_services():
+        return ["brew install terminal-notifier skipped (FOREMAN_INSTALL_DRY_SERVICES=1)"]
+    run = runner or default_runner
+    if run(["brew", "install", "terminal-notifier"]) == 0:
+        return ["installed terminal-notifier via Homebrew"]
+    return ["WARNING: brew install terminal-notifier failed; run `brew install terminal-notifier` manually"]
+
+
+def install(machine_kind=None, bind=None, port=None, base_url=None, home=None, platform=None, runner=None, which=None):
     """Returns the list of changes made (empty when everything was already in place)."""
     platform = platform or sys.platform
     changes = []
@@ -276,6 +292,7 @@ def install(machine_kind=None, bind=None, port=None, base_url=None, home=None, p
 
     changes += install_service(fm, home, platform, runner)
     changes += tap_statuslines(fm, home)
+    changes += install_terminal_notifier(platform, runner, which)
     return changes
 
 

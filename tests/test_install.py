@@ -92,13 +92,41 @@ class InstallTest(ForemanTestCase):
         self.assertEqual(r.calls[0][:2], ["launchctl", "print"])
         mid = snapshot(self.home)
         r2 = Runner(rc=0)  # loaded already, file unchanged -> no bootstrap
-        self.assertEqual(install.install(platform="darwin", runner=r2), [])
+        self.assertEqual(install.install(platform="darwin", runner=r2, which=lambda b: "/usr/local/bin/" + b), [])
         self.assertEqual(snapshot(self.home), mid)
         self.assertFalse(any(c[1] == "bootstrap" for c in r2.calls))
         r3 = Runner()
         install.uninstall(platform="darwin", runner=r3)
         self.assertTrue(any(c[:2] == ["launchctl", "bootout"] for c in r3.calls))
         self.assertEqual(snapshot(self.home), before)
+
+    def test_macos_terminal_notifier_installed_via_brew(self):
+        r = Runner(rc=0)
+        which = lambda b: "/opt/homebrew/bin/brew" if b == "brew" else None
+        changes = install.install(platform="darwin", runner=r, which=which)
+        self.assertIn(["brew", "install", "terminal-notifier"], r.calls)
+        self.assertTrue(any("terminal-notifier" in c for c in changes))
+
+    def test_macos_terminal_notifier_dry_services_skipped(self):
+        os.environ["FOREMAN_INSTALL_DRY_SERVICES"] = "1"
+        self.addCleanup(os.environ.pop, "FOREMAN_INSTALL_DRY_SERVICES", None)
+        r = Runner(rc=0)
+        which = lambda b: "/opt/homebrew/bin/brew" if b == "brew" else None
+        changes = install.install(platform="darwin", runner=r, which=which)
+        self.assertNotIn(["brew", "install", "terminal-notifier"], r.calls)
+        self.assertTrue(any("brew install terminal-notifier" in c and "skipped" in c for c in changes))
+
+    def test_macos_terminal_notifier_missing_and_no_brew(self):
+        r = Runner(rc=0)
+        changes = install.install(platform="darwin", runner=r, which=lambda b: None)
+        self.assertNotIn(["brew", "install", "terminal-notifier"], r.calls)
+        self.assertTrue(any("terminal-notifier" in c and "user step" in c.lower() for c in changes))
+
+    def test_macos_terminal_notifier_already_present(self):
+        r = Runner(rc=0)
+        changes = install.install(platform="darwin", runner=r, which=lambda b: "/usr/local/bin/" + b)
+        self.assertNotIn(["brew", "install", "terminal-notifier"], r.calls)
+        self.assertFalse(any("terminal-notifier" in c for c in changes))
 
     def test_dry_services_skip_runner(self):
         os.environ["FOREMAN_INSTALL_DRY_SERVICES"] = "1"

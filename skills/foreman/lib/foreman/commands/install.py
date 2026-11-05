@@ -13,13 +13,13 @@ def register(subparsers):
     p.add_argument("--base-url", help="URL used in notification links, e.g. http://host.lan:8765")
 
 
-def run(args, platform=None, runner=None, home=None):
+def run(args, platform=None, runner=None, home=None, which=None):
     try:
         changes = machine.install(machine_kind=args.machine_kind, bind=args.bind, port=args.port,
-                                  base_url=args.base_url, home=home, platform=platform, runner=runner)
+                                  base_url=args.base_url, home=home, platform=platform, runner=runner, which=which)
     except machine.InstallError as exc:
         raise CliError(str(exc), 1)
-    real = [c for c in changes if not c.startswith("service-manager commands skipped")]
+    real = [c for c in changes if "skipped (FOREMAN_INSTALL_DRY_SERVICES=1)" not in c]
     for line in changes:
         print(line)
     if not real:

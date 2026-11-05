@@ -1,6 +1,6 @@
 ---
 name: foreman
-description: Use when working in a project that uses foreman (AGENTS.md or CLAUDE.md has a "foreman:rules" block), when you need a scratch/work file, notice a problem with the tooling or a project rule, finish a stage of your task, or when the user says "установи плагин" / "install foreman" / "set up foreman".
+description: Use when working in a project that uses foreman (the SessionStart hook injects the foreman project rule), when you need a scratch/work file, notice a problem with the tooling or a project rule, finish a stage of your task, or when the user says "установи плагин" / "install foreman" / "set up foreman".
 ---
 
 # foreman
@@ -58,8 +58,7 @@ The user says it to any supported agent; you do the rest. No manual steps for th
    If `~/.local/bin` is not on PATH, tell the user to add it, or call `~/.local/bin/foreman` by full path.
 3. In every project the user wants managed, from that project's folder: `foreman init`.
    It registers the project and its board, writes hooks for each agent present (Claude, Antigravity, Codex;
-   project-local, excluded from git via `.git/info/exclude`), adds the work-file rule block to `AGENTS.md`
-   and `CLAUDE.md`, creates the Telegram topic when the machine has Telegram, and registers sessions already
+   project-local, excluded from git via `.git/info/exclude`; the work-file rule is injected by the SessionStart hook so no committed file is edited), creates the Telegram topic when the machine has Telegram, and registers sessions already
    open in that folder as user-owned workers.
    - Codex: tell the user to approve the foreman hook once in Codex `/hooks`. Never trust it for them.
    - Antigravity: the workspace must be trusted in agy.

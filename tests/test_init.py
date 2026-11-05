@@ -58,16 +58,13 @@ class InitTest(ForemanTestCase):
         self.assertNotIn("Notification", codex)
         self.assertIn("PermissionRequest", codex)
         self.assertTrue(any("Codex" in n and "/hooks" in n for n in notes))
+        self.assertTrue(any("Antigravity" in n and "trust" in n.lower() for n in notes))
         self.assertIn("no Telegram on this machine", notes)
         exclude = open(os.path.join(self.proj, ".git", "info", "exclude")).read()
         for rel in (".claude/settings.local.json", ".agents/hooks.json", ".codex/hooks.json"):
             self.assertIn("/" + rel, exclude)
         for name in ("AGENTS.md", "CLAUDE.md"):
-            text = open(os.path.join(self.proj, name)).read()
-            self.assertIn("<!-- foreman:rules -->", text)
-            self.assertIn("foreman work new <topic>", text)
-            self.assertIn("foreman report", text)
-            self.assertIn("foreman stage", text)
+            self.assertFalse(os.path.exists(os.path.join(self.proj, name)))
         self.assertFalse(os.path.exists(os.path.join(self.proj, ".gitignore")))
 
     def test_second_run_changes_nothing(self):
@@ -129,19 +126,17 @@ class InitTest(ForemanTestCase):
             self.init(agents=["claude"])
         self.assertEqual(open(path).read(), "{not json")
 
-    def test_rules_block_replace_and_append(self):
+    def test_committed_files_never_edited(self):
         agents_md = os.path.join(self.proj, "AGENTS.md")
         claude_md = os.path.join(self.proj, "CLAUDE.md")
-        open(agents_md, "w").write("# Mine\n\nkeep this\n\n<!-- foreman:rules -->\nold text\n<!-- /foreman:rules -->\n\ntail\n")
-        open(claude_md, "w").write("# Claude rules\nline")
+        open(agents_md, "w").write("# Mine\n")
+        open(claude_md, "w").write("# Claude rules\n")
         self.init(agents=[])
-        a = open(agents_md).read()
-        self.assertTrue(a.startswith("# Mine\n\nkeep this\n\n<!-- foreman:rules -->"))
-        self.assertNotIn("old text", a)
-        self.assertTrue(a.endswith("<!-- /foreman:rules -->\n\ntail\n"))
-        self.assertEqual(a.count("foreman:rules -->"), 2)
-        c = open(claude_md).read()
-        self.assertTrue(c.startswith("# Claude rules\nline\n\n<!-- foreman:rules -->"))
+        self.assertEqual(open(agents_md).read(), "# Mine\n")
+        self.assertEqual(open(claude_md).read(), "# Claude rules\n")
+        exclude = open(os.path.join(self.proj, ".git", "info", "exclude")).read()
+        for rel in (".claude/settings.local.json", ".agents/hooks.json", ".codex/hooks.json"):
+            self.assertIn("/" + rel, exclude)
 
     def test_agent_detection(self):
         self.assertEqual(initproj.detect_agents(self.home, which=lambda b: None), [])
@@ -162,19 +157,20 @@ class InitTest(ForemanTestCase):
 
     def test_registers_open_sessions_in_project(self):
         fake = FakeTransport()
-        import foreman.ids as ids
         inside = os.path.join(self.proj, "sub")
         os.makedirs(inside)
         for cwd, agent in ((self.proj, "claude"), (inside, "antigravity"), (self.make_dir("other"), "claude")):
-            h = fake.launch(agent, None, None, cwd, "", "t-" + agent)
-        self.init(transports=[fake])
+            fake.launch(agent, None, None, cwd, "", "t-" + agent)
+        changes, notes = self.init(transports=[fake])
         recs = sessions.list_sessions("app")
         self.assertEqual(sorted(r["agent"] for r in recs), ["antigravity", "claude"])
         self.assertTrue(all(r["owner"] == "user" and r["role"] == "worker" for r in recs))
         self.assertEqual(recs[0]["transport"]["kind"], "fake")
-        changes, _ = self.init(transports=[fake])  # known handles are skipped
+        self.assertTrue(any("foreman orchestrator adopt" in n for n in notes))
+        changes, notes2 = self.init(transports=[fake])  # known handles are skipped
         self.assertEqual(changes, [])
         self.assertEqual(len(sessions.list_sessions("app")), 2)
+        self.assertTrue(any("foreman orchestrator adopt" in n for n in notes2))
 
     def test_telegram_topic_saved(self):
         from foreman import telegram
