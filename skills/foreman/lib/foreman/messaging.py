@@ -36,9 +36,10 @@ def current_session(env=None):
 
 
 def current_sender(env=None):
+    """Who is calling: the session record of the calling terminal/sid, else "cli". Never taken from a
+    self-asserted variable (FOREMAN_ACTOR is ignored), and never "user": that label is reserved for
+    user_reply, which stores kind "user"."""
     env = os.environ if env is None else env
-    if env.get("FOREMAN_ACTOR"):
-        return env["FOREMAN_ACTOR"]
     rec = current_session(env)
     return (rec.get("title") or rec["sid"]) if rec else "cli"
 
@@ -231,7 +232,8 @@ def user_reply(project, text, reply_to=None, channel="web"):
     orch = wake.find_orchestrator(project)
     status = "terminal_gone"
     if orch is not None:
-        sessions.inbox_enqueue(orch["sid"], context + text, sender="user", kind="user")
+        sessions.inbox_enqueue(orch["sid"], context + text, sender="user", kind="user",
+                               extra={"channel": channel})
         status = delivery.deliver_pending(orch["sid"])
     if status == "terminal_gone":
         projects.chat_append(project, "foreman", GONE_TEXT, channel="system")

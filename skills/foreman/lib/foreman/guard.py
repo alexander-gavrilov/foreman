@@ -54,7 +54,6 @@ GH_ALLOWED = {"pr": {"view", "list", "create", "merge", "checks", "comment", "di
               "issue": {"view", "list", "create", "comment", "status"},
               "run": {"view", "list", "watch"},
               "repo": {"view", "list"}}
-ENV_ASSIGN = re.compile(r"^FOREMAN_ACTOR=")  # the only variable an orchestrator may set
 
 SEPARATORS = {"|", "||", "&&", ";", "&"}
 WRITE_REDIRECTS = {">", ">>", ">|", "&>", "&>>", "<>"}
@@ -497,8 +496,6 @@ def _check_coordination(cmd, args):
 
 
 def _check_segment(words, project=None):
-    while words and ENV_ASSIGN.match(words[0]):
-        words = words[1:]
     if not words:
         raise _Reject("nothing to run")
     cmd, args = words[0], words[1:]
