@@ -194,13 +194,46 @@ def compact(rec, what=None):
     return "delivered"
 
 
-def _mirror(project, text, msg_id):
-    """D51: the project's Telegram topic mirrors the project chat. Never fails the caller."""
+_mirror_threads = []
+MIRROR_FLUSH_S = 2.0  # at process exit, wait at most this long for pending mirrors (the reply is long delivered)
+
+
+def _log_mirror_error(error):
     try:
-        from foreman import notify
-        notify.mirror_to_topic(project, text, msg_id=msg_id)
+        from foreman import hooks
+        hooks._append_event({"kind": "mirror_error", "error": str(error)})
     except Exception:
         pass
+
+
+def _mirror(project, text, msg_id):
+    """D51: the project's Telegram topic mirrors the project chat. Runs on a daemon thread AFTER the message was
+    delivered, so an unreachable Telegram never delays the reply; failures are logged, never raised."""
+    import threading
+
+    def work():
+        try:
+            from foreman import notify
+            res = notify.mirror_to_topic(project, text, msg_id=msg_id)
+            if isinstance(res, dict) and not res.get("ok") and res.get("error"):
+                _log_mirror_error(res["error"])
+        except Exception as exc:
+            _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
+    t = threading.Thread(target=work, name="foreman-mirror", daemon=True)
+    _mirror_threads[:] = [x for x in _mirror_threads if x.is_alive()]
+    _mirror_threads.append(t)
+    t.start()
+
+
+def flush_mirrors(timeout=MIRROR_FLUSH_S):
+    """Wait (bounded) for the mirror threads started so far. Used at exit of short-lived CLI processes and by tests."""
+    deadline = time.time() + timeout
+    for t in list(_mirror_threads):
+        t.join(max(0.0, deadline - time.time()))
+
+
+import atexit  # noqa: E402
+atexit.register(flush_mirrors)
 
 
 def _notify_gone(project, msg):
@@ -243,8 +276,6 @@ def user_reply(project, text, reply_to=None, channel="web"):
     """A message from the user (web, Telegram, CLI): appended to the chat and queued for the orchestrator.
     If its terminal is gone, a foreman message in the chat says so. -> {"id", "delivery"}"""
     msg = projects.chat_append(project, "user", text, channel=channel, reply_to=reply_to)
-    if channel != "telegram":  # a Telegram reply is already in the topic; everything else is mirrored there
-        _mirror(project, "user (%s): %s" % (channel, text), msg["id"])
     context = ""
     if reply_to:
         _mark_answered(project, reply_to, msg["id"])
@@ -260,6 +291,8 @@ def user_reply(project, text, reply_to=None, channel="web"):
     if status == "terminal_gone":
         gone = projects.chat_append(project, "foreman", GONE_TEXT, channel="system")
         _notify_gone(project, gone)
+    if channel != "telegram":  # a Telegram reply is already in the topic; everything else is mirrored there
+        _mirror(project, "user (%s): %s" % (channel, text), msg["id"])  # after delivery, in the background
     return {"id": msg["id"], "delivery": status}
 
 

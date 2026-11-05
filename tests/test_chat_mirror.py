@@ -24,6 +24,7 @@ class ChatMirrorTest(RuntimeCase):
         self.orch = self.session(role="orchestrator", title="orch", idle=True, state="idle")
 
     def texts(self):
+        messaging.flush_mirrors(timeout=10)  # the mirror runs in the background, after delivery (N9)
         return [(m["message_thread_id"], m["text"]) for m in self.tg.sent_messages]
 
     def test_plain_say_is_posted_to_the_topic(self):
@@ -42,6 +43,7 @@ class ChatMirrorTest(RuntimeCase):
         messaging.user_reply(self.slug, "go on", channel="web")
         self.assertEqual(self.texts(), [(55, "user (web): go on")])
         messaging.user_reply(self.slug, "from phone", channel="telegram")
+        messaging.flush_mirrors(timeout=10)
         self.assertEqual(len(self.tg.sent_messages), 1)
 
     def test_terminal_gone_notice_reaches_the_topic_for_every_origin(self):
@@ -50,8 +52,9 @@ class ChatMirrorTest(RuntimeCase):
         self.assertEqual(self.texts(), [(55, messaging.GONE_TEXT + "\n\nhttp://ghome.lan:8765/#/p/demo/m/"
                                          + projects.chat_list(self.slug)[-1]["id"])])
         messaging.user_reply(self.slug, "again", channel="web")
-        self.assertEqual([t for _, t in self.texts()][1], "user (web): again")
-        self.assertIn(messaging.GONE_TEXT, self.texts()[2][1])
+        later = [t for _, t in self.texts()][1:]  # the gone notice is sent at once, the mirror after delivery
+        self.assertEqual(sorted(t.startswith(messaging.GONE_TEXT) for t in later), [False, True])
+        self.assertIn("user (web): again", later)
 
     def test_not_mirrored_when_telegram_is_not_a_notify_channel(self):
         self.write_config({"notify": {"channels": ["file"]},
@@ -62,6 +65,7 @@ class ChatMirrorTest(RuntimeCase):
 
     def test_long_message_is_cut_and_links_to_the_web_chat(self):
         msg = messaging.say(self.slug, "x" * 9000)
+        messaging.flush_mirrors(timeout=10)
         text = self.tg.sent_messages[0]["text"]
         self.assertLessEqual(len(text), 4096)
         self.assertTrue(text.endswith("/#/p/demo/m/" + msg["id"]))
@@ -71,6 +75,7 @@ class ChatMirrorTest(RuntimeCase):
         with mock.patch.object(notify, "MIRROR_MAX_PER_WINDOW", 3):
             for i in range(8):
                 messaging.say(self.slug, "msg %d" % i)
+                messaging.flush_mirrors(timeout=10)  # one at a time: the rate window counts in order
         texts = [t for _, t in self.texts()]
         self.assertEqual(texts[:3], ["msg 0", "msg 1", "msg 2"])
         self.assertEqual(len(texts), 4)
@@ -80,8 +85,9 @@ class ChatMirrorTest(RuntimeCase):
     def test_rate_limit_window_expires(self):
         clock = [1000.0]
         with mock.patch.object(notify, "MIRROR_MAX_PER_WINDOW", 1), mock.patch.object(notify, "_now", lambda: clock[0]):
-            messaging.say(self.slug, "a")
-            messaging.say(self.slug, "b")
+            for text in ("a", "b"):
+                messaging.say(self.slug, text)
+                messaging.flush_mirrors(timeout=10)
             clock[0] += notify.MIRROR_WINDOW_S + 1
             messaging.say(self.slug, "c")
         texts = [t for _, t in self.texts()]
@@ -94,6 +100,7 @@ class ChatMirrorTest(RuntimeCase):
         proj.pop("telegram_topic_id")
         projects.save_project(proj)
         messaging.say(self.slug, "hello")
+        messaging.flush_mirrors(timeout=10)
         self.assertEqual(len(self.tg.created_topics), 1)
         self.assertEqual(self.tg.sent_messages[0]["message_thread_id"], 100)
 
