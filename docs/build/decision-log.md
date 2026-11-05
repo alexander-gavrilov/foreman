@@ -131,3 +131,11 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   `install` prints the upstream mode and how to change it; the project rule says `--project` for rule findings; the
   test base class forces draft mode and fails on any unexpected `gh` call. — Review 3c showed leaks through the old
   scrubber and that any Linux install would file to the public repo by default.
+- D48 · Inbox senders are taken from the calling session's record, never from the environment; the label "user" is
+  reserved for web/Telegram replies and rendered distinctly in the digest. — Review 3a forged user consent with
+  `FOREMAN_ACTOR=user foreman send …` (spec §7: gates must not be forgeable by sessions that read untrusted data).
+- D49 · A transport listing failure is not evidence that terminals are gone: a session is marked gone only after two
+  consecutive passes where the handle is missing and `alive()` is false, and reappearing handles are restored. Limit
+  windows past their reset time count as unknown. Antigravity's 3p windows only gate its Claude models.
+- D50 · The integration branch keeps the original PR commits (incl. two "wip" commits from a worker handover) so that
+  merging #12 marks #4 #6–#11 merged; pushed history is not rewritten.
