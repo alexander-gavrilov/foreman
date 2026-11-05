@@ -299,7 +299,10 @@ class ServerHttpTest(ForemanTestCase):
 
         # Initialize project with idle orchestrator
         p = self.init_project("chatproj")
-        orch = sessions.create_session("chatproj", "claude", role="orchestrator", state="idle")
+        from foreman.transports.fake import FakeTransport
+        handle = FakeTransport().launch("claude", "m", None, p["path"], None, "orch")
+        orch = sessions.create_session("chatproj", "claude", role="orchestrator", state="idle",
+                                       transport={"kind": "fake", "handle": handle})
         projects.save_project(dict(p, orchestrator=orch["sid"]))
 
         # Orchestrator asks a question

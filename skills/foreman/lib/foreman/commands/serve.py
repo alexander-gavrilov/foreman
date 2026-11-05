@@ -29,8 +29,6 @@ def is_telegram_configured():
         return True
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
         return True
-    if hasattr(telegram, "is_configured") and callable(telegram.is_configured):
-        return telegram.is_configured()
     return False
 
 

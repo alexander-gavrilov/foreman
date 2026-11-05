@@ -179,53 +179,14 @@ def handle_post_message(handler, slug):
 
     text = text.strip()
 
-    # Try messaging.user_reply (owned by WP5)
-    try:
-        from foreman import messaging
-        if hasattr(messaging, "user_reply"):
-            res = messaging.user_reply(slug, text, reply_to=reply_to, channel="web")
-            if isinstance(res, dict):
-                _send_json(handler, 200, res)
-                return
-    except (ImportError, Exception):
-        pass
-
-    # Fallback to projects.chat_append + sessions.inbox_enqueue
-    proj = projects.load_project(slug)
-    if not proj:
+    if not projects.load_project(slug):
         _send_json(handler, 404, {"ok": False, "error": "project not found: %s" % slug})
         return
 
-    msg = projects.chat_append(slug, sender="user", text=text, channel="web", reply_to=reply_to)
-    msg_id = msg["id"]
+    from foreman import messaging
+    res = messaging.user_reply(slug, text, reply_to=reply_to, channel="web")
+    _send_json(handler, 200, dict(res, ok=True))
 
-    # If reply_to, mark the question as answered in chat.jsonl
-    if reply_to:
-        def mark_answered(rows):
-            for row in rows:
-                if row.get("id") == reply_to:
-                    row["answered_by"] = msg_id
-            return rows
-        store.rewrite_jsonl(paths.chat_file(slug), mark_answered)
-
-    # Deliver to orchestrator
-    proj_sessions = sessions.list_sessions(project=slug)
-    orch_sid = proj.get("orchestrator")
-    orch_session = None
-    if orch_sid:
-        orch_session = sessions.find(orch_sid, project=slug)
-    if not orch_session:
-        candidates = [s for s in proj_sessions if s.get("role") == "orchestrator"]
-        orch_session = sessions._prefer_live(candidates)
-
-    if orch_session and orch_session.get("state") not in sessions.INACTIVE_STATES:
-        sessions.inbox_enqueue(orch_session["sid"], text, sender="user", kind="message")
-        delivery = "delivered" if orch_session.get("state") == "idle" else "queued"
-    else:
-        delivery = "terminal_gone"
-        projects.chat_append(slug, sender="foreman", text="orchestrator terminal is gone", channel="system")
-
-    _send_json(handler, 200, {"ok": True, "id": msg_id, "delivery": delivery})
 
 
 def handle_findings(handler):

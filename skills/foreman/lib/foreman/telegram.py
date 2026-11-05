@@ -272,26 +272,8 @@ def _find_project_by_topic_id(thread_id):
 
 
 def _deliver_user_reply(project, text, reply_to=None):
-    try:
-        from foreman import messaging
-        if hasattr(messaging, "user_reply"):
-            return messaging.user_reply(project, text, reply_to=reply_to, channel="telegram")
-    except ImportError:
-        pass
-
-    # Fallback to projects.chat_append + sessions.inbox_enqueue
-    msg = projects.chat_append(project, "user", text, channel="telegram", reply_to=reply_to)
-
-    proj_rec = projects.load_project(project)
-    orch_sid = proj_rec.get("orchestrator") if proj_rec else None
-    if not orch_sid:
-        for s in sessions.list_sessions(project):
-            if s.get("role") == "orchestrator" and s.get("state") not in sessions.INACTIVE_STATES:
-                orch_sid = s["sid"]
-                break
-    if orch_sid:
-        sessions.inbox_enqueue(orch_sid, text, sender="user")
-    return msg
+    from foreman import messaging
+    return messaging.user_reply(project, text, reply_to=reply_to, channel="telegram")
 
 
 def _format_machine_status():
@@ -301,7 +283,7 @@ def _format_machine_status():
         for p in projs:
             active_sessions = [
                 s for s in sessions.list_sessions(p["slug"])
-                if s.get("state") not in sessions.INACTIVE_STATES
+                if sessions.is_live(s)
             ]
             lines.append(f"{p['slug']}: {len(active_sessions)} active session(s)")
     else:
@@ -309,7 +291,7 @@ def _format_machine_status():
 
     try:
         from foreman import limits
-        lines.append(limits.summary_line())
+        lines.append("limits: " + limits.summary_line())
     except Exception:
         lines.append("limits: unknown")
     return "\n".join(lines)
