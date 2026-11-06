@@ -124,6 +124,8 @@ class BindingTest(HookCase):
         """Binding rule 1b: after /clear the agent session id changes, the terminal does not."""
         rec, env = self.pending_launch(role="orchestrator", title="orch", state="idle", agent_session_id="old")
         self.sessions.update_session(rec["sid"], owner="user")
+        self.hook("claude", "SessionStart", claude("SessionStart", sid="new", cwd=self.proj["path"],
+                                                   source="clear"), env)  # D59: only a successor re-binds
         out = self.hook("claude", "PreToolUse", claude("PreToolUse", sid="new", cwd=self.proj["path"],
                                                        tool_name="Edit"), env)
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")  # still guarded
@@ -135,6 +137,8 @@ class BindingTest(HookCase):
         rec, env = self.pending_launch(role="orchestrator", title="orch", state="idle", agent_session_id="old")
         edit = lambda sid, e: self.hook("claude", "PreToolUse", claude(  # noqa: E731
             "PreToolUse", sid=sid, cwd=self.proj["path"], tool_name="Write"), e)
+        self.hook("claude", "SessionStart", claude("SessionStart", sid="new", cwd=self.proj["path"],
+                                                   source="clear"), env)
         self.assertEqual(edit("new", env)["hookSpecificOutput"]["permissionDecision"], "deny")  # re-bound
         got = self.rec(rec["sid"])
         self.assertEqual((got["agent_session_id"], got["past_agent_session_ids"]), ("new", ["old"]))
@@ -145,7 +149,8 @@ class BindingTest(HookCase):
 
     def test_old_ids_are_recognised_when_the_pipeline_fails(self):
         rec, env = self.pending_launch(role="orchestrator", title="orch", state="idle", agent_session_id="old")
-        self.hook("claude", "UserPromptSubmit", claude("UserPromptSubmit", sid="new", cwd=self.proj["path"]), env)
+        self.hook("claude", "SessionStart", claude("SessionStart", sid="new", cwd=self.proj["path"],
+                                                   source="clear"), env)
         with mock.patch("foreman.hooks._bind", side_effect=RuntimeError("boom")):
             out = self.hook("claude", "PreToolUse", claude("PreToolUse", sid="old", cwd=self.proj["path"],
                                                            tool_name="Write"), {})

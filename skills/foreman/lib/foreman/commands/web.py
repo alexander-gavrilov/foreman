@@ -4,7 +4,7 @@ import signal
 import sys
 import threading
 
-from foreman import config
+from foreman import config, outbox
 from foreman.cliutil import CliError, dump_json
 from foreman.web import auth, server
 
@@ -91,6 +91,7 @@ def _serve(args):
             print("foreman web listening on http://%s:%d" % (host, port_bound))
             sys.stdout.flush()
 
+    outbox.start_drain_thread(stop_event)  # D60: the web chat's replies are mirrored to Telegram from here
     server.run_server(binds=binds, port=port, stop_event=stop_event, on_ready=_on_ready)
     return 0
 

@@ -11,24 +11,25 @@ from tests import helpers
 from tests.helpers import ForemanTestCase
 
 
-class MirrorHomeIsCapturedAtSpawnTest(ForemanTestCase):
-    def test_a_late_mirror_error_is_logged_into_the_home_it_was_spawned_in(self):
-        from foreman import messaging, notify, paths, store
-        release = threading.Event()
-
-        def slow_failure(*a, **k):
-            release.wait(10)
-            raise RuntimeError("telegram unreachable")
-        spawned_home = paths.home()
+class MirrorHomeIsCapturedAtEnqueueTest(ForemanTestCase):
+    def test_a_row_lands_in_the_home_it_was_enqueued_in_and_a_flush_elsewhere_leaves_it_alone(self):
+        from foreman import messaging, notify, outbox, paths, store
+        enqueued_home = paths.home()
         other = tempfile.mkdtemp(prefix="foreman-test-other-")
         self.addCleanup(__import__("shutil").rmtree, other, ignore_errors=True)
-        with mock.patch.object(notify, "mirror_to_topic", side_effect=slow_failure):
+        with mock.patch.object(notify, "mirror_enabled", return_value=True), \
+                mock.patch.object(notify, "send_mirror_row", side_effect=RuntimeError("telegram unreachable")):
             messaging._mirror("demo", "text", "m-1")
             os.environ["FOREMAN_HOME"] = other  # the process environment moves on (a test teardown, a cd)
-            release.set()
             messaging.flush_mirrors(10)
-        self.assertFalse(os.path.exists(os.path.join(other, "events.jsonl")))
-        rows = store.read_jsonl(os.path.join(spawned_home, "events.jsonl"))
+        self.assertEqual(os.listdir(other), [])  # nothing was read, logged or created there
+        self.assertEqual([r["text"] for r in store.read_jsonl(os.path.join(enqueued_home, "telegram-outbox.jsonl"))],
+                         ["text"])
+        os.environ["FOREMAN_HOME"] = enqueued_home
+        with mock.patch.object(notify, "mirror_enabled", return_value=True), \
+                mock.patch.object(notify, "send_mirror_row", side_effect=RuntimeError("telegram unreachable")):
+            messaging.flush_mirrors(10)
+        rows = store.read_jsonl(os.path.join(enqueued_home, "events.jsonl"))
         self.assertEqual([r["kind"] for r in rows], ["mirror_error"])
         self.assertIn("telegram unreachable", rows[0]["error"])
 
@@ -79,22 +80,19 @@ class BaseClassGuardTest(unittest.TestCase):
 
     def test_the_base_class_flushes_mirrors_before_the_environment_is_restored(self):
         from foreman import messaging, notify
-        started, release, order = threading.Event(), threading.Event(), []
+        seen = []
 
-        def slow(*a, **k):
-            started.set()
-            release.wait(5)
-            order.append(("done", os.environ.get("FOREMAN_HOME")))
+        def send(row):
+            seen.append(os.environ.get("FOREMAN_HOME"))
             return {"ok": True}
 
-        class Spawns(ForemanTestCase):
+        class Queues(ForemanTestCase):
             def test_it(self):
                 messaging._mirror("demo", "text", "m-1")
-                started.wait(5)
-                threading.Timer(0.2, release.set).start()
 
-        with mock.patch.object(notify, "mirror_to_topic", side_effect=slow):
-            result = self._run(Spawns)
+        with mock.patch.object(notify, "mirror_enabled", return_value=True), \
+                mock.patch.object(notify, "send_mirror_row", side_effect=send):
+            result = self._run(Queues)
         self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
-        self.assertEqual(len(order), 1)
-        self.assertIn("foreman-test-", order[0][1])  # it finished while the temp home was still in place
+        self.assertEqual(len(seen), 1)
+        self.assertIn("foreman-test-", seen[0])  # it was sent while the temp home was still in place

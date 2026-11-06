@@ -98,6 +98,11 @@ class ForemanTestCase(unittest.TestCase):
         os.environ["PATH"] = shim_dir + os.pathsep + os.environ.get("PATH", "")
         self._gh_allowed = False
         self.addCleanup(self._check_gh_shim)
+        # a CLI that queued a Telegram row would start a real detached drainer: tests record the call instead
+        from foreman import outbox
+        spawner = mock.patch.object(outbox, "spawn_drainer", return_value=True)
+        self.spawned = spawner.start()
+        self.addCleanup(spawner.stop)
         self.addCleanup(self._reap_delivery_children)  # LIFO: runs before the temp tree goes
         self.addCleanup(self._flush_mirrors)  # ... and before the environment is restored (mirror threads)
 
@@ -164,6 +169,7 @@ def run_cli(*args, stdin=None, env=None, cwd=None):
 
     Refuses to run unless FOREMAN_HOME and HOME point inside a temp dir."""
     base = dict(os.environ)
+    base["FOREMAN_OUTBOX_SPAWN"] = "0"  # no detached Telegram drainer unless the test asks for one (env=...)
     base.update(env or {})
     tmproot = os.path.realpath(tempfile.gettempdir())
     for key in ("FOREMAN_HOME", "HOME"):

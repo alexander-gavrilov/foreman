@@ -34,6 +34,8 @@ class ChatMirrorTest(RuntimeCase):
 
     def test_question_is_posted_once_with_buttons_and_link(self):
         msg = messaging.say(self.slug, "Merge?", question=True, options=["Да", "Нет"])
+        self.assertEqual(self.tg.sent_messages, [])  # queued (D60), a drainer sends it
+        messaging.flush_mirrors(timeout=10)
         self.assertEqual(len(self.tg.sent_messages), 1)
         sent = self.tg.sent_messages[0]
         self.assertIn("/#/p/demo/m/" + msg["id"], sent["text"])

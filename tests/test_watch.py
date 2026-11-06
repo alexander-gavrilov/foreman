@@ -186,11 +186,20 @@ class WatchTest(ForemanTestCase):
         code, out, err = run_cli("watch", "run")
         self.assertEqual(code, 0)
 
-        # 3. Now watch list shows RUNNING
+        # 3. A one-off pass is not a loop and leaves no heartbeat
         code, out, err = run_cli("watch", "list")
         self.assertEqual(code, 0)
-        self.assertIn("RUNNING", out)
+        self.assertIn("NOT RUNNING", out)
         self.assertIn("Limits:", out)
+
+    def test_watch_list_says_running_for_a_live_loop_process(self):
+        from foreman import paths, store, timeutil
+        store.write_json(paths.watch_heartbeat_file(), {"pid": os.getpid(), "last_run_at": timeutil.now_iso(),
+                                                        "interval_s": 60})
+        code, out, err = run_cli("watch", "list")
+        self.assertIn("Loop: RUNNING (pid %d" % os.getpid(), out)
+        code, out, err = run_cli("watch", "list", "--json")
+        self.assertTrue(json.loads(out)["loop"]["running"])
 
     def test_limit_stop_wind_down_message_queued_for_workers_only(self):
         from foreman import limits, sessions, watch, transports

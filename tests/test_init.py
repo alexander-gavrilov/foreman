@@ -178,6 +178,22 @@ class InitTest(ForemanTestCase):
         self.assertEqual(len(sessions.list_sessions("app")), 2)
         self.assertTrue(any("foreman orchestrator adopt" in n for n in notes2))
 
+    def test_plain_shell_terminals_are_not_registered(self):  # fix round 7: found live
+        fake = FakeTransport()
+        fake.launch("claude", None, None, self.proj, "", "agent-tab")
+        fake.launch(None, None, None, self.proj, "", "shell-tab")
+        changes, notes = self.init(transports=[fake])
+        recs = sessions.list_sessions("app")
+        self.assertEqual([r["agent"] for r in recs], ["claude"])
+        self.assertFalse(any("shell-tab" in c or "unknown" in c for c in changes))
+
+    def test_only_shells_registers_nothing_and_suggests_no_adopt(self):
+        fake = FakeTransport()
+        fake.launch(None, None, None, self.proj, "", "shell-tab")
+        changes, notes = self.init(transports=[fake])
+        self.assertEqual(sessions.list_sessions("app"), [])
+        self.assertFalse(any("foreman orchestrator adopt" in n for n in notes))
+
     def test_telegram_topic_saved(self):
         from foreman import telegram
         saved = telegram.create_topic

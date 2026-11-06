@@ -4,7 +4,7 @@ import unittest
 
 from tests.helpers import ForemanTestCase
 from tests.fakes.fake_telegram import FakeTelegramServer
-from foreman import config, notify, paths, projects, store, telegram
+from foreman import config, notify, outbox, paths, projects, store, telegram
 
 
 class NotifyTestCase(ForemanTestCase):
@@ -32,6 +32,9 @@ class NotifyTestCase(ForemanTestCase):
         res = notify.notify("demo", "Worker finished", msg_id="m-finish1")
         self.assertEqual(len(res), 1)
         self.assertTrue(res[0]["ok"])
+        self.assertTrue(res[0]["queued"])  # D60: queued in the outbox, sent by a drainer
+        self.assertEqual(self.server.sent_messages, [])
+        outbox.drain()
 
         self.assertEqual(len(self.server.sent_messages), 1)
         sent = self.server.sent_messages[0]
@@ -53,6 +56,7 @@ class NotifyTestCase(ForemanTestCase):
             options=["Да", "Нет"],
         )
         self.assertTrue(res[0]["ok"])
+        outbox.drain()
 
         self.assertEqual(len(self.server.sent_messages), 1)
         sent = self.server.sent_messages[0]
@@ -67,6 +71,7 @@ class NotifyTestCase(ForemanTestCase):
     def test_notify_telegram_machine_level_general_topic(self):
         res = notify.notify(None, "Limit warning: weekly 72%", msg_id="m-lim1")
         self.assertTrue(res[0]["ok"])
+        outbox.drain()
 
         self.assertEqual(len(self.server.sent_messages), 1)
         sent = self.server.sent_messages[0]
@@ -108,7 +113,7 @@ class NotifyTestCase(ForemanTestCase):
         self.assertEqual(rows[0]["options"], ["OK"])
 
     def test_notify_failures_never_raise(self):
-        # Configure telegram channel pointing to an unreachable port
+        # an unreachable Telegram: the call returns at once with the row queued, the drainer logs the failure
         self.write_config({
             "notify": {"channels": ["telegram"]},
             "telegram": {
@@ -118,8 +123,19 @@ class NotifyTestCase(ForemanTestCase):
         })
         res = notify.notify("demo", "Will fail silently", msg_id="m-fail")
         self.assertEqual(len(res), 1)
-        self.assertFalse(res[0]["ok"])
+        self.assertTrue(res[0]["ok"])
         self.assertIn("channel", res[0])
+        outbox.drain()
+        self.assertEqual(len(outbox.pending()), 1)  # kept for the next attempt
+        events = store.read_jsonl(paths.events_file())
+        self.assertTrue(any(e.get("kind") == "mirror_error" for e in events))
+
+    def test_notify_without_a_bot_token_reports_the_failure(self):
+        os.unlink(paths.secrets_file())
+        res = notify.notify("demo", "No token", msg_id="m-x")
+        self.assertFalse(res[0]["ok"])
+        self.assertIn("error", res[0])
+        self.assertEqual(outbox.pending(), [])
 
 
 if __name__ == "__main__":

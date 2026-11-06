@@ -344,7 +344,8 @@ def _inside(cwd, root):
 
 
 def register_open_sessions(project, transports):
-    """Sessions already open in the project's folder become owner=user workers. Returns their sids."""
+    """Agent sessions already open in the project's folder become owner=user workers (a plain shell terminal, where
+    the transport detects no agent, is not a session). Returns their sids."""
     added = []
     for tr in transports:
         try:
@@ -352,12 +353,12 @@ def register_open_sessions(project, transports):
         except Exception:
             continue
         for term in terms:
-            if not term.alive or not _inside(term.cwd, project["path"]):
+            if not term.alive or not term.agent or not _inside(term.cwd, project["path"]):
                 continue
             if sessions.find_by_handle(term.handle, tr.kind):
                 continue
             rec = sessions.create_session(
-                project["slug"], term.agent or "unknown", role="worker", owner="user", title=term.title or None,
+                project["slug"], term.agent, role="worker", owner="user", title=term.title or None,
                 transport={"kind": tr.kind, "handle": term.handle}, cwd=term.cwd)
             added.append(rec["sid"])
     return added

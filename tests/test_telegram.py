@@ -1,4 +1,5 @@
 """Unit and integration tests for Telegram bot operations (owner: WP6)."""
+import json
 import os
 import stat
 import unittest
@@ -354,8 +355,98 @@ class TelegramTestCase(ForemanTestCase):
         cfg = config.load()
         self.assertIn(444555, [int(u) for u in cfg["telegram"]["allowed_user_ids"]])
 
+    def _allowed(self, ids):
+        """The set-chat tests talk to the fake Bot API only, never to the real one."""
+        self.write_config({"telegram": {"chat_id": -1001234567890, "api_base": self.server.base_url,
+                                        "allowed_user_ids": ids}})
+
+    def _unauthorized_event(self, chat_id, user_id, first_name="Anna", is_bot=False, age_s=60):
+        import datetime
+        ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age_s)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        with open(paths.events_file(), "a") as f:
+            f.write(json.dumps({"ts": ts, "kind": "telegram_unauthorized", "chat_id": chat_id, "user_id": user_id,
+                                "from": {"id": user_id, "first_name": first_name, "is_bot": is_bot}}) + "\n")
+
+    def test_set_chat_finds_the_user_the_running_daemon_rejected(self):
+        """The daemon's poller consumes updates, so getUpdates here sees nothing."""
+        self._allowed([])
+        self._unauthorized_event(-100111, 111)
+        self._unauthorized_event(-100888999000, 777)
+        telegram.set_chat("-100888999000")
+        cfg = config.load()
+        self.assertEqual(cfg["telegram"]["allowed_user_ids"], [777])
+
+    def test_set_chat_ignores_rejected_users_of_other_chats(self):
+        self._allowed([])
+        self._unauthorized_event(-100111, 111)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [])
+
+    def test_set_chat_leaves_existing_allowed_users_alone_and_adds_nobody(self):
+        self._allowed([5])
+        self._unauthorized_event(-100888999000, 777)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [5])
+
+    def test_set_chat_adds_nobody_from_a_pending_update_while_someone_is_allowed(self):  # review 6 F5
+        self._allowed([1])
+        self.server.enqueue_text_message("hello", chat_id=-100888999000, user_id=666)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [1])
+
+    def test_set_chat_skips_bots(self):  # F6
+        self._allowed([])
+        self._unauthorized_event(-100888999000, 111, first_name="Owner")
+        self._unauthorized_event(-100888999000, 999, first_name="Bot", is_bot=True)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [111])
+
+    def test_set_chat_ignores_events_older_than_a_day(self):  # F6
+        self._allowed([])
+        self._unauthorized_event(-100888999000, 111, age_s=25 * 3600)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [])
+
+    def test_set_chat_ignores_events_without_a_timestamp(self):
+        self._allowed([])
+        with open(paths.events_file(), "a") as f:
+            f.write(json.dumps({"kind": "telegram_unauthorized", "chat_id": -100888999000, "user_id": 111}) + "\n")
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [])
+
+    def test_set_chat_refuses_when_two_humans_are_candidates(self):  # F6
+        self._allowed([])
+        self._unauthorized_event(-100888999000, 111, first_name="Owner")
+        self._unauthorized_event(-100888999000, 666, first_name="Stranger")
+        info = {}
+        telegram.set_chat("-100888999000", info=info)
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [])
+        self.assertEqual(sorted((c["id"], c["first_name"]) for c in info["candidates"]),
+                         [(111, "Owner"), (666, "Stranger")])
+
+    def test_set_chat_one_human_seen_twice_is_one_candidate(self):
+        self._allowed([])
+        self._unauthorized_event(-100888999000, 111)
+        self._unauthorized_event(-100888999000, 111)
+        self.server.enqueue_text_message("setup", chat_id=-100888999000, user_id=111)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [111])
+
+    def test_set_chat_cli_prints_candidates_for_allow_user(self):  # F6
+        from tests.helpers import run_cli
+        self._allowed([])
+        self._unauthorized_event(-100888999000, 111, first_name="Owner")
+        self._unauthorized_event(-100888999000, 666, first_name="Stranger")
+        code, out, err = run_cli("telegram", "set-chat", "-100888999000")
+        self.assertEqual(code, 0)
+        self.assertIn("111 (Owner)", out)
+        self.assertIn("666 (Stranger)", out)
+        self.assertIn("allow-user", out)
+
     def test_set_chat_records_allowed_user_from_setup_message(self):
-        # User 888999 sends setup message in the chat
+        # User 888999 sends setup message in the chat; nobody is allowed yet
+        self._allowed([])
         self.server.enqueue_text_message("setup", chat_id=-100888999000, user_id=888999)
         telegram.set_chat("-100888999000")
 

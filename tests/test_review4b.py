@@ -100,26 +100,33 @@ class N8DeliveryGoneTest(RuntimeCase):
 
 
 class N9MirrorAfterDeliveryTest(RuntimeCase):
-    def test_say_returns_before_a_slow_mirror_finishes_and_the_mirror_still_runs(self):
-        import threading
-        import time
-        from foreman import messaging, notify
-        gate, done = threading.Event(), threading.Event()
+    """D60: the mirror is a durable outbox row; say/user_reply only append it, a drainer sends it."""
 
-        def slow(project, text, msg_id=None):
-            gate.wait(5)
-            done.set()
+    def setUp(self):
+        super().setUp()
+        from foreman import notify
+        patcher = mock.patch.object(notify, "mirror_enabled", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_say_returns_before_a_slow_send_and_the_row_is_still_sent_by_a_drainer(self):
+        import time
+        from foreman import messaging, notify, outbox
+        calls = []
+
+        def slow(row):
+            time.sleep(0.5)
+            calls.append(row["text"])
             return {"ok": True}
-        with mock.patch.object(notify, "mirror_to_topic", side_effect=slow):
+        with mock.patch.object(notify, "send_mirror_row", side_effect=slow):
             t0 = time.time()
             messaging.say(self.slug, "status update")
-            self.assertLess(time.time() - t0, 1.0)  # not delayed by the mirror
-            self.assertFalse(done.is_set())
-            gate.set()
+            self.assertLess(time.time() - t0, 0.4)  # not delayed by the mirror
+            self.assertEqual((calls, len(outbox.pending())), ([], 1))
             messaging.flush_mirrors(timeout=5)
-            self.assertTrue(done.is_set())
+        self.assertEqual((calls, outbox.pending()), (["status update"], []))
 
-    def test_user_reply_delivers_before_the_mirror_starts(self):
+    def test_user_reply_delivers_before_the_mirror_is_sent(self):
         from foreman import messaging, notify
         orch = self.session(role="orchestrator", title="o")
         order = []
@@ -129,11 +136,11 @@ class N9MirrorAfterDeliveryTest(RuntimeCase):
             order.append("deliver")
             return real(sid)
 
-        def mirror(project, text, msg_id=None):
+        def mirror(row):
             order.append("mirror")
             return {"ok": True}
         with mock.patch.object(messaging.delivery, "deliver_pending", side_effect=deliver), \
-                mock.patch.object(notify, "mirror_to_topic", side_effect=mirror):
+                mock.patch.object(notify, "send_mirror_row", side_effect=mirror):
             out = messaging.user_reply(self.slug, "go ahead")
             messaging.flush_mirrors(timeout=5)
         self.assertEqual(out["delivery"], "delivered")
@@ -141,10 +148,10 @@ class N9MirrorAfterDeliveryTest(RuntimeCase):
 
     def test_a_failing_mirror_is_logged_and_never_raises(self):
         from foreman import messaging, notify, paths, store
-        with mock.patch.object(notify, "mirror_to_topic", side_effect=RuntimeError("telegram down")):
+        with mock.patch.object(notify, "send_mirror_row", side_effect=RuntimeError("telegram down")):
             messaging.say(self.slug, "x")
             messaging.flush_mirrors(timeout=5)
-        rows = store.read_jsonl(paths.events_file()) if hasattr(paths, "events_file") else []
+        rows = store.read_jsonl(paths.events_file())
         self.assertTrue([r for r in rows if r.get("kind") == "mirror_error" and "telegram down" in r.get("error", "")])
 
 
