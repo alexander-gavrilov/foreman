@@ -240,3 +240,9 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   `reset_in_seconds: 0`; `window_stale` took the past `resets_at` as "this reading belongs to a finished window" and
   `summary_line` printed `?`, while the `limits` table printed the raw percentage (with level `unknown`). The agy
   parser no longer stores such a `resets_at`, so the reading ages by its `observed_at` and both views agree.
+- D64 · A false "busy" is not reconciled. Live: a stray PreToolUse with no PostToolUse arrived about 3 s after Stop
+  (cause unproven, intermittent), leaving the record busy with the terminal idle until the next hook, so `foreman close`
+  refused. A watch-loop reconcile was built and removed: review 10 showed live that Orca reports `done` during a
+  running Stop continuation, Herdr reports `done` while agy runs a command, and Orca `waiting` counts as idle, so it
+  typed into a working session. — A false busy is cosmetic and safe; a false idle breaks "never interrupt a busy
+  session". Accepted limit: the state clears on the session's next hook.
