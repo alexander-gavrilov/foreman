@@ -2,7 +2,7 @@
 import os
 import shutil
 
-from foreman import limits, messaging, paths, projects, routing, sessions, store, transports
+from foreman import limits, messaging, paths, projects, routing, sessions, store, transports, worktrees
 from foreman.cliutil import CliError, add_project_arg, dump_json, read_text_arg, resolve_project
 from foreman.transports._proc import TransportError
 from foreman.transports.base import TerminalGone
@@ -67,9 +67,11 @@ def _read_prompt(args):
 
 
 def open_session(project, purpose, prompt, title=None, kind=None, agent=None, model=None, effort=None,
-                 transport_kind=None, owner="orchestrator", role="worker", replaces=None, journal=True):
+                 transport_kind=None, owner="orchestrator", role="worker", replaces=None, journal=True, worktree=True):
     """Resolve routing/limits, launch on the transport, verify it is an agent terminal, register the session,
-    rename the tab, and append a journal line. Returns (rec, note)."""
+    rename the tab, and append a journal line. Returns (rec, note).
+    worktree: True gives an orchestrator-owned worker its own git worktree (when the project is a git repo);
+    False launches in the project folder; a dict is an existing worktree to continue in (rotate)."""
     if model and not agent:
         raise CliError("--model requires --agent", code=2)
     if agent and agent not in KNOWN_AGENTS:
@@ -103,6 +105,33 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
         raise CliError(str(exc), code=2)
 
     launch_title = None if tkind in ("fake", "orca") else title
+    wt, launch_cwd = (worktree if isinstance(worktree, dict) else None), project["path"]
+    new_wt = None
+    if wt:  # rotate: continue in the same checkout (launch_cwd = the old session's cwd); the new agent may be
+        # one the worktree has no hook file for yet
+        base = (projects.load_project(project["slug"]) or project)["path"]
+        if not os.path.isdir(wt["path"]):  # writing the hook files would recreate it as a stray, empty folder
+            raise CliError("the worktree %s is gone; the session was not rotated" % wt["path"], code=1)
+        try:
+            worktrees.write_hook_files(base, wt["path"], chosen_agent)
+        except Exception as exc:
+            raise CliError("hook files could not be written in the worktree %s (%s); the session was not rotated"
+                           % (wt["path"], exc), code=1)
+    elif worktree is True and role == "worker" and owner == "orchestrator":
+        layout = worktrees.applicable(project["path"])
+        if layout == "subfolder":
+            note = (note + "; " if note else "") + "no worktree (the project is a subfolder of a repository)"
+        elif layout == "nocommit":
+            note = (note + "; " if note else "") + "no worktree (the repository has no commit yet)"
+        elif layout == "root":
+            try:
+                new_wt = wt = worktrees.create(project, title or purpose, chosen_agent)
+            except worktrees.WorktreeError as exc:
+                raise CliError("cannot create a worktree: %s (retry, or pass --no-worktree to work in the "
+                               "project folder)" % exc, code=1)
+            launch_cwd = wt["path"]
+            if chosen_agent == "codex":
+                note = (note + "; " if note else "") + "Codex: approve the foreman hook for this worktree in /hooks"
     if role == "orchestrator":
         # D54: from here until the record exists, hooks of an unknown session of this agent in the project bind
         # as the pending orchestrator (guarded) instead of becoming an unguarded user worker.
@@ -111,9 +140,10 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
             raise CliError("an orchestrator launch for project %s is already in progress (pid %s)"
                            % (project["slug"], pending.get("pid")), code=2)
         sessions.mark_pending_orchestrator(project["slug"], chosen_agent, project["path"])
+    recorded = False  # once the record exists, the checkout belongs to a session and is no longer ours to discard
     try:
         try:
-            handle = transport.launch(chosen_agent, chosen_model, chosen_effort, project["path"], prompt,
+            handle = transport.launch(chosen_agent, chosen_model, chosen_effort, launch_cwd, prompt,
                                       launch_title)
         except NotImplementedError as exc:
             raise CliError(str(exc), code=2)
@@ -128,14 +158,17 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
                 project=project["slug"], agent=chosen_agent, model=chosen_model, effort=chosen_effort,
                 role=role, owner=owner, purpose=purpose, title=title,
                 transport={"kind": tkind, "handle": handle},
-                cwd=project["path"], state="starting", replaces=replaces, lifecycle="active",
+                cwd=launch_cwd, state="starting", replaces=replaces, lifecycle="active", worktree=wt,
             )
+            recorded = True
             # a hook that fired during the launch already registered a session on this terminal (a user worker,
             # or for an orchestrator launch the pending orchestrator): merge it into the real record
             sessions.absorb_strays(rec)
     except BaseException:
         if role == "orchestrator":
             sessions.discard_pending_strays(project["slug"])
+        if new_wt and not recorded:  # nothing was recorded: do not leave the checkout behind
+            worktrees.discard(project["path"], new_wt["path"], new_wt["branch"])
         raise
     finally:
         if role == "orchestrator":
@@ -158,14 +191,17 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
         projects.journal_append(
             project["slug"], messaging.current_sender(), "open", line,
             data={"sid": rec["sid"], "title": rec["title"], "agent": chosen_agent, "model": chosen_model,
-                  "effort": chosen_effort, "role": role, "owner": owner, "note": note},
+                  "effort": chosen_effort, "role": role, "owner": owner, "note": note,
+                  "worktree": wt["path"] if wt else None, "branch": wt["branch"] if wt else None},
         )
     return rec, note
 
 
 def format_open_line(rec, note):
     am = (rec.get("agent") or "?") + ("/" + rec["model"] if rec.get("model") else "")
-    return "%s %s (%s)%s" % (rec["sid"], rec["title"], am, " — " + note if note else "")
+    wt = rec.get("worktree")
+    where = " [worktree %s, branch %s]" % (wt["path"], wt["branch"]) if wt else ""
+    return "%s %s (%s)%s%s" % (rec["sid"], rec["title"], am, where, " — " + note if note else "")
 
 
 def register(subparsers):
@@ -182,6 +218,8 @@ def register(subparsers):
     p.add_argument("--transport", help="orca | herdr | fake")
     p.add_argument("--owner", choices=("orchestrator", "user"), default="orchestrator")
     p.add_argument("--role", choices=("worker", "orchestrator"), default="worker")
+    p.add_argument("--no-worktree", action="store_true",
+                   help="launch a worker in the project folder instead of its own git worktree")
     p.add_argument("--json", action="store_true")
 
 
@@ -191,7 +229,7 @@ def run(args):
     rec, note = open_session(
         project=proj, purpose=args.purpose, prompt=prompt, title=args.title,
         kind=args.kind, agent=args.agent, model=args.model, effort=args.effort,
-        transport_kind=args.transport, owner=args.owner, role=args.role,
+        transport_kind=args.transport, owner=args.owner, role=args.role, worktree=not args.no_worktree,
     )
     if args.json:
         dump_json(dict(rec, note=note))

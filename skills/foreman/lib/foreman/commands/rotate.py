@@ -121,6 +121,7 @@ def run(args):
         agent=agent, model=model, effort=effort,
         transport_kind=tkind, owner=old.get("owner") or "orchestrator",
         role=old.get("role") or "worker", replaces=old_sid, journal=False,
+        worktree=old.get("worktree") or False,  # the replacement continues in the same checkout
     )
 
     sessions.update_session(old_sid, replaced_by=new_rec["sid"])

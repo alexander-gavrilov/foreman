@@ -2,7 +2,8 @@
 
 Every call appends {"tool", "argv"} to $STUB_DIR/calls.jsonl and answers with the first rule in
 $STUB_DIR/rules.json whose "match" is a prefix of argv. A rule is
-{"match": [...], "json": <obj> | "stdout": "<text>", "stderr": "<text>", "code": <int>}.
+{"match": [...], "json": <obj> | "stdout": "<text>", "stderr": "<text>", "code": <int>, "first": <n>}.
+With "first": n a rule answers only the first n calls it matches, later calls fall through to the next rule.
 No rule -> exit 99. Nothing here ever reaches a real orca or herdr."""
 import json
 import os
@@ -19,9 +20,16 @@ def main(tool):
             rules = json.load(fh)
     except OSError:
         rules = []
-    for rule in rules:
+    for i, rule in enumerate(rules):
         match = rule["match"]
         if argv[:len(match)] == match:
+            if "first" in rule:
+                counter = os.path.join(base, "rule-%d.count" % i)
+                seen = int(open(counter).read()) if os.path.exists(counter) else 0
+                with open(counter, "w") as fh:
+                    fh.write(str(seen + 1))
+                if seen >= rule["first"]:
+                    continue
             if "json" in rule:
                 sys.stdout.write(json.dumps(rule["json"]))
             elif "stdout" in rule:

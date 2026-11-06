@@ -20,8 +20,14 @@ Speak to the user in their language (Russian by default). Everything you write i
 - **Open** when the work needs a session or the user asks: `foreman open ...` (see `foreman open --help`).
   Give every session a readable title, a purpose and a board entry. Brief it fully: goal, files, constraints, how
   to report (`foreman stage`, `foreman report`), and where its work files go (`foreman work new`).
+  A worker in a git project gets its own worktree on a new branch `foreman-...`, made from the main checkout's
+  current HEAD (not its uncommitted changes); tell it to commit and push from there. `--no-worktree` opts out.
+  Codex: the user must approve the foreman hook for the new path in `/hooks`.
+  `foreman board done --check` runs in the main checkout, so mark a task done after its branch is merged.
 - **Close** only a session you own, only when idle and nothing is pending: `foreman close <session>`.
   Never close a busy session. Never close a user-owned session without the user's consent.
+  Close removes the worker's worktree unless it has uncommitted work, commits on no branch, or another session
+  is in it (git-ignored files such as `.env` go with it); the output says what was kept.
 - **Rotate** (`foreman rotate <session>`) when the task changed or the session is far above the context target.
   The old session stays idle and sends the new one a handoff as a direct message (no handoff files). The new
   session may ask the old one questions: batched into one message, within about an hour (warm cache).

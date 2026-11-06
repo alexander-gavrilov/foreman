@@ -7,7 +7,7 @@ import shlex
 import shutil
 
 from foreman import install as machine
-from foreman import projects, sessions, store, telegram
+from foreman import paths, projects, sessions, store, telegram
 
 CLAUDE_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification",
                  "PermissionRequest", "SessionEnd")
@@ -206,10 +206,14 @@ def remove_hooks(project_path, agent):
     return True
 
 
-def remove_project(path, home=None):
+def remove_project(path, home=None, in_worktree=False):
     """`foreman init --remove`: foreman's hook handlers out of the project's hook files (the user's stay) and the
     lines init added out of .git/info/exclude. Project state under FOREMAN_HOME is kept. Idempotent."""
     path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    owner = None if in_worktree else projects.worktree_project(path)
+    if owner:  # the git exclude it would strip is shared with the main checkout; uninstall passes in_worktree
+        raise InitError("%s is a worker worktree of project %s; run init --remove in %s"
+                        % (path, owner["slug"], owner["path"]))
     changes = []
     for agent, rel in HOOK_FILES.items():
         if _has_foreman_hooks(path, agent) and is_tracked(path, rel):
@@ -222,6 +226,19 @@ def remove_project(path, home=None):
             changes.append("left %s alone: %s" % (rel, exc))
     for rel in unexclude_from_git(path, list(HOOK_FILES.values())):
         changes.append("removed %s from .git/info/exclude" % rel)
+    if not in_worktree:
+        # the exclude lines are shared with the project's kept worker worktrees: take their hook files out too, or
+        # they show up as untracked work for good and keep reporting
+        for proj in projects.list_projects():
+            if os.path.realpath(proj.get("path") or "") != path:
+                continue
+            wt_dir = paths.worktrees_dir(proj["slug"])
+            for name in sorted(os.listdir(wt_dir)) if os.path.isdir(wt_dir) else []:
+                try:
+                    changes += ["worktree %s: %s" % (name, c)
+                                for c in remove_project(os.path.join(wt_dir, name), home=home, in_worktree=True)]
+                except Exception as exc:
+                    changes.append("worktree %s: could not remove hooks (%s)" % (name, exc))
     return changes
 
 
@@ -353,7 +370,9 @@ def register_open_sessions(project, transports):
         except Exception:
             continue
         for term in terms:
-            if not term.alive or not term.agent or not _inside(term.cwd, project["path"]):
+            in_project = _inside(term.cwd, project["path"]) or \
+                (projects.worktree_project(term.cwd) or {}).get("slug") == project["slug"]
+            if not term.alive or not term.agent or not in_project:
                 continue
             if sessions.find_by_handle(term.handle, tr.kind):
                 continue
@@ -370,6 +389,9 @@ def init_project(path, name=None, home=None, agents=None, transports=None, fm=No
     path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
     if not os.path.isdir(path):
         raise InitError("%s is not a folder" % path)
+    owner = projects.worktree_project(path)
+    if owner:
+        raise InitError("%s is a worker worktree of project %s; run init in %s" % (path, owner["slug"], owner["path"]))
     changes, notes = [], []
     fm = fm or machine.foreman_bin(home)
 

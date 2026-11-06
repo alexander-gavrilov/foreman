@@ -37,6 +37,7 @@ fail the test if a real `gh` were run.
 | 9 | `test_a09_janitor` | 14-day folder listed then removed by the watch loop alone | pass |
 | 10 | `test_a10_findings` | work-Mac default is a local draft; public issue argv has no project data | pass (incl. the pasted-credential guard) |
 | 11 | `test_a11_install` | install/uninstall round trip, Linux and darwin branches, installed artifacts executed | pass |
+| 12 | `test_a12_worktrees` | two workers in a git project get their own worktree and branch; closing one keeps unsaved work, takes back a clean checkout, never touches the other | pass |
 
 A scenario that exposes a product bug is marked `@unittest.expectedFailure` with a comment starting `PRODUCT BUG:`;
 when the product is fixed it starts "unexpectedly succeeding" and the decorator is removed (both scenarios of items

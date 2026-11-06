@@ -16,7 +16,10 @@ def register(subparsers):
 
 def run(args, **kw):
     if getattr(args, "remove", False):
-        changes = initproj.remove_project(args.path)
+        try:
+            changes = initproj.remove_project(args.path)
+        except initproj.InitError as exc:
+            raise CliError(str(exc), 1)
         for line in changes:
             print(line)
         if not changes:
