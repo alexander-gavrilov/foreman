@@ -30,6 +30,8 @@ class TelegramNotificationTest(AcceptanceCase):
     def test_a_question_lands_in_the_project_topic_with_a_deep_link_to_its_chat(self):
         msgid = self.fm_ok("say", "--project", self.slug_a, "Мерджить PR #12?", "--question",
                            "--options", "Да|Нет|Ответить…")
+        self.assertEqual(self.tg.sent_messages, [])  # D60: queued; the daemon (or the detached drainer) sends it
+        self.fm_ok("outbox", "drain", "--budget", "5")
         sent = [m for m in self.tg.sent_messages if m["message_thread_id"] == self.topic[self.slug_a]]
         self.assertEqual(len(sent), 1)
         self.assertIn("Мерджить PR #12?", sent[0]["text"])

@@ -9,7 +9,7 @@ from foreman.errors import ForemanError
 
 COMMANDS = ["status", "limits", "send", "ask", "reply", "say", "open", "close", "rotate", "board", "log",
             "stage", "watch", "clean", "work", "report", "init", "install", "uninstall", "web", "serve",
-            "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact"]
+            "hook", "tap", "deliver", "gate", "telegram", "orchestrator", "compact", "outbox"]
 
 
 def _load(name):
@@ -46,6 +46,15 @@ def _utf8():
             pass
 
 
+def _kick_outbox():
+    """D60: a command that queued a Telegram row hands it to a detached drainer (unless a daemon is on it)."""
+    try:
+        from foreman import outbox
+        outbox.kick()
+    except Exception:
+        pass
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     _utf8()
@@ -68,6 +77,7 @@ def main(argv=None):
             return 2
         code = args._run(args)
         sys.stdout.flush()
+        _kick_outbox()
         return int(code or 0)
     except ForemanError as err:
         sys.stderr.write("foreman: %s\n" % err.message)

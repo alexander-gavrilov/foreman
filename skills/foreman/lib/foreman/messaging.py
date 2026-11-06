@@ -200,10 +200,10 @@ MIRROR_FLUSH_S = 5.0
 def _mirror(project, text, msg_id):
     """D51/D60: the project's Telegram topic mirrors the project chat. Appends a row to the durable outbox and
     returns at once, AFTER the message was delivered, so an unreachable Telegram never delays a reply. A drainer
-    (`foreman serve`, or the exit of this CLI process) sends it. Never raises."""
+    (`foreman serve`, or the detached one the CLI starts at its exit) sends it. Never raises."""
     try:
         from foreman import notify, outbox
-        if notify.mirror_enabled(project):
+        if str(text).strip() and notify.mirror_enabled(project):
             outbox.enqueue(project, text, msg_id)
     except Exception as exc:
         _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
@@ -223,15 +223,6 @@ def flush_mirrors(timeout=MIRROR_FLUSH_S):
     return outbox.drain(budget_s=timeout)
 
 
-def _exit_flush():
-    from foreman import outbox
-    outbox.exit_flush()
-
-
-import atexit  # noqa: E402
-atexit.register(_exit_flush)
-
-
 def _notify_gone(project, msg):
     """The terminal-gone notice goes to every configured channel, the topic included."""
     try:
@@ -244,14 +235,16 @@ def _notify_gone(project, msg):
 def say(project, text, question=False, options=None, notify_user=False):
     """Orchestrator -> user: append to the project chat; fan out to the notifiers for a question or on request.
     A failing notifier never fails the call."""
+    if not str(text or "").strip():
+        raise CliError("refusing to say an empty message")
     msg = projects.chat_append(project, "orchestrator", text, channel="cli", question=question,
                                options=options)
     if question or notify_user:
         try:
             from foreman import notify
             notify.notify(project, text, msg_id=msg["id"], question=bool(question), options=list(options or []))
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
     else:
         _mirror(project, text, msg["id"])
     return msg

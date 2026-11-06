@@ -95,6 +95,7 @@ class AcceptanceCase(ForemanTestCase):
             "FOREMAN_FAKE_TRANSPORT": self.fake_transport,
             "FOREMAN_TRANSPORT": "fake",
             "FOREMAN_NOW": iso(self.clock),
+            "FOREMAN_OUTBOX_SPAWN": "0",  # no detached Telegram drainer behind the test's back; tests drain explicitly
             "PATH": os.pathsep.join([self.shim_dir, python_dir]),
             "LANG": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",

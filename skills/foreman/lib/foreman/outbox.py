@@ -1,15 +1,23 @@
-"""D60: durable outbox for the Telegram topic mirror.
+"""D60: durable outbox for everything foreman sends to Telegram: the topic mirror of the project chat, and
+notifications (a question with its answer buttons, --notify, system notices).
 
-`messaging` appends a row and returns at once (N9: an unreachable Telegram never delays a reply). A drainer sends
-the rows in order: `foreman serve` runs one on its own thread every ~2 s; a CLI process without a running daemon
-makes one bounded attempt at exit. Only one drainer works at a time (non-blocking flock). A row is removed only
-after the Bot API said ok; a failure is logged (API description, never the token) and retried with backoff
-(`retry_after` of a 429 honoured); a row older than one hour is dropped with an event. Order is kept per project;
-the per-project rate limit is decided once per row and stored in it, so a retry does not consume another slot and
-the "more messages in the web chat" pointer survives retries."""
+Callers append a row and return at once (N9: an unreachable Telegram never delays a reply, and a hook never waits).
+A drainer sends the rows: `foreman serve`/`web` run one on a thread every ~2 s; a CLI process that queued a row and
+sees no fresh daemon starts ONE detached, bounded `foreman outbox drain` and exits at once (`kick`; never from a
+hook). Only one drainer works at a time (non-blocking flock; a drainer that finishes looks at the file again after
+it let go of the lock, so a row queued while it was finishing is not stranded). Delivery is AT LEAST ONCE: a row
+leaves the file only after the Bot API said ok, so a message Telegram accepted but whose answer we never saw (a read
+timeout) is sent again; a rare duplicate is accepted, a lost message is not. `attempts`/`next_at` are written BEFORE
+each send, so a killed drainer neither resends at once nor hides the failure (the next drainer logs it). A failure
+is logged (API description, never the token) and retried with backoff (`retry_after` of a 429 honoured); a
+permanent 4xx other than 429 drops the row at once with an event (a head row must never block its project); a row
+older than one hour is dropped with an event. Order is kept per project; the per-project rate limit of mirror rows
+is decided once per row and stored in it."""
 import contextlib
 import fcntl
 import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -19,10 +27,12 @@ from foreman import paths, store, timeutil
 MAX_AGE_S = 3600
 BACKOFF_S = (1, 2, 5, 15, 30, 60)  # after the n-th failed attempt; the last value repeats
 DRAIN_INTERVAL_S = 2.0
-EXIT_BUDGET_S = 3.0  # a CLI process waits at most this long at exit; whatever is left stays for the daemon
+DETACHED_BUDGET_S = 120.0  # a detached drainer works at most this long, then leaves the rest to the next one
 DAEMON_FRESH_S = 15.0
 HEARTBEAT_EVERY_S = 5.0
+SEND_WORST_S = 12.0  # topic creation + send, each bounded by notify.SEND_TIMEOUT_S: the least a send can take to fail
 _now = time.time
+_queued_here = False  # this process appended a row: its CLI entry point kicks a drainer before it exits
 
 
 def path():
@@ -37,10 +47,14 @@ def pending():
     return store.read_jsonl(path())
 
 
-def enqueue(project, text, msg_id=None):
-    row = {"id": "o-" + uuid.uuid4().hex[:10], "project": project, "text": text, "msg_id": msg_id,
-           "created_at": timeutil.now_iso(), "created_ts": _now(), "attempts": 0, "next_at": 0}
+def enqueue(project, text, msg_id=None, kind="mirror", **extra):
+    """Append a row. kind "mirror": the topic copy of a chat message (rate limited); "notify": a notification
+    (`question`, `options` in `extra`), never rate limited."""
+    global _queued_here
+    row = dict({"id": "o-" + uuid.uuid4().hex[:10], "project": project, "text": text, "msg_id": msg_id, "kind": kind,
+                "created_at": timeutil.now_iso(), "created_ts": _now(), "attempts": 0, "next_at": 0}, **extra)
     store.append_jsonl(path(), row)
+    _queued_here = True
     return row
 
 
@@ -139,9 +153,28 @@ def _attempt(row):
         return {"ok": False, "description": "%s: %s" % (type(exc).__name__, exc)}
 
 
+def _prepare(row):
+    """Everything that must be on disk BEFORE the send starts: the attempt counter, a retry time no earlier than
+    the longest a send can take, the rate-limit verdict. A drainer killed mid-send then cannot cause an immediate
+    resend, and the failure shows up (the next drainer logs an unfinished attempt)."""
+    from foreman import notify
+    if row.get("inflight"):
+        _log("mirror_error", error="the previous attempt did not finish (the drainer was killed)",
+             project=row.get("project"), msg_id=row.get("msg_id"), attempt=row.get("attempts", 0))
+    attempts = row.get("attempts", 0) + 1
+    fields = {"attempts": attempts, "inflight": True,
+              "next_at": _now() + max(_backoff(attempts, None), SEND_WORST_S)}
+    try:
+        fields["verdict"] = notify.row_verdict(row)
+    except Exception:
+        pass
+    _update(row["id"], fields)
+    return dict(row, **fields)
+
+
 def drain(budget_s=None, wait=False):
-    """Send due rows in order. `budget_s` bounds the time spent between sends; `wait` sleeps through backoffs
-    until the budget is over. -> {"sent": n, "busy": bool}"""
+    """Send due rows in order. `budget_s` bounds when a new send may start (a send that has started is finished);
+    `wait` sleeps through backoffs that end within the budget. -> {"sent": n, "busy": bool}"""
     summary = {"sent": 0, "busy": False}
     if not os.path.exists(path()):
         return summary
@@ -155,30 +188,43 @@ def drain(budget_s=None, wait=False):
             row, wake_at = _next_due(now)
             if row is None:
                 if wait and wake_at is not None and budget_s is not None:
-                    time.sleep(max(0.0, min(wake_at - now, budget_s - (time.monotonic() - started), 1.0)))
+                    left = budget_s - (time.monotonic() - started)
+                    if wake_at - now > left:
+                        break  # nothing becomes due within the budget
+                    time.sleep(max(0.0, min(wake_at - now, left, 1.0)))
                     continue
                 break
+            row = _prepare(row)
             res = _attempt(row)
-            if res.get("verdict") and res["verdict"] != row.get("verdict"):
-                row = dict(row, verdict=res["verdict"])
-                _update(row["id"], {"verdict": res["verdict"]})
             if res.get("ok"):
                 _update(row["id"])
                 summary["sent"] += 1
             elif res.get("drop"):
                 _update(row["id"])
                 _log("mirror_dropped", reason=_clean(res["drop"]), project=row.get("project"),
-                     msg_id=row.get("msg_id"))
+                     msg_id=row.get("msg_id"), attempts=row["attempts"])
             else:
-                attempts = row.get("attempts", 0) + 1
+                attempts = row["attempts"]
                 delay = _backoff(attempts, res.get("retry_after"))
-                _update(row["id"], {"attempts": attempts, "next_at": _now() + delay})
+                _update(row["id"], {"inflight": False, "next_at": _now() + delay})
                 _log("mirror_error", error=_clean(res.get("description") or "send failed"),
                      project=row.get("project"), msg_id=row.get("msg_id"), attempt=attempts, retry_in_s=delay)
     return summary
 
 
-# ---------------------------------------------------------------- the daemon side and the exit attempt
+def has_work(within_s=0.0):
+    """True if a row is due now or becomes due within `within_s` seconds."""
+    now = _now()
+    rows = pending()
+    heads, seen = [], set()
+    for r in rows:
+        if r.get("project") not in seen:
+            seen.add(r.get("project"))
+            heads.append(r)
+    return any(r.get("next_at", 0) <= now + within_s for r in heads)
+
+
+# ---------------------------------------------------------------- the daemon side and the detached drainer
 
 def write_daemon_heartbeat():
     store.write_json(heartbeat_path(), {"pid": os.getpid(), "at": _now()})
@@ -225,19 +271,69 @@ def start_drain_thread(stop_event, interval=None):
     return t
 
 
-def exit_flush(budget_s=EXIT_BUDGET_S):
-    """At exit of a short-lived CLI process: one bounded attempt, unless a daemon drains anyway. Whatever is not
-    sent stays in the file."""
+def drainer_running():
+    """True if another process holds the drainer lock right now."""
     try:
-        if not os.path.exists(path()) or daemon_active():
-            return
-        home = paths.home()
+        fd = os.open(path() + ".drain", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
 
-        def work():
-            with paths.pinned_home(home):
-                drain(budget_s=budget_s)
-        t = threading.Thread(target=work, name="foreman-outbox-exit", daemon=True)
-        t.start()
-        t.join(budget_s + 0.5)
+
+def drain_detached(budget_s=DETACHED_BUDGET_S):
+    """The body of `foreman outbox drain`: work through the file, sleeping through backoffs, for at most
+    `budget_s`. If another drainer holds the lock, leave at once: it looks at the file again after it lets go."""
+    started = time.monotonic()
+    while True:
+        left = budget_s - (time.monotonic() - started)
+        if left <= 0 or not os.path.exists(path()):
+            return
+        if drain(budget_s=left, wait=True).get("busy"):
+            return
+        left = budget_s - (time.monotonic() - started)
+        if left <= 0 or not has_work(within_s=left):
+            return
+
+
+def _launcher_argv():
+    here = os.path.dirname(os.path.abspath(__file__))
+    launcher = os.path.normpath(os.path.join(here, os.pardir, os.pardir, "bin", "foreman"))
+    if os.path.isfile(launcher):
+        return [sys.executable, launcher]
+    return [sys.executable, "-c", "import sys; sys.path.insert(0, %r); from foreman.cli import main; "
+            "sys.exit(main(sys.argv[1:]))" % os.path.dirname(here)]
+
+
+def spawn_drainer():
+    """Start a detached `foreman outbox drain` (its own session, no inherited streams) and return at once."""
+    argv = _launcher_argv() + ["outbox", "drain"]
+    try:
+        os.makedirs(paths.home(), exist_ok=True)
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True, start_new_session=True, cwd=paths.home())
+        return True
+    except Exception as exc:
+        _log("mirror_error", error="could not start the outbox drainer: %s: %s" % (type(exc).__name__, exc))
+        return False
+
+
+def kick():
+    """Called once by the CLI entry point after a command that queued a row (never by a hook): unless a daemon or
+    another drainer is on it, start a detached one. Costs a fork, never waits. $FOREMAN_OUTBOX_SPAWN=0 turns it
+    off (tests; rows then wait for the daemon). -> True if one was started."""
+    try:
+        if os.environ.get("FOREMAN_OUTBOX_SPAWN") == "0":
+            return False
+        if not _queued_here or not os.path.exists(path()) or daemon_active() or drainer_running():
+            return False
+        return spawn_drainer()
     except Exception:
-        pass
+        return False

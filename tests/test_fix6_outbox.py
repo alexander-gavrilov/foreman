@@ -97,7 +97,7 @@ class DrainTest(OutboxCase):
         self.assertEqual((self.sent(), outbox.pending()), (["hello"], []))
 
     def test_every_failure_is_logged_with_the_api_description_and_never_the_token(self):
-        self.fail_sends(1, status=400, description="Bad Request: message thread not found")
+        self.fail_sends(1, status=500, description="Internal Server Error: message thread not found")
         messaging.say(self.slug, "hello")
         outbox.drain()
         rows = self.events("mirror_error")
@@ -245,15 +245,6 @@ class DaemonTest(OutboxCase):
         self.assertEqual(self.sent(), ["from the web"])
         self.assertTrue(outbox.daemon_active())
 
-    def test_exit_flush_skips_when_a_daemon_is_active_and_sends_otherwise(self):
-        messaging.say(self.slug, "a")
-        outbox.write_daemon_heartbeat()
-        outbox.exit_flush()
-        self.assertEqual(self.sent(), [])
-        os.unlink(outbox.heartbeat_path())
-        outbox.exit_flush()
-        self.assertEqual(self.sent(), ["a"])
-
     def test_a_stale_or_dead_daemon_does_not_count(self):
         outbox.write_daemon_heartbeat()
         self.clock[0] += 600
@@ -278,22 +269,3 @@ class ServeDrainsTheOutboxTest(OutboxCase):
             stop.set()
             t.join(10)
         self.assertEqual(self.sent(), ["left by a CLI"])
-
-
-class CliExitTest(OutboxCase):
-    def test_a_real_foreman_say_process_sends_its_row_at_exit(self):
-        from tests.helpers import run_cli
-        code, out, err = run_cli("say", "--project", self.slug, "pong-web")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.sent(), ["pong-web"])
-        self.assertEqual(outbox.pending(), [])
-
-    def test_a_cli_process_with_an_unreachable_telegram_exits_and_keeps_the_row(self):
-        from tests.helpers import run_cli
-        self.tg.stop()
-        t0 = time.time()
-        code, out, err = run_cli("say", "--project", self.slug, "pong-web")
-        self.assertEqual(code, 0, err)
-        self.assertLess(time.time() - t0, 15)
-        self.assertEqual([r["text"] for r in outbox.pending()], ["pong-web"])
-        self.assertTrue(self.events("mirror_error"))
