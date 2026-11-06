@@ -153,6 +153,7 @@ def _show(args):
 
 
 def _adopt(args):
+    rebind = False
     proj = resolve_project(args)
     slug = proj["slug"]
     try:
@@ -190,6 +191,12 @@ def _adopt(args):
         upd = {"role": "orchestrator", "owner": "user", "agent": agent}
         if args.title:
             upd["title"] = args.title
+        if rec.get("agent_session_id"):
+            # D59: an agent restarted by hand in this terminal looks like a child session until the record forgets the
+            # old id; the next hook from the terminal then binds to whatever session runs there now
+            upd["agent_session_id"] = None
+            upd["state"] = "idle" if info.idle is not False else "busy"
+            rebind = True
         rec = sessions.update_session(rec["sid"], **upd)
     else:
         tkind, _, info = _find_transport_handle(args.target, explicit_kind=args.transport)
@@ -227,6 +234,9 @@ def _adopt(args):
         dump_json(rec)
     else:
         print("%s %s (%s)" % (rec["sid"], rec.get("title") or rec["sid"], rec.get("agent")))
+        if rebind:
+            print("cleared the agent session id: the next hook from this terminal rebinds the record to the "
+                  "session running there")
     return 0
 
 
