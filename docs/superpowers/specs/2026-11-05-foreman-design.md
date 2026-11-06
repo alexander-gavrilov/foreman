@@ -107,23 +107,39 @@ approach; foreman packages it, and does not adopt an existing orchestration tool
 - Never interrupt a busy session.
 
 **A workspace per worker.** Workers that share one checkout overwrite each other's files, so each worker
-the orchestrator opens gets its own.
-- Applies to a worker opened by the orchestrator in a project that is the root of a git repository with at
-  least one commit. The worker gets its own git worktree on its own new branch, branched from the main
-  checkout's current commit. Uncommitted changes in the main checkout are not carried over. The worktree
-  lives outside the repository, under the foreman state folder.
-- It does not apply to the orchestrator, to sessions the user opened, or to a project that is not a git
-  repository; those work in the project folder as before. A project that is only a subfolder of a repository
-  gets no worktree, and the user is told so.
-- The worker's agent works in the worktree with the same hooks and project rules as in the project folder.
-  A session the user starts by hand inside such a worktree is shown as belonging to the project.
-- If the worktree cannot be made, the session is not opened and nothing is left behind. The user can ask
-  explicitly to work in the project folder instead. foreman never falls back to it silently.
-- Rotation continues in the same worktree. The new session inherits the work in progress.
-- When the session is closed, or ends on its own, foreman removes the worktree. It keeps it when removing
-  would lose work: uncommitted changes, commits that are on no branch, or another open session still using
-  it. The branch is deleted only if it is merged, so commits are never lost.
-- The branch is checked from the main checkout, so a task is marked done only after its branch is merged.
+the orchestrator owns gets its own.
+- *When.* For a session whose owner is `orchestrator` and whose role is worker (whoever typed the command),
+  opened in a project that is the root of a git repository with at least one commit. The worker gets its
+  own git worktree on its own new branch, branched from the main checkout's current commit. Uncommitted
+  changes in the main checkout are not carried over. The worktree lives outside the repository, under the
+  foreman state folder. A name already used by another worktree, or by a branch kept from an earlier
+  session, is never reused.
+- *When not.* The orchestrator, sessions owned by the user, and a project that is not a git repository work
+  in the project folder as before. A project that is only a subfolder of a repository, and a repository with
+  no commit yet, also work there, and the user is told why there is no worktree.
+- *What the agent gets.* The agent works in the worktree with foreman's hooks and the project rules that are
+  committed in the repository. Files that exist only locally in the project folder (for example an
+  untracked local settings file with the user's own hooks or permissions) are not copied.
+- *If it cannot be made.* The session is not opened and nothing is left behind. An explicit option opens it
+  in the project folder instead; the orchestrator may use it as the user may. foreman never falls back to
+  the project folder silently.
+- *Seeing it.* A session started by hand inside such a worktree is shown as the project's user-owned
+  session, provided the agent has foreman's hooks there (so far, the agents the project has hooks for).
+  Worktrees made by hand elsewhere (for example inside Orca) stay invisible to foreman.
+- *Rotation* continues in the same worktree, and the new session inherits the work in progress. If the
+  worktree is gone, or its hook files cannot be written, the rotation fails and the old session stays.
+- *Cleanup.* When the session is closed, foreman removes the worktree unless that would lose work. It keeps
+  it for uncommitted changes, for commits that are on no branch, and while another open session uses it.
+  Files that git ignores (caches, a `.env`) are not kept: they go with the worktree. On `close` foreman
+  says what it kept and why. A kept worktree is removed by a later `close` or the next scheduled check once
+  nothing prevents it. A session that ended on its own is cleaned up the same way, but only when foreman
+  learned that it ended (a killed terminal, or an agent that gives no end signal, needs `foreman close`).
+- *The branch* is deleted only when it is merged into the branch the main checkout is on. A branch that is
+  not merged stays, so commits are never lost, and foreman does not delete it later; deleting a kept
+  branch is the user's call.
+- *Done.* A task's objective check (§4.10) runs in the main checkout, so it passes only for work that is
+  already merged there. Run it after the branch is merged. This is guidance; foreman does not look at
+  branches when a task is marked done.
 
 ### 4.3 Context control
 - **Soft target of about 150k tokens per session.** It is a guideline, not a hard rule: a session close
@@ -355,7 +371,10 @@ Rules:
   - creates the project's Telegram topic, where the machine has Telegram;
   - creates its board.
 - Running it again changes nothing that is already correct.
-- Initialising refuses to run inside a worker's worktree; it is done in the project's own folder.
+- Initialising, and removing foreman from a project, are refused inside a worker's worktree; they are done
+  in the project's own folder.
+- Uninstalling foreman takes its hooks out of kept worktrees too, and a full purge refuses while any
+  worktree remains.
 
 ## 6. Where it runs
 - **Machines**: Linux (the home server) and macOS (the work computer) **(user)**.
@@ -404,8 +423,10 @@ Rules:
 ## 10. Open questions
 1. Does the user have a Codex subscription that foreman should count in limits, or is Codex only an agent
    it can drive? Until answered, foreman shows Codex limits only if Codex exposes them.
-2. Do Claude Code, Antigravity and Codex ask the user to trust a new worktree folder, and does Codex's hook
-   approval hold per path? Until checked live, foreman prints a note on opening a worker in a worktree.
-3. For the plan, not this document: the order in which the parts arrive (proposed: core → web UI +
+2. For the plan, not this document: the order in which the parts arrive (proposed: core → web UI +
    Telegram → self-improvement → permissions), and whether shopping-list is the first project to switch
    to foreman (replacing its local `orchestrator/`).
+3. Does Codex approve foreman's hooks per path, so a fresh worktree needs a new approval? Does any agent
+   ask to trust a new worktree folder under Herdr? Claude Code and Antigravity were tried on Orca and no
+   trust prompt blocked them. Until checked, foreman prints a note when it opens a Codex worker in a new
+   worktree.
