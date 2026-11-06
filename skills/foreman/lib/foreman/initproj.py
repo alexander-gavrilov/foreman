@@ -353,7 +353,9 @@ def register_open_sessions(project, transports):
         except Exception:
             continue
         for term in terms:
-            if not term.alive or not term.agent or not _inside(term.cwd, project["path"]):
+            in_project = _inside(term.cwd, project["path"]) or \
+                (projects.worktree_project(term.cwd) or {}).get("slug") == project["slug"]
+            if not term.alive or not term.agent or not in_project:
                 continue
             if sessions.find_by_handle(term.handle, tr.kind):
                 continue
@@ -370,6 +372,9 @@ def init_project(path, name=None, home=None, agents=None, transports=None, fm=No
     path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
     if not os.path.isdir(path):
         raise InitError("%s is not a folder" % path)
+    owner = projects.worktree_project(path)
+    if owner:
+        raise InitError("%s is a worker worktree of project %s; run init in %s" % (path, owner["slug"], owner["path"]))
     changes, notes = [], []
     fm = fm or machine.foreman_bin(home)
 

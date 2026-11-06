@@ -348,6 +348,12 @@ def remove_project_hooks():
             changes += ["project %s: %s" % (proj.get("slug"), c) for c in initproj.remove_project(path)]
         except Exception as exc:
             changes.append("project %s: could not remove hooks (%s)" % (proj.get("slug"), exc))
+        wt_dir = paths.worktrees_dir(proj["slug"])  # kept worker worktrees carry hook files too
+        for name in sorted(os.listdir(wt_dir)) if os.path.isdir(wt_dir) else []:
+            try:
+                changes += ["worktree %s: %s" % (name, c) for c in initproj.remove_project(os.path.join(wt_dir, name))]
+            except Exception as exc:
+                changes.append("worktree %s: could not remove hooks (%s)" % (name, exc))
     return changes
 
 
@@ -360,6 +366,15 @@ def check_purge_target(root, home=None):
     if os.path.isdir(root) and not (os.path.isfile(os.path.join(root, "config.json"))
                                     or os.path.isdir(os.path.join(root, "projects"))):
         raise InstallError("refusing to purge %s: it holds neither config.json nor projects/" % root)
+    from foreman import projects, worktrees
+    worktrees.sweep()  # worktrees of finished sessions go back to git first
+    kept = []
+    for proj in projects.list_projects():
+        wt_dir = paths.worktrees_dir(proj["slug"])
+        kept += [os.path.join(wt_dir, n) for n in os.listdir(wt_dir)] if os.path.isdir(wt_dir) else []
+    if kept:
+        raise InstallError("refusing to purge: worker worktrees still exist (%s); they may hold work. Merge or "
+                           "discard them with `git worktree remove`, then purge" % ", ".join(kept))
     return root
 
 

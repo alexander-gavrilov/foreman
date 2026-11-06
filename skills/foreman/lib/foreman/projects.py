@@ -89,6 +89,16 @@ def create_project(path, name=None, language=None):
         return project
 
 
+def worktree_project(path):
+    """The project whose worker worktree contains `path` (D65), else None."""
+    wt_root = _normalize(paths.worktrees_root()) + os.sep
+    target = _normalize(path)
+    if target.startswith(wt_root):
+        slug = target[len(wt_root):].split(os.sep)[0]
+        return load_project(slug) if slug else None
+    return None
+
+
 def project_for_path(path):
     """The initialised project whose folder (or one of whose worker worktrees) contains `path`, deepest wins, else None."""
     target = _normalize(path)

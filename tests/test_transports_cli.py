@@ -98,6 +98,40 @@ class OrcaTransportTest(StubMixin, ForemanTestCase):
         self.assertIn(["terminal", "rename", "--terminal", "term_new", "--title", "fm-api", "--json"],
                       self.calls("orca"))
 
+    def test_launch_in_a_fresh_foreman_worktree_waits_for_orca_to_find_it(self):
+        from unittest import mock
+        from foreman import paths
+        from foreman.transports import orca
+        fresh = os.path.join(paths.worktrees_dir("demo"), "fm-api-ab12")
+        os.makedirs(fresh)
+        self.set_rules([
+            {"match": ["agent", "launch"], "first": 3, "code": 1, "json": err("selector_not_found")},
+            {"match": ["agent", "launch"], "json": ok({"outcome": {"handle": "term_w"}})},
+            {"match": ["terminal", "rename"], "json": ok({})},
+        ])
+        with mock.patch.object(orca, "FRESH_POLL_S", 0.01):
+            self.assertEqual(self.t.launch("claude", None, None, fresh, "p", "t"), "term_w")
+        self.assertEqual(len([c for c in self.calls("orca") if c[:2] == ["agent", "launch"]]), 4)
+
+    def test_launch_in_a_fresh_worktree_gives_up_after_the_wait(self):
+        from unittest import mock
+        from foreman import paths
+        from foreman.transports import orca
+        from foreman.transports._proc import TransportError
+        fresh = os.path.join(paths.worktrees_dir("demo"), "fm-api-ab12")
+        os.makedirs(fresh)
+        self.set_rules([{"match": ["agent", "launch"], "code": 1, "json": err("selector_not_found")}])
+        with mock.patch.object(orca, "FRESH_POLL_S", 0.01), mock.patch.object(orca, "FRESH_WAIT_S", 0.1):
+            with self.assertRaises(TransportError):
+                self.t.launch("claude", None, None, fresh, "p", "t")
+
+    def test_launch_elsewhere_does_not_retry_selector_not_found(self):
+        from foreman.transports._proc import TransportError
+        self.set_rules([{"match": ["agent", "launch"], "code": 1, "json": err("selector_not_found")}])
+        with self.assertRaises(TransportError):
+            self.t.launch("claude", None, None, "/w/proj", "p", "t")
+        self.assertEqual(len(self.calls("orca")), 1)
+
     def test_launch_without_model_effort_and_failed_rename_is_not_fatal(self):
         self.set_rules([
             {"match": ["agent", "launch"], "json": ok({"launch": {"outcome": {"handle": "term_n"}}})},

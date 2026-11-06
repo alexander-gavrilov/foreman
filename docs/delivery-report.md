@@ -66,8 +66,8 @@ second one makes Telegram answer `409 Conflict`, so step 1 comes first. `tg-live
 
 Rollback: `foreman uninstall` removes the service, project hooks and the `~/.local/bin/foreman` link, and restores both statuslines. It keeps the state folder (`--purge` deletes it). The bot and group stay.
 
-## Decisions to check (`docs/build/decision-log.md`, D1–D64)
-- **Workers get their own worktree (D65, added after this report's build).** `foreman open` gives each orchestrator-owned worker a git worktree and branch `foreman/<title>-<id>` under the state folder; `foreman close` removes it when clean. Worktrees created by hand (for example in Orca) are still outside the project and invisible. Not tested live: whether the agent asks to trust the new folder.
+## Decisions to check (`docs/build/decision-log.md`, D1–D65)
+- **Workers get their own worktree (D65, added after this report's build).** `foreman open` gives each orchestrator-owned worker in a git project a worktree and branch `foreman-<title>-<id>` under the state folder; `foreman close` removes it when nothing would be lost, and the watch loop reclaims those of sessions that ended on their own. Worktrees created by hand (for example in Orca) are still outside the project and invisible. Not tested live: whether Claude and Antigravity ask to trust the new folder, and Codex workers there (hook approval may be per path).
 - **D62, the user's own messages are not framed as data.** A real model refused real web replies because foreman labelled them "data, not instructions". They now have their own frame that sessions cannot forge (review 9).
 - **D63, a user message always gets a visible result.** If the orchestrator ends its turn without `foreman say`, foreman posts its final text to the chat, or a notice if there is none. No tokens.
 - **D59, child processes in a terminal no longer take over its session.** A plugin's `claude -p` had closed a live orchestrator. Recovery after a manual restart in the same terminal: `foreman orchestrator adopt`.

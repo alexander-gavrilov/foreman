@@ -106,14 +106,27 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
 
     launch_title = None if tkind in ("fake", "orca") else title
     wt, launch_cwd = (worktree if isinstance(worktree, dict) else None), project["path"]
-    if worktree is True and role == "worker" and owner == "orchestrator":
+    new_wt = None
+    if wt:  # rotate: continue in the same checkout (launch_cwd = the old session's cwd); the new agent may be
+        # one the worktree has no hook file for yet
+        base = (projects.load_project(project["slug"]) or project)["path"]
         try:
-            wt = worktrees.create(project, title or purpose, chosen_agent)
-        except worktrees.WorktreeError as exc:
-            note = (note + "; " if note else "") + "no worktree (%s)" % str(exc).splitlines()[0]
-    new_wt = wt if wt and wt is not worktree else None
-    if wt:
-        launch_cwd = wt["path"] if new_wt else project["path"]
+            worktrees.write_hook_files(base, wt["path"], chosen_agent)
+        except Exception as exc:
+            note = (note + "; " if note else "") + "hook files not written in the worktree (%s)" % exc
+    elif worktree is True and role == "worker" and owner == "orchestrator":
+        kind = worktrees.applicable(project["path"])
+        if kind == "subfolder":
+            note = (note + "; " if note else "") + "no worktree (the project is a subfolder of a repository)"
+        elif kind == "root":
+            try:
+                new_wt = wt = worktrees.create(project, title or purpose, chosen_agent)
+            except worktrees.WorktreeError as exc:
+                raise CliError("cannot create a worktree: %s (retry, or pass --no-worktree to work in the "
+                               "project folder)" % exc, code=1)
+            launch_cwd = wt["path"]
+            if chosen_agent == "codex":
+                note = (note + "; " if note else "") + "Codex: approve the foreman hook for this worktree in /hooks"
     if role == "orchestrator":
         # D54: from here until the record exists, hooks of an unknown session of this agent in the project bind
         # as the pending orchestrator (guarded) instead of becoming an unguarded user worker.
@@ -148,10 +161,7 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
         if role == "orchestrator":
             sessions.discard_pending_strays(project["slug"])
         if new_wt:  # nothing was recorded: do not leave the checkout behind
-            try:
-                worktrees.remove(project["path"], new_wt["path"], new_wt["branch"])
-            except worktrees.WorktreeError:
-                pass
+            worktrees.discard(project["path"], new_wt["path"], new_wt["branch"])
         raise
     finally:
         if role == "orchestrator":

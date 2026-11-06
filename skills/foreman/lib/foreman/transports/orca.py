@@ -9,7 +9,17 @@ from foreman.transports import _proc
 from foreman.transports.base import TermInfo, TerminalGone, Transport
 
 POLL_S = 1.0
+# Orca finds a worktree git just created only after its next refresh (seen: 16-25 s), and until then
+# `agent launch --worktree path:` answers selector_not_found. Foreman-made worktrees get this long.
+FRESH_WAIT_S = 90.0
+FRESH_POLL_S = 2.0
 GONE = ("terminal_not_writable", "terminal_not_found", "handle_not_found", "terminal not found")
+
+
+def _is_fresh_worktree(cwd):
+    from foreman import paths
+    root = os.path.realpath(paths.worktrees_root()) + os.sep
+    return os.path.realpath(cwd).startswith(root)
 
 
 class OrcaTransport(Transport):
@@ -82,6 +92,11 @@ class OrcaTransport(Transport):
         if prompt:
             args += ["--prompt", prompt]
         res = self._call(*args, timeout=120)
+        if not res.ok and _is_fresh_worktree(cwd):
+            deadline = time.monotonic() + FRESH_WAIT_S
+            while not res.ok and res.is_gone(("selector_not_found",)) and time.monotonic() < deadline:
+                time.sleep(FRESH_POLL_S)
+                res = self._call(*args, timeout=120)
         if not res.ok:
             raise _proc.failure(res, "orca agent launch")
         result = res.result()

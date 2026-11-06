@@ -275,6 +275,13 @@ def run_pass(interval_s=60, heartbeat=True):
         janitor.janitor_pass(state)
         state["janitor_last_run_at"] = now_iso
 
+    # 7b. Take back worker worktrees of sessions that ended without `foreman close` (D65)
+    try:
+        from foreman import worktrees
+        worktrees.sweep()
+    except Exception:
+        pass
+
     # 8. Weekly lessons reminder
     lessons_state = state.setdefault("lessons", {})
     for p in all_projs:

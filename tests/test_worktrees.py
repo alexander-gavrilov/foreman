@@ -52,7 +52,7 @@ class OpenWorktreeTest(WorktreeCase):
         self.assertIn(wt, self.worktrees())
         self.assertEqual(rec["worktree"]["path"], wt)
         branch = rec["worktree"]["branch"]
-        self.assertTrue(branch.startswith("foreman/"), branch)
+        self.assertTrue(branch.startswith("foreman-"), branch)
         self.assertEqual(git(wt, "rev-parse", "--abbrev-ref", "HEAD"), branch)
         self.assertEqual(git(self.repo, "rev-parse", "--abbrev-ref", "HEAD"), "main")  # main checkout untouched
         (term,) = self.fake.list()
@@ -107,16 +107,99 @@ class OpenWorktreeTest(WorktreeCase):
         self.assertEqual(rec["cwd"], other["path"])
         self.assertNotIn("worktree", rec)
 
-    def test_git_failure_falls_back_to_the_project_folder_with_a_note(self):
+    def test_git_refusal_fails_the_open_and_leaves_nothing_behind(self):
+        hook = os.path.join(self.repo, ".git", "hooks", "post-checkout")  # git exits non-zero AFTER adding the tree
+        with open(hook, "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(hook, 0o755)
+        code, out, err = self.open()
+        self.assertEqual(code, 1)
+        self.assertIn("cannot create a worktree", err)
+        self.assertIn("--no-worktree", err)
+        self.assertEqual(self.sessions(), [])
+        self.assertEqual(self.fake.list(), [])
+        self.assertEqual(self.worktrees(), [self.repo])
+        self.assertEqual(git(self.repo, "branch", "--format=%(refname:short)"), "main")
+
+    def test_a_branch_named_foreman_does_not_get_in_the_way(self):
+        git(self.repo, "branch", "foreman")
+        self.assertIn("worktree", self.open_one())
+
+    def test_hook_failure_leaves_nothing_behind(self):
         from unittest import mock
-        from foreman import worktrees
-        with mock.patch.object(worktrees, "is_repo_root", return_value=True), \
-                mock.patch.object(worktrees, "_git", side_effect=worktrees.WorktreeError("boom")):
-            code, out, err = self.open()
+        from foreman import initproj
+        with mock.patch.object(initproj, "write_hooks", side_effect=initproj.InitError("bad json")):
+            code, _, err = self.open("--agent", "claude")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(self.worktrees(), [self.repo])
+        self.assertEqual(git(self.repo, "branch", "--format=%(refname:short)"), "main")
+
+    def test_launch_failure_leaves_nothing_behind(self):
+        from unittest import mock
+        from foreman.transports._proc import TransportError
+        from foreman.transports.fake import FakeTransport
+        with mock.patch.object(FakeTransport, "launch", side_effect=TransportError("terminal refused")):
+            code, _, err = self.open()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.sessions(), [])
+        self.assertEqual(self.worktrees(), [self.repo])
+        self.assertEqual(git(self.repo, "branch", "--format=%(refname:short)"), "main")
+
+    def test_a_project_in_a_repository_subfolder_says_it_gets_no_worktree(self):
+        sub = os.path.join(self.repo, "pkg")
+        os.makedirs(sub)
+        other = self.init_project("x")
+        from foreman import projects
+        other = projects.create_project(sub)
+        code, out, err = run_main("open", "--project", other["slug"], "--purpose", "p", "--title", "fm-s",
+                                  "--transport", "fake", "--prompt", "go")
         self.assertEqual(code, 0, err)
-        self.assertIn("no worktree", out)
-        (rec,) = self.sessions()
-        self.assertEqual(rec["cwd"], self.repo)
+        self.assertIn("no worktree (the project is a subfolder", out)
+        self.assertEqual(self.worktrees(), [self.repo])
+
+    def test_codex_worker_is_told_to_approve_the_hook(self):
+        code, out, err = self.open("--agent", "codex")
+        self.assertEqual(code, 0, err)
+        self.assertIn("approve the foreman hook", out)
+
+
+class HookFilesTest(WorktreeCase):
+    def write_main_hooks(self, *agents):
+        from foreman import initproj
+        for a in agents:
+            initproj.write_hooks(self.repo, a, "/bin/foreman")
+        initproj.exclude_from_git(self.repo, [initproj.HOOK_FILES[a] for a in agents])
+
+    def test_every_agent_the_project_has_hooks_for_gets_a_file(self):
+        self.write_main_hooks("claude", "antigravity", "codex")
+        rec = self.open_one("--agent", "claude")
+        for rel in (".claude/settings.local.json", ".agents/hooks.json", ".codex/hooks.json"):
+            self.assertTrue(os.path.exists(os.path.join(rec["cwd"], rel)), rel)
+
+    def test_rotating_to_another_agent_writes_its_hook_file(self):
+        from foreman import sessions
+        rec = self.open_one("--agent", "claude")
+        self.assertFalse(os.path.exists(os.path.join(rec["cwd"], ".codex", "hooks.json")))
+        sessions.update_session(rec["sid"], state="idle")
+        code, out, err = run_main("rotate", "--project", self.slug, "fm-api", "--agent", "codex")
+        self.assertEqual(code, 0, err)
+        new = [r for r in self.sessions() if r["sid"] != rec["sid"]][0]
+        self.assertEqual(new["agent"], "codex")
+        self.assertTrue(os.path.exists(os.path.join(rec["cwd"], ".codex", "hooks.json")))
+
+    def test_uninstall_takes_the_hooks_out_of_kept_worktrees_too(self):
+        from foreman import install
+        rec = self.open_one("--agent", "claude")
+        install.remove_project_hooks()
+        self.assertFalse(os.path.exists(os.path.join(rec["cwd"], ".claude", "settings.local.json")))
+
+    def test_init_inside_a_worktree_is_refused(self):
+        rec = self.open_one()
+        code, out, err = run_main("init", "--path", rec["cwd"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("worker worktree", err + out)
+        from foreman import projects
+        self.assertEqual(len(projects.list_projects()), 1)
 
 
 class VisibilityTest(WorktreeCase):
@@ -134,8 +217,9 @@ class VisibilityTest(WorktreeCase):
     def test_cli_in_the_worktree_resolves_the_project(self):
         rec = self.open_one()
         os.chdir(rec["cwd"])
-        code, out, err = run_main("status", "--json")
+        code, out, err = run_main("work", "new", "topic")
         self.assertEqual(code, 0, err)
+        self.assertIn(os.path.join("agent-work", self.slug), out)
 
     def test_a_session_started_by_hand_in_the_worktree_is_registered_under_the_project(self):
         from foreman import hooks
@@ -184,6 +268,74 @@ class CloseWorktreeTest(WorktreeCase):
         self.assertFalse(os.path.exists(wt))  # the checkout goes, the commits stay on the branch
         self.assertIn(branch, git(self.repo, "branch", "--format=%(refname:short)").split())
         self.assertIn("kept branch", out)
+
+    def test_detached_head_commit_keeps_the_worktree(self):
+        rec = self.open_one()
+        wt = rec["cwd"]
+        git(wt, "checkout", "-q", "--detach")
+        with open(os.path.join(wt, "c.txt"), "w") as f:
+            f.write("c\n")
+        git(wt, "add", "c.txt")
+        git(wt, "commit", "-q", "-m", "orphan")
+        code, out, err = self.close()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.isdir(wt))
+        self.assertIn("commits on no branch", out)
+
+    def test_ignored_files_go_with_the_worktree(self):
+        with open(os.path.join(self.repo, ".gitignore"), "w") as f:
+            f.write(".env\n")
+        git(self.repo, "add", ".gitignore")
+        git(self.repo, "commit", "-q", "-m", "ignore")
+        rec = self.open_one()
+        with open(os.path.join(rec["cwd"], ".env"), "w") as f:
+            f.write("SECRET=1\n")
+        code, out, err = self.close()
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.exists(rec["cwd"]))  # documented: git-ignored files are not protected
+
+    def test_a_session_started_by_hand_in_the_worktree_keeps_it_alive(self):
+        from foreman import hooks, sessions
+        rec = self.open_one()
+        payload = {"session_id": "by-hand-2", "cwd": rec["cwd"], "hook_event_name": "UserPromptSubmit",
+                   "transcript_path": None}
+        hooks.run_hook("claude", "UserPromptSubmit", json.dumps(payload), env={})
+        code, out, err = self.close()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.isdir(rec["cwd"]))
+        self.assertIn("still used", out)
+
+    def test_close_json_reports_the_worktree_result(self):
+        self.open_one()
+        code, out, err = run_main("close", "--project", self.slug, "fm-api", "--json")
+        self.assertEqual(code, 0, err)
+        self.assertIn("removed worktree", json.loads(out)["worktree_result"])
+
+    def test_closing_again_reclaims_a_worktree_kept_for_uncommitted_work(self):
+        rec = self.open_one()
+        junk = os.path.join(rec["cwd"], "new.txt")
+        with open(junk, "w") as f:
+            f.write("x\n")
+        self.close()
+        os.unlink(junk)
+        code, out, err = self.close()
+        self.assertIn("already closed", out)
+        self.assertIn("removed worktree", out)
+        self.assertFalse(os.path.exists(rec["cwd"]))
+
+    def test_sweep_reclaims_a_session_that_ended_on_its_own(self):
+        from foreman import sessions, worktrees
+        rec = self.open_one()
+        sessions.set_lifecycle(rec["sid"], "closed")  # what the SessionEnd hook does
+        (line,) = worktrees.sweep()
+        self.assertIn("removed worktree", line)
+        self.assertFalse(os.path.exists(rec["cwd"]))
+
+    def test_sweep_leaves_a_worktree_with_an_open_session(self):
+        from foreman import worktrees
+        rec = self.open_one()
+        self.assertEqual(worktrees.sweep(), [])
+        self.assertTrue(os.path.isdir(rec["cwd"]))
 
     def test_session_without_a_worktree_closes_as_before(self):
         rec = self.open_one("--no-worktree")

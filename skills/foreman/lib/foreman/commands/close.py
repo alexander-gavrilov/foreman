@@ -18,10 +18,13 @@ def run(args):
     sid = rec["sid"]
     name = "%s (%s)" % (rec.get("title") or sid, sid)
     if not sessions.is_open(rec):
+        wt_line = worktrees.release(rec)  # the agent may have ended on its own, or the work was cleaned up since
         if args.json:
-            dump_json(rec)
+            dump_json(dict(rec, worktree_result=wt_line))
         else:
             print("%s already closed" % sid)
+            if wt_line:
+                print(wt_line)
         return 0
     if rec.get("state") == "busy":
         raise CliError("cannot close %s: session is busy" % name, code=6)
@@ -58,7 +61,7 @@ def run(args):
             data={"sid": sid, "title": rec.get("title"), "worktree": wt_line},
         )
     if args.json:
-        dump_json(now)
+        dump_json(dict(now, worktree_result=wt_line))
     else:
         print("closed %s (%s)" % (sid, rec.get("title") or sid))
         if wt_line:
