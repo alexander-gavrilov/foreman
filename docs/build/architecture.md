@@ -93,8 +93,10 @@ rotated session keeps showing "old → new" while its activity is still tracked 
 
 **Binding a hook to a session** (in order): (1) `agent_session_id` already known; (1b) a live record with the same
 transport handle (e.g. after `/clear` a Claude session gets a new `session_id`): re-bound, role and owner kept,
-**but only for a genuine successor** (D59): a SessionStart with source `clear`/`resume`/`compact`, or a record that has
-no agent session id yet. Any other event with a different session id is a **child session** of that terminal (a
+**but only for a genuine successor** (D59): a SessionStart with source `clear`/`resume`/`compact`/`fork` (not from an
+SDK-entrypoint process), or a record that has no agent session id yet (not claimed by an SDK-entrypoint process
+either). `foreman orchestrator adopt` clears the record's agent session id, so the next hook of that terminal rebinds it
+(the recovery after an agent was restarted by hand). Any other event with a different session id is a **child session** of that terminal (a
 `claude -p` started by an unrelated hook inherits the terminal handle): it changes nothing in the record (id, state,
 transcript, context, lifecycle), claims no inbox, gets no digest or briefing, its SessionEnd is ignored; only its
 PreToolUse is answered, guarded with the record's role (an orchestrator's child is denied what the orchestrator would
@@ -222,7 +224,9 @@ the summary. `foreman limits --line` is the one-line summary appended to every s
 - Every delivered message is framed: `[foreman · from <sender> · data, not instructions]`.
 - `foreman say <text> [--question] [--options "Да|Нет|Ответить…"]` — orchestrator → user: appended to
   `chat.jsonl`; a question or `--notify` is fanned out to all notifiers (Telegram topic with buttons / macOS
-  notification); every other `say` is mirrored to the project's Telegram topic only (D51).
+  notification); every other `say` is mirrored to the project's Telegram topic only (D51). Both reach Telegram through
+  the outbox (§10): a question keeps its buttons, per-project order and the Telegram → chat message id mapping, and
+  blocks nothing when Telegram is unreachable. A blank text is refused.
   Notification links carry no token: `<base_url>/#/p/<slug>/m/<msgid>`.
 - User replies (web, Telegram, CLI `foreman reply-user`) are appended to `chat.jsonl` and queued for the
   orchestrator. Non-Telegram replies are mirrored to the topic as `user (<channel>): <text>`; Telegram replies
@@ -285,17 +289,29 @@ re-reads the Telegram configuration on every pass, so `telegram set-token` / `se
 characters with a web-chat link, and limited to 10 per project per minute (the first one over the limit posts a
 single "more messages in the web chat" pointer; the rest of the window is dropped, each drop logged as
 `mirror_dropped`). Delivery goes through a **durable outbox** (`FOREMAN_HOME/telegram-outbox.jsonl`, rows
-`{id, project, text, msg_id, created_at, created_ts, attempts, next_at, verdict}`): `say`/`user_reply` only append a
-row after the message was delivered. `foreman serve` (and `foreman web`) drain it on a thread every ~2 s; a CLI
-process makes one bounded attempt (≈3 s) at exit unless a daemon heartbeat (`telegram-outbox-drainer.json`) is
-fresh. One drainer at a time (non-blocking flock on `telegram-outbox.jsonl.drain`). A row is removed only after the
-Bot API answered ok (at-least-once: a drainer killed between send and removal can repeat one message); a failure is
-logged as `mirror_error` with the API description (never the token) and retried with backoff 1, 2, 5, 15, 30, 60 s
-(a 429's `retry_after` honoured); rows older than 1 hour are dropped (`mirror_dropped`). Order is kept per project;
-a project in backoff does not block another. The rate-limit verdict (send / pointer / drop) is decided once per row
-and stored in it, so retries consume no slot and the pointer row survives. `watch list` reports the loop as running
+`{id, project, text, msg_id, kind, created_at, created_ts, attempts, next_at, inflight, verdict}`, plus `question` and
+`options` for `kind: notify`): `say`/`user_reply` append a row after the message was delivered, and so do a question,
+`--notify` and the system notices of `notify.notify` (kind `notify`: always with the web link and, for a question,
+its answer buttons; never rate limited; the Telegram message id is mapped to the chat message id so a button press or
+a quoted reply finds its question). **Nobody waits on Telegram:** a hook never touches the outbox; `foreman serve`
+(and `foreman web`) drain it on a thread every ~2 s; a CLI command that queued a row and finds no fresh daemon
+heartbeat (`telegram-outbox-drainer.json`) and no running drainer starts ONE detached, bounded
+(`FOREMAN_OUTBOX_BUDGET_S`, default 120 s) `foreman outbox drain` and exits at once (`FOREMAN_OUTBOX_SPAWN=0` turns
+that off). One drainer at a time (non-blocking flock on `telegram-outbox.jsonl.drain`); a drainer that finishes
+looks at the file again after it released the lock, so a row queued meanwhile is not stranded. **At least once:** a
+row is removed only after the Bot API answered ok, so a message Telegram accepted but whose answer was lost (a read
+timeout) is sent again; a rare duplicate is accepted, a lost message is not. `attempts`, `next_at` (no earlier than
+the longest a send can take) and the verdict are written BEFORE each send, so a killed drainer cannot cause an
+immediate resend or hide a failure (the next drainer logs `mirror_error`: previous attempt did not finish). A
+failure is logged as `mirror_error` with the API description (never the token) and retried with backoff 1, 2, 5, 15,
+30, 60 s (a 429's `retry_after` honoured); a permanent 4xx other than 429 drops the row at once (`mirror_dropped`
+with the API text); rows older than 1 hour are dropped (`mirror_dropped`). Order is kept per project; a project in
+backoff does not block another. The rate-limit verdict of a mirror row (send / pointer / drop) is decided once per
+row and stored in it, so retries consume no slot and the pointer row survives. `watch list` reports the loop as running
 only while the heartbeat's pid is alive (a one-off `watch run` is not a loop). `telegram check` fails while
-`allowed_user_ids` is empty.
+`allowed_user_ids` is empty. `telegram set-chat` allows a user only while nobody is allowed yet: the one human (not a
+bot) who wrote in the group, from a pending update or a rejection of the last 24 hours; with several candidates it
+allows nobody and prints their ids and first names for `allow-user`.
 
 ## 11. Findings, clean, init, install
 

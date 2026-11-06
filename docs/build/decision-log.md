@@ -172,22 +172,38 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   prose cannot be recognised; registered names are scrubbed. — Review 5 found 18 spec §8.10 shapes that passed both
   layers, and foreman's own paths/URLs that the old blacklist gate wrongly held.
 - D59 · A hook from a registered terminal re-binds the record to a new agent session id only for a genuine successor
-  (SessionStart source clear/resume/compact, D31, or a record with no agent session id yet). Any other new id is a
+  (SessionStart source clear/resume/compact/fork, D31, or a record with no agent session id yet). Any other new id is a
   child session of the terminal: the record, its inbox and lifecycle stay untouched, SessionStart gets no briefing,
   Stop answers empty, SessionEnd is ignored, PreToolUse stays guarded with the record's role (fail closed), and one
   `child_session` event is logged per child id. — Live run: a `claude -p` (entrypoint sdk-cli) started by a user plugin
   from a hook inherited the terminal handle, took over the orchestrator record (rule 1b), and its SessionEnd closed the
   live orchestrator. Applies to Claude only: agy and Codex payloads give no usable `source` (Codex hooks are
-  unverified), so they keep the handle rebind. `CLAUDE_CODE_ENTRYPOINT=sdk*` also disqualifies a resume as successor
-  (best effort, not verified live). Known limit: an agent restarted by hand in the same terminal after a crash (source
-  startup, no SessionEnd) counts as a child until `foreman orchestrator adopt`; likewise a missed /clear SessionStart.
-- D60 · The Telegram mirror is a durable outbox, not a daemon thread of a short-lived CLI. `say`/`user_reply` append a
-  row and return; `foreman serve`/`web` drain every ~2 s, a CLI without a daemon makes one bounded attempt at exit;
-  one drainer at a time; a row leaves the file only after Bot API ok; failures are retried with backoff and logged
-  with the API description, 429 `retry_after` honoured, rows over 1 hour dropped with an event; per-project order;
-  the rate-limit verdict is stored in the row. — Live run: the orchestrator's `foreman say` was in the chat but never
-  reached the topic and nothing was logged: the mirror thread died with the CLI after the 2 s atexit wait, and a Bot
-  API failure returned `ok: False` without `error`, so nothing was logged; rate-limit drops were silent too.
-  Trade-off: at-least-once (a duplicate is possible if a drainer dies between the send and the row removal); a
-  permanently failing head row (e.g. a deleted topic) blocks its project for up to an hour, then is dropped.
-  `watch list` now requires the heartbeat's pid to be alive, so a one-off `watch run` no longer shows RUNNING.
+  unverified), so they keep the handle rebind. `CLAUDE_CODE_ENTRYPOINT=sdk*` disqualifies a resume as successor and
+  also keeps such a process from taking the first binding of a record without an id (or becoming the pending
+  orchestrator of D54). **Verified live for `claude -p`:** a real `claude -p` child reports
+  CLAUDE_CODE_ENTRYPOINT=sdk-cli, plain or with --resume, even when the parent's value was `cli`. NOT covered: an
+  interactive `claude` started as a child of a hook. Recovery for an agent restarted by hand in the same terminal after
+  a crash (source startup, no SessionEnd; it counts as a child): `foreman orchestrator adopt <sid|handle>` now clears
+  the record's agent session id and says so, so the next hook from that terminal rebinds. A missed /clear
+  SessionStart is recovered the same way.
+- D60 · Everything foreman sends to Telegram (the topic mirror of the project chat, and notifications: a question with
+  its buttons, `say --notify`, system notices) is a row in a durable outbox, not a daemon thread of a short-lived CLI.
+  Callers append a row and return; `foreman serve`/`web` drain every ~2 s; a CLI that queued a row and sees no fresh
+  daemon starts one detached, bounded `foreman outbox drain` and exits at once; a hook never flushes and never waits
+  (review 6 measured 3.7 s per hook with a blackholed Telegram under the first design, an exit flush). One drainer at
+  a time; a row leaves the file only after Bot API ok; `attempts`/`next_at` are persisted BEFORE each send. Failures
+  are retried with backoff and logged with the API description, 429 `retry_after` honoured; a permanent 4xx other
+  than 429 drops the row at once with an event; rows over 1 hour are dropped with an event; per-project order; the
+  rate-limit verdict of mirror rows is stored in the row; notify rows are never rate limited and keep the Telegram →
+  chat message id mapping. — **Delivery is at-least-once:** a real send in the live test hit "The read operation
+  timed out", so Telegram may have accepted a message we then retry. A rare duplicate is accepted, a lost message is
+  not. Live run that led here: the orchestrator's `foreman say` was in the chat but never reached the topic and
+  nothing was logged: the mirror thread died with the CLI, and a Bot API failure returned `ok: False` without
+  `error`. Known gap: a deleted topic (400 thread not found) drops its rows one by one; the project keeps the dead
+  topic id. `watch list` and the web UI count the loop as running only while the heartbeat's pid is alive, and a
+  one-off `watch run` no longer writes the heartbeat.
+- D61 · `telegram set-chat` allows a user only while nobody is allowed yet, on both of its paths (a pending update, or a
+  `telegram_unauthorized` event of the running daemon). Bots never count, only events of the last 24 hours count, and
+  with more than one distinct human candidate nobody is added: the command prints their ids and first names for
+  `allow-user`. — Review 6: a stranger rejected later could be added by re-running set-chat, and the fallback took
+  the newest rejection, which was a stranger or a bot rather than the owner.
