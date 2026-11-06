@@ -279,8 +279,9 @@ def run_pass(interval_s=60, heartbeat=True):
     try:
         from foreman import worktrees
         worktrees.sweep()
-    except Exception:
-        pass
+    except Exception as exc:  # the pass goes on, but a broken sweep must not be silent
+        import sys
+        print("foreman: worktree sweep failed: %s" % exc, file=sys.stderr)
 
     # 8. Weekly lessons reminder
     lessons_state = state.setdefault("lessons", {})

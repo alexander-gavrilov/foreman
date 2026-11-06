@@ -65,8 +65,10 @@ def run(args):
             agent = r.get("agent") or "?"
             if r.get("model"):
                 agent += "/" + r["model"]
+            wt = r.get("worktree") or {}
             rows.append((r.get("title") or r["sid"], r["sid"], agent, _state_text(r, now),
-                         "ctx " + format_context(r.get("context_tokens"), soft), r.get("owner") or "?"))
+                         "ctx " + format_context(r.get("context_tokens"), soft), r.get("owner") or "?",
+                         ("%s @ %s" % (wt["branch"], wt["path"])) if wt else ""))
         widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
         for row in rows:
             print("  " + "  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip())

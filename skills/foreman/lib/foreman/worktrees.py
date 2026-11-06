@@ -5,7 +5,9 @@ nothing in it would be lost. Commits stay on the branch."""
 import os
 import re
 import secrets
+import shutil
 import subprocess
+import time
 
 from foreman import initproj, install as machine, paths, sessions
 
@@ -14,9 +16,13 @@ class WorktreeError(Exception):
     pass
 
 
-def _git(cwd, *args):
+ORPHAN_AGE_S = 600  # a worktree no session claims is taken back once it is this old (an open takes < 2 min)
+REMOVE_TIMEOUT_S = 600  # removing a big tree (node_modules) must not be killed half way
+
+
+def _git(cwd, *args, timeout=60):
     try:
-        res = subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True, timeout=60,
+        res = subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True, timeout=timeout,
                              stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as exc:
         raise WorktreeError(str(exc))
@@ -95,12 +101,16 @@ def _claim(project_path, root, slug, attempts=20):
 
 
 def discard(project_path, path, branch):
-    """Best effort: drop a worktree that was never used, whatever state it is in."""
-    for args in (("worktree", "remove", "--force", path), ("worktree", "prune"), ("branch", "-D", branch)):
+    """Best effort: drop a worktree this call made and nothing has used, whatever state it is in: the git
+    registration (only this path's), the branch and the folder itself. No `worktree prune`: that would drop the
+    registration of any other worktree whose folder happens to be missing right now."""
+    for args in (("worktree", "remove", "--force", path), ("branch", "-D", branch)):
         try:
-            _git(project_path, *args)
+            _git(project_path, *args, timeout=REMOVE_TIMEOUT_S)
         except WorktreeError:
             pass
+    if os.path.lexists(path):  # git never registered it (a failed `worktree add` leaves the claimed folder)
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _inside(path, root):
@@ -108,27 +118,23 @@ def _inside(path, root):
     return path == root or path.startswith(root + os.sep)
 
 
-def release(rec):
-    """Remove the session's worktree if nothing would be lost. Returns a one-line result for the user, or None
-    when the session has no worktree (or it is already gone). What is lost with the folder: files git ignores
-    (caches, a .env). What is kept: uncommitted changes, commits on no branch, and a folder another open session
-    still works in (by its record or by its cwd). The branch stays unless git finds it merged."""
-    wt = rec.get("worktree")
-    if not wt or not os.path.isdir(wt["path"]):
-        return None
-    path, branch = wt["path"], wt["branch"]
-    if any(r["sid"] != rec["sid"] and sessions.is_open(r) and
-           ((r.get("worktree") or {}).get("path") == path or _inside(r.get("cwd"), path))
-           for r in sessions.list_sessions(rec.get("project"))):
-        return "kept worktree %s (still used by another open session)" % path
-    from foreman import projects
-    base = (projects.load_project(rec.get("project")) or {}).get("path") or ""
+def _in_use(path, project, except_sid=None):
+    """Another open session works in `path` (by its record or by its cwd)."""
+    return any(r["sid"] != except_sid and sessions.is_open(r) and
+               ((r.get("worktree") or {}).get("path") == path or _inside(r.get("cwd"), path))
+               for r in sessions.list_sessions(project))
+
+
+def _remove_if_safe(base, path, branch):
+    """Take the checkout back unless something would be lost; returns the one-line result. Lost with the folder:
+    files git ignores. Kept: uncommitted changes (new files included), commits no branch, tag or remote branch
+    holds. The branch goes only if it is merged into the branch the main checkout is on."""
     try:
         if _git(path, "status", "--porcelain"):
             return "kept worktree %s (uncommitted work)" % path
         if _git(path, "rev-list", "-n1", "HEAD", "--not", "--branches", "--tags", "--remotes"):
             return "kept worktree %s (HEAD has commits on no branch)" % path
-        _git(base, "worktree", "remove", path)  # no --force
+        _git(base, "worktree", "remove", path, timeout=REMOVE_TIMEOUT_S)  # no --force
     except WorktreeError as exc:
         return "kept worktree %s (%s)" % (path, (str(exc).splitlines() or ["git failed"])[0])
     try:
@@ -139,6 +145,42 @@ def release(rec):
     except WorktreeError:
         return "removed worktree %s, kept branch %s (not merged)" % (path, branch)
     return "removed worktree %s" % path
+
+
+def release(rec):
+    """Remove the session's worktree if nothing would be lost. Returns a one-line result for the user, or None
+    when the session has no worktree (or it is already gone). See `_remove_if_safe` for what goes and what stays;
+    a folder another open session still works in is kept."""
+    wt = rec.get("worktree")
+    if not wt or not os.path.isdir(wt["path"]):
+        return None
+    path, branch = wt["path"], wt["branch"]
+    if _in_use(path, rec.get("project"), except_sid=rec["sid"]):
+        return "kept worktree %s (still used by another open session)" % path
+    from foreman import projects
+    base = (projects.load_project(rec.get("project")) or {}).get("path") or ""
+    if not base:  # `git -C ""` would act on whatever repository the foreman process is in
+        return "kept worktree %s (its project is unknown)" % path
+    return _remove_if_safe(base, path, branch)
+
+
+def _reclaim_orphan(project, path, now):
+    """A folder under the project's worktrees that no session record claims: the `open` that made it was killed
+    (SIGTERM, a closed terminal) before it recorded the session. Left alone while young."""
+    try:
+        if now - os.path.getmtime(path) < ORPHAN_AGE_S:
+            return None
+    except OSError:
+        return None
+    if _in_use(path, project["slug"]):
+        return None
+    if not os.path.lexists(os.path.join(path, ".git")):  # git never got to register it
+        try:
+            os.rmdir(path)  # only when empty
+            return "removed empty worktree folder %s (no session)" % path
+        except OSError:
+            return None
+    return _remove_if_safe(project["path"], path, "foreman-" + os.path.basename(path))
 
 
 def sweep():
@@ -154,4 +196,17 @@ def sweep():
         line = release(recs[-1])
         if line:
             lines.append(line)
+    from foreman import projects
+    now = time.time()
+    for proj in projects.list_projects():
+        wt_dir = paths.worktrees_dir(proj["slug"])
+        if not os.path.isdir(wt_dir):
+            continue
+        for name in sorted(os.listdir(wt_dir)):
+            path = os.path.realpath(os.path.join(wt_dir, name))
+            if path in by_path or not os.path.isdir(path):
+                continue
+            line = _reclaim_orphan(proj, path, now)
+            if line:
+                lines.append(line)
     return lines

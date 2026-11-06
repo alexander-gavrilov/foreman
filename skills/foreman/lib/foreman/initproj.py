@@ -7,7 +7,7 @@ import shlex
 import shutil
 
 from foreman import install as machine
-from foreman import projects, sessions, store, telegram
+from foreman import paths, projects, sessions, store, telegram
 
 CLAUDE_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification",
                  "PermissionRequest", "SessionEnd")
@@ -226,6 +226,19 @@ def remove_project(path, home=None, in_worktree=False):
             changes.append("left %s alone: %s" % (rel, exc))
     for rel in unexclude_from_git(path, list(HOOK_FILES.values())):
         changes.append("removed %s from .git/info/exclude" % rel)
+    if not in_worktree:
+        # the exclude lines are shared with the project's kept worker worktrees: take their hook files out too, or
+        # they show up as untracked work for good and keep reporting
+        for proj in projects.list_projects():
+            if os.path.realpath(proj.get("path") or "") != path:
+                continue
+            wt_dir = paths.worktrees_dir(proj["slug"])
+            for name in sorted(os.listdir(wt_dir)) if os.path.isdir(wt_dir) else []:
+                try:
+                    changes += ["worktree %s: %s" % (name, c)
+                                for c in remove_project(os.path.join(wt_dir, name), home=home, in_worktree=True)]
+                except Exception as exc:
+                    changes.append("worktree %s: could not remove hooks (%s)" % (name, exc))
     return changes
 
 

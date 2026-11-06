@@ -37,6 +37,10 @@ class WorktreeCase(SessionTestCase):
         (rec,) = [r for r in self.sessions() if r["title"] == "fm-api"]
         return rec
 
+    def wt_dir(self):
+        from foreman import paths
+        return paths.worktrees_dir(self.slug)
+
     def worktrees(self):
         return [l.split(" ", 1)[1] for l in git(self.repo, "worktree", "list", "--porcelain").splitlines()
                 if l.startswith("worktree ")]
@@ -119,7 +123,69 @@ class OpenWorktreeTest(WorktreeCase):
         self.assertEqual(self.sessions(), [])
         self.assertEqual(self.fake.list(), [])
         self.assertEqual(self.worktrees(), [self.repo])
+        self.assertEqual(os.listdir(self.wt_dir()), [])  # no folder left either
         self.assertEqual(git(self.repo, "branch", "--format=%(refname:short)"), "main")
+
+    def test_a_git_failure_before_the_worktree_exists_leaves_no_folder(self):
+        # `.git/worktrees` unwritable: git fails before it registers anything, after the folder was claimed
+        locked = os.path.join(self.repo, ".git", "worktrees")
+        os.makedirs(locked)
+        os.chmod(locked, 0o555)
+        try:
+            if os.access(locked, os.W_OK):
+                self.skipTest("running as a user that ignores directory permissions")
+            code, out, err = self.open()
+        finally:
+            os.chmod(locked, 0o755)
+        self.assertEqual(code, 1)
+        self.assertEqual(os.listdir(self.wt_dir()), [])
+        self.assertEqual(self.sessions(), [])
+
+    def test_cleaning_up_a_failed_open_leaves_other_worktrees_registrations_alone(self):
+        import shutil
+        from unittest import mock
+        from foreman import initproj
+        other = self.open_one()
+        shutil.rmtree(other["cwd"])  # its disk is missing right now (unmounted): `git worktree prune` would drop it
+        with mock.patch.object(initproj, "write_hooks", side_effect=initproj.InitError("bad json")):
+            code, _, err = run_main("open", "--project", self.slug, "--purpose", "p", "--title", "fm-two",
+                                    "--transport", "fake", "--prompt", "go", "--agent", "claude")
+        self.assertEqual(code, 1, err)
+        self.assertIn(other["cwd"], git(self.repo, "worktree", "list", "--porcelain"))
+        self.assertIn(other["worktree"]["branch"], git(self.repo, "branch", "--format=%(refname:short)").split())
+
+    def test_a_failure_after_the_session_was_recorded_keeps_its_checkout(self):
+        from unittest import mock
+        from foreman import sessions
+        with mock.patch.object(sessions, "absorb_strays", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.open()
+        (rec,) = self.sessions()  # the record and the running agent exist: the folder must too
+        self.assertTrue(os.path.isdir(rec["cwd"]))
+        self.assertIn(rec["cwd"], self.worktrees())
+
+    def test_uncommitted_changes_in_the_main_checkout_are_not_carried_over(self):
+        with open(os.path.join(self.repo, "a.txt"), "a") as f:
+            f.write("edit\n")
+        with open(os.path.join(self.repo, "new.txt"), "w") as f:
+            f.write("new\n")
+        rec = self.open_one()
+        with open(os.path.join(rec["cwd"], "a.txt")) as f:
+            self.assertEqual(f.read(), "a\n")
+        self.assertFalse(os.path.exists(os.path.join(rec["cwd"], "new.txt")))
+
+    def test_the_open_line_and_status_show_the_worktree_and_branch(self):
+        code, out, err = self.open()
+        self.assertEqual(code, 0, err)
+        (rec,) = self.sessions()
+        self.assertIn(rec["worktree"]["branch"], out)
+        self.assertIn(rec["cwd"], out)
+        (line,) = [r for r in self.journal() if r.get("kind") == "open"]
+        self.assertEqual(line["data"]["branch"], rec["worktree"]["branch"])
+        code, out, err = run_main("status", "--project", self.slug)
+        self.assertEqual(code, 0, err)
+        self.assertIn(rec["worktree"]["branch"], out)
+        self.assertIn(rec["cwd"], out)
 
     def test_a_branch_named_foreman_does_not_get_in_the_way(self):
         git(self.repo, "branch", "foreman")
@@ -256,6 +322,18 @@ class HookFilesTest(WorktreeCase):
         rec = self.open_one("--agent", "claude")
         install.remove_project_hooks()
         self.assertFalse(os.path.exists(os.path.join(rec["cwd"], ".claude", "settings.local.json")))
+
+    def test_init_remove_in_the_project_folder_takes_the_hooks_out_of_kept_worktrees(self):
+        from foreman import initproj
+        initproj.init_project(self.repo, agents=["claude", "codex", "antigravity"], transports=[])
+        rec = self.open_one("--agent", "codex")
+        hook = os.path.join(rec["cwd"], initproj.HOOK_FILES["codex"])
+        self.assertTrue(os.path.exists(hook))
+        code, out, err = run_main("init", "--remove", "--path", self.repo)
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.exists(hook))
+        self.assertEqual(git(rec["cwd"], "status", "--porcelain"), "")  # no leftover that blocks the cleanup
+        self.assertIn("worktree", out)
 
     def test_init_remove_inside_a_worktree_is_refused(self):
         rec = self.open_one()
@@ -407,6 +485,32 @@ class CloseWorktreeTest(WorktreeCase):
         self.assertEqual(worktrees.sweep(), [])
         self.assertTrue(os.path.isdir(rec["cwd"]))
 
+    def test_the_watch_pass_runs_the_sweep(self):
+        from foreman import sessions, watch
+        rec = self.open_one()
+        sessions.set_lifecycle(rec["sid"], "closed")
+        watch.run_pass(heartbeat=False)
+        self.assertFalse(os.path.exists(rec["cwd"]))
+
+    def test_a_failing_sweep_is_reported_not_swallowed(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+        from foreman import watch, worktrees
+        buf = io.StringIO()
+        with mock.patch.object(worktrees, "sweep", side_effect=RuntimeError("boom")), redirect_stderr(buf):
+            watch.run_pass(heartbeat=False)
+        self.assertIn("worktree sweep failed: boom", buf.getvalue())
+
+    def test_release_keeps_the_worktree_when_its_project_is_unknown(self):
+        from unittest import mock
+        from foreman import projects, worktrees
+        rec = self.open_one()
+        with mock.patch.object(projects, "load_project", return_value=None):
+            line = worktrees.release(rec)
+        self.assertIn("project is unknown", line)
+        self.assertTrue(os.path.isdir(rec["cwd"]))
+
     def test_session_without_a_worktree_closes_as_before(self):
         rec = self.open_one("--no-worktree")
         code, out, err = self.close()
@@ -444,6 +548,90 @@ class CloseWorktreeTest(WorktreeCase):
         self.assertTrue(os.path.isdir(rec["cwd"]))
         self.assertIn("still used", out)
         self.assertTrue(sessions.is_open(sessions.load_session(twin["sid"])))
+
+
+class OrphanTest(WorktreeCase):
+    """An `open` killed between making the worktree and recording the session leaves one nobody claims."""
+
+    def make_orphan(self, name="fm-lost-0001", age_s=3600):
+        path = os.path.join(os.path.realpath(self.wt_dir()), name)
+        os.makedirs(self.wt_dir(), exist_ok=True)
+        git(self.repo, "worktree", "add", "-q", "-b", "foreman-" + name, path)
+        self.age(path, age_s)
+        return path
+
+    @staticmethod
+    def age(path, seconds):
+        import time
+        old = time.time() - seconds
+        os.utime(path, (old, old))
+
+    def test_an_old_clean_orphan_is_taken_back_with_its_unused_branch(self):
+        from foreman import worktrees
+        path = self.make_orphan()
+        (line,) = worktrees.sweep()
+        self.assertIn("removed worktree", line)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(git(self.repo, "branch", "--format=%(refname:short)"), "main")
+
+    def test_a_young_orphan_is_left_alone(self):
+        from foreman import worktrees
+        path = self.make_orphan(age_s=5)  # an open may be waiting for Orca to find it
+        self.assertEqual(worktrees.sweep(), [])
+        self.assertTrue(os.path.isdir(path))
+
+    def test_an_orphan_with_work_is_kept(self):
+        from foreman import worktrees
+        path = self.make_orphan()
+        with open(os.path.join(path, "wip.txt"), "w") as f:
+            f.write("x")
+        self.age(path, 3600)
+        (line,) = worktrees.sweep()
+        self.assertIn("kept worktree", line)
+        self.assertTrue(os.path.isdir(path))
+
+    def test_an_orphan_used_by_a_session_started_by_hand_is_kept(self):
+        from foreman import worktrees
+        path = self.make_orphan()
+        self.new_session(title="by-hand", cwd=path)
+        self.assertEqual(worktrees.sweep(), [])
+        self.assertTrue(os.path.isdir(path))
+
+    def test_an_old_empty_stray_folder_is_removed_but_a_full_one_is_not(self):
+        from foreman import worktrees
+        empty = os.path.join(os.path.realpath(self.wt_dir()), "fm-empty-0002")
+        full = os.path.join(os.path.realpath(self.wt_dir()), "fm-full-0003")
+        os.makedirs(empty)
+        os.makedirs(full)
+        with open(os.path.join(full, "mine.txt"), "w") as f:
+            f.write("not git's")
+        self.age(empty, 3600)
+        self.age(full, 3600)
+        lines = worktrees.sweep()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertFalse(os.path.exists(empty))
+        self.assertTrue(os.path.isdir(full))
+
+    def test_a_session_worktree_is_not_an_orphan(self):
+        from foreman import worktrees
+        rec = self.open_one()
+        self.age(rec["cwd"], 3600)
+        self.assertEqual(worktrees.sweep(), [])
+        self.assertTrue(os.path.isdir(rec["cwd"]))
+
+    def test_purge_refuses_while_a_worktree_remains(self):
+        from foreman import install
+        rec = self.open_one()
+        with open(os.path.join(rec["cwd"], "wip.txt"), "w") as f:
+            f.write("x")
+        root = os.path.join(self.tmp, "foreman")  # only the name and config.json matter to the target check
+        os.makedirs(root)
+        with open(os.path.join(root, "config.json"), "w") as f:
+            f.write("{}")
+        with self.assertRaises(install.InstallError) as cm:
+            install.check_purge_target(root)
+        self.assertIn("worker worktrees still exist", str(cm.exception))
+        self.assertTrue(os.path.isdir(rec["cwd"]))
 
 
 class RotateWorktreeTest(WorktreeCase):

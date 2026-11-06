@@ -348,12 +348,6 @@ def remove_project_hooks():
             changes += ["project %s: %s" % (proj.get("slug"), c) for c in initproj.remove_project(path)]
         except Exception as exc:
             changes.append("project %s: could not remove hooks (%s)" % (proj.get("slug"), exc))
-        wt_dir = paths.worktrees_dir(proj["slug"])  # kept worker worktrees carry hook files too
-        for name in sorted(os.listdir(wt_dir)) if os.path.isdir(wt_dir) else []:
-            try:
-                changes += ["worktree %s: %s" % (name, c) for c in initproj.remove_project(os.path.join(wt_dir, name), in_worktree=True)]
-            except Exception as exc:
-                changes.append("worktree %s: could not remove hooks (%s)" % (name, exc))
     return changes
 
 
