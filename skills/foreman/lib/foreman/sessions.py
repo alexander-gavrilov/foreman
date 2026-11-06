@@ -37,7 +37,7 @@ def save_session(rec):
 
 def create_session(project, agent, model=None, effort=None, role="worker", owner="orchestrator",
                    purpose=None, title=None, transport=None, agent_session_id=None, cwd=None,
-                   transcript_path=None, state="starting", replaces=None, lifecycle="active"):
+                   transcript_path=None, state="starting", replaces=None, lifecycle="active", worktree=None):
     sid = ids.new_sid(exists=lambda s: os.path.exists(paths.session_file(s)))
     now = timeutil.now_iso()
     rec = {"sid": sid, "project": project, "agent": agent, "model": model, "effort": effort, "role": role,
@@ -47,6 +47,8 @@ def create_session(project, agent, model=None, effort=None, role="worker", owner
            "state": state, "lifecycle": lifecycle, "state_since": now, "last_event_at": None,
            "context_tokens": None, "context_at": None, "replaces": replaces, "replaced_by": None,
            "opened_at": now, "closed_at": None}
+    if worktree:
+        rec["worktree"] = worktree  # {"path", "branch"}: the worker's own git worktree (worktrees.py)
     return save_session(rec)
 
 

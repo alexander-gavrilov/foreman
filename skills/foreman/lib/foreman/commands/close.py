@@ -1,5 +1,5 @@
 """foreman close: close a finished session and its terminal tab (spec §4.2, architecture §3)."""
-from foreman import messaging, projects, sessions, transports
+from foreman import messaging, projects, sessions, transports, worktrees
 from foreman.cliutil import CliError, add_project_arg, dump_json, find_session
 from foreman.transports._proc import TransportError
 from foreman.transports.base import TerminalGone
@@ -45,6 +45,7 @@ def run(args):
             raise CliError(str(exc), code=1)
 
     now = sessions.set_lifecycle(sid, "closed")
+    wt_line = worktrees.release(rec)
     slug = rec.get("project")
     if slug:
         proj = projects.load_project(slug)
@@ -54,10 +55,12 @@ def run(args):
         projects.journal_append(
             slug, messaging.current_sender(), "close",
             "closed %s (%s)" % (rec.get("title") or sid, sid),
-            data={"sid": sid, "title": rec.get("title")},
+            data={"sid": sid, "title": rec.get("title"), "worktree": wt_line},
         )
     if args.json:
         dump_json(now)
     else:
         print("closed %s (%s)" % (sid, rec.get("title") or sid))
+        if wt_line:
+            print(wt_line)
     return 0

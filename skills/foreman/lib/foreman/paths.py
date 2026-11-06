@@ -143,6 +143,14 @@ def agent_work_dir(slug):
     return _join("agent-work", _name(slug))
 
 
+def worktrees_root():
+    return _join("worktrees")
+
+
+def worktrees_dir(slug):
+    return _join("worktrees", _name(slug))
+
+
 def replies_dir():
     return _join("replies")
 
