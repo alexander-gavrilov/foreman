@@ -186,11 +186,10 @@ class WatchTest(ForemanTestCase):
         code, out, err = run_cli("watch", "run")
         self.assertEqual(code, 0)
 
-        # 3. A one-off pass left a fresh heartbeat of a pid that has exited: that is not a running loop
+        # 3. A one-off pass is not a loop and leaves no heartbeat
         code, out, err = run_cli("watch", "list")
         self.assertEqual(code, 0)
         self.assertIn("NOT RUNNING", out)
-        self.assertIn("has exited", out)
         self.assertIn("Limits:", out)
 
     def test_watch_list_says_running_for_a_live_loop_process(self):

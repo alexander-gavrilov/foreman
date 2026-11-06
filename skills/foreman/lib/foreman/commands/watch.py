@@ -44,7 +44,7 @@ def _last_hook_events():
 def run(args):
     subcmd = getattr(args, "watch_subcommand", None)
     if not subcmd or subcmd == "run":
-        summary = watch.run_pass()
+        summary = watch.run_pass(heartbeat=False)
         print("watch pass complete: %d wakes, %d deliveries" % (summary.get("wakes", 0), summary.get("deliveries", 0)))
         return 0
 

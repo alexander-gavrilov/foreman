@@ -7,6 +7,7 @@ Builds:
 import os
 
 from foreman import config, limits as limits_mod, paths, projects, sessions, store, timeutil
+from foreman import watch as watch_mod
 
 GROUP_PRIORITY = {
     "needs_you": 0,
@@ -329,7 +330,7 @@ def build_project(slug):
 
     # Watches
     hb = store.read_json(paths.watch_heartbeat_file(), None)
-    if isinstance(hb, dict) and hb.get("last_run_at"):
+    if isinstance(hb, dict) and hb.get("last_run_at") and watch_mod.loop_status(hb)[0]:
         age_str = _format_age(hb["last_run_at"], ref_now)
         watch_status = "running, last pass %s ago" % age_str
     else:

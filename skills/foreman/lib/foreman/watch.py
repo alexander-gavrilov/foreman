@@ -44,17 +44,18 @@ def loop_status(hb):
     return bool(fresh and pid_alive(hb.get("pid"))), age, interval
 
 
-def run_pass(interval_s=60):
-    """One zero-token watch pass (architecture section 8). Returns a summary dict."""
+def run_pass(interval_s=60, heartbeat=True):
+    """One zero-token watch pass (architecture section 8). Returns a summary dict. Only a loop writes the
+    heartbeat (`heartbeat=False` for a one-off `watch run`, which must not overwrite a live loop's)."""
     now_iso = timeutil.now_iso()
 
     # 1. Heartbeat
-    heartbeat = {
-        "pid": os.getpid(),
-        "last_run_at": now_iso,
-        "interval_s": interval_s,
-    }
-    store.write_json(paths.watch_heartbeat_file(), heartbeat)
+    if heartbeat:
+        store.write_json(paths.watch_heartbeat_file(), {
+            "pid": os.getpid(),
+            "last_run_at": now_iso,
+            "interval_s": interval_s,
+        })
 
     # Load watch state
     state = store.read_json(paths.watch_state_file(), default={})

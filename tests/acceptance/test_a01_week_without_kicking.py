@@ -99,7 +99,7 @@ class WeekWithoutKickingTest(AcceptanceCase):
         self.assertIn("API", board)
         self.assertIn("UI", board)
         listing = self.fm_ok("watch", "list")
-        self.assertIn("Loop: NOT RUNNING (last run", listing)  # one-off `watch run` passes, no loop process
+        self.assertIn("Loop: NOT RUNNING", listing)  # one-off `watch run` passes, no loop process, no heartbeat
         self.assertIn("fm-api", listing)
 
 
