@@ -64,6 +64,7 @@ approach; foreman packages it, and does not adopt an existing orchestration tool
 | Orchestrator | One session per project. It coordinates and never does project work. |
 | Worker session | Any other agent session of the project (Claude Code, Antigravity or Codex), with an agent, a model, a purpose and an owner. |
 | Owner | `orchestrator` if the orchestrator opened the session, `user` if the user did. |
+| Workspace | The folder a worker session works in. For a worker the orchestrator opens in a git project it is the worker's own git worktree and branch (§4.2). |
 | Transport | How foreman reaches a session: an Orca terminal, a Herdr pane, or Claude inter-session messaging. |
 | Provider | A subscription that sessions spend: Claude Code or Antigravity (Codex if present). |
 | Board | The current state of a project's work: one row per task. |
@@ -104,6 +105,25 @@ approach; foreman packages it, and does not adopt an existing orchestration tool
   - The old transcript stays as the archive.
 - foreman knows which session replaced which. A rotated session is shown as such, never as lost.
 - Never interrupt a busy session.
+
+**A workspace per worker.** Workers that share one checkout overwrite each other's files, so each worker
+the orchestrator opens gets its own.
+- Applies to a worker opened by the orchestrator in a project that is the root of a git repository with at
+  least one commit. The worker gets its own git worktree on its own new branch, branched from the main
+  checkout's current commit. Uncommitted changes in the main checkout are not carried over. The worktree
+  lives outside the repository, under the foreman state folder.
+- It does not apply to the orchestrator, to sessions the user opened, or to a project that is not a git
+  repository; those work in the project folder as before. A project that is only a subfolder of a repository
+  gets no worktree, and the user is told so.
+- The worker's agent works in the worktree with the same hooks and project rules as in the project folder.
+  A session the user starts by hand inside such a worktree is shown as belonging to the project.
+- If the worktree cannot be made, the session is not opened and nothing is left behind. The user can ask
+  explicitly to work in the project folder instead. foreman never falls back to it silently.
+- Rotation continues in the same worktree. The new session inherits the work in progress.
+- When the session is closed, or ends on its own, foreman removes the worktree. It keeps it when removing
+  would lose work: uncommitted changes, commits that are on no branch, or another open session still using
+  it. The branch is deleted only if it is merged, so commits are never lost.
+- The branch is checked from the main checkout, so a task is marked done only after its branch is merged.
 
 ### 4.3 Context control
 - **Soft target of about 150k tokens per session.** It is a guideline, not a hard rule: a session close
@@ -242,7 +262,7 @@ Rules:
   - `status`: sessions, their state, context, owner; across projects or for one project;
   - `limits`: provider windows with usage, reset time and reading age;
   - `send` / `ask`: message any session (§4.7);
-  - `open` / `close`: sessions, including rotation;
+  - `open` / `close`: sessions, including rotation and each worker's workspace (§4.2);
   - `board` / `log`: read the board; append to or search the journal;
   - `watch`: the scheduled event check (§4.6) and the list of active watches;
   - `clean`: work-file cleanup, with a listing first (§4.9);
@@ -335,6 +355,7 @@ Rules:
   - creates the project's Telegram topic, where the machine has Telegram;
   - creates its board.
 - Running it again changes nothing that is already correct.
+- Initialising refuses to run inside a worker's worktree; it is done in the project's own folder.
 
 ## 6. Where it runs
 - **Machines**: Linux (the home server) and macOS (the work computer) **(user)**.
@@ -371,6 +392,9 @@ Rules:
 9. A work folder left for 14 days disappears with no action from the user, after a listing.
 10. A finding reported from the work Mac stays a local draft; on a public issue it contains no project data.
 11. The same install works on Linux and macOS, from the phrase "установи плагин".
+12. Two workers opened at once in a git project each work in their own worktree and branch, and neither
+    changes the other's files. Closing one removes its worktree unless that would lose work, and leaves
+    the other untouched.
 
 ## 9. Left to the builder
 - Thresholds for "stuck" and "waiting too long", and what counts as "quiet" in the triage rail.
@@ -380,6 +404,8 @@ Rules:
 ## 10. Open questions
 1. Does the user have a Codex subscription that foreman should count in limits, or is Codex only an agent
    it can drive? Until answered, foreman shows Codex limits only if Codex exposes them.
-2. For the plan, not this document: the order in which the parts arrive (proposed: core → web UI +
+2. Do Claude Code, Antigravity and Codex ask the user to trust a new worktree folder, and does Codex's hook
+   approval hold per path? Until checked live, foreman prints a note on opening a worker in a worktree.
+3. For the plan, not this document: the order in which the parts arrive (proposed: core → web UI +
    Telegram → self-improvement → permissions), and whether shopping-list is the first project to switch
    to foreman (replacing its local `orchestrator/`).
