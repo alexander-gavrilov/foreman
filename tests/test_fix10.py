@@ -1,6 +1,7 @@
 """Fix round 10: agy transcript reading in context.last_assistant_text (D63)."""
 import json
 import os
+import sys
 import unittest
 from unittest import mock
 
@@ -131,6 +132,24 @@ class AgyStopHookTest(HookCase):
             worker["title"], worker["sid"]
         )
         self.assertEqual(pending[0]["text"], expected_prefix)
+
+
+class WebClockTest(unittest.TestCase):
+    def test_chat_times_are_the_viewers_local_time_not_the_utc_digits(self):
+        """Live: the web chat read 20:40 next to Telegram's 21:40: it cut HH:MM out of the UTC timestamp."""
+        web = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "skills", "foreman", "web", "index.html")
+        with open(web, encoding="utf-8") as f:
+            source = f.read()
+        body = source[source.index("function formatClockTime"):]
+        body = body[:body.index("function russianPluralSessions")]
+        self.assertNotIn(".match(", body)
+        self.assertIn("toLocaleTimeString", body)
+
+
+class NoTestReadsTheRealStdinTest(ForemanTestCase):
+    def test_stdin_is_empty_inside_a_test(self):
+        self.assertEqual(sys.stdin.read(), "")
 
 
 if __name__ == "__main__":

@@ -59,6 +59,10 @@ class ForemanTestCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        stdin = open(os.devnull)  # a test reading the runner's stdin would hang when that stays open
+        self.addCleanup(stdin.close)
+        self.addCleanup(setattr, sys, "stdin", sys.stdin)
+        sys.stdin = stdin
         self.addCleanup(os.chdir, os.getcwd())  # LIFO: restored after the temp tree is removed
         before = {h: _home_snapshot(h) for h in real_default_homes()}
         self.addCleanup(self._assert_default_home_untouched, before)
