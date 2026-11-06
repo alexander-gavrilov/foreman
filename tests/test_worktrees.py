@@ -525,6 +525,18 @@ class CloseWorktreeTest(WorktreeCase):
         self.assertEqual(code, 0, err)
         self.assertNotIn(rec["worktree"]["branch"], git(self.repo, "branch", "--format=%(refname:short)").split())
 
+    def test_with_a_detached_head_in_the_main_checkout_no_branch_counts_as_merged(self):
+        # the commits would be reachable only from the detached HEAD, and lost at the next checkout
+        rec = self.open_one()
+        git(rec["cwd"], "commit", "-q", "--allow-empty", "-m", "work")
+        git(self.repo, "merge", "-q", "--ff-only", rec["worktree"]["branch"])
+        git(self.repo, "checkout", "-q", "--detach")
+        code, out, err = self.close()
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.exists(rec["cwd"]))
+        self.assertIn(rec["worktree"]["branch"], git(self.repo, "branch", "--format=%(refname:short)").split())
+        self.assertIn("not merged", out)
+
     def test_a_branch_pushed_but_not_merged_into_the_main_checkout_is_kept(self):
         # `git branch -d` also accepts a branch merged into its upstream; that is not "merged" here
         remote = self.repo + "-remote.git"
@@ -611,6 +623,26 @@ class OrphanTest(WorktreeCase):
         self.assertEqual(len(lines), 1, lines)
         self.assertFalse(os.path.exists(empty))
         self.assertTrue(os.path.isdir(full))
+
+    def test_one_failing_item_does_not_stop_the_sweep_of_the_others(self):
+        from unittest import mock
+        from foreman import worktrees
+        first = self.make_orphan("fm-aaa-0001")
+        second = self.make_orphan("fm-bbb-0002")
+        real = worktrees._remove_if_safe
+        calls = []
+
+        def flaky(base, path, branch):
+            calls.append(path)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return real(base, path, branch)
+        with mock.patch.object(worktrees, "_remove_if_safe", side_effect=flaky):
+            lines = worktrees.sweep()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(any("boom" in l for l in lines))
+        self.assertEqual(sum(os.path.exists(p) for p in (first, second)), 1)
 
     def test_a_session_worktree_is_not_an_orphan(self):
         from foreman import worktrees

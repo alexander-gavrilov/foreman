@@ -140,6 +140,7 @@ def _remove_if_safe(base, path, branch):
     try:
         # `git branch -d` alone also accepts a branch merged into its upstream (pushed, not merged here), so the
         # target is checked explicitly: the branch the main checkout is on
+        _git(base, "symbolic-ref", "-q", "HEAD")  # a detached HEAD is no branch: nothing counts as merged into it
         _git(base, "merge-base", "--is-ancestor", branch, "HEAD")
         _git(base, "branch", "-d", branch)
     except WorktreeError:
@@ -183,6 +184,14 @@ def _reclaim_orphan(project, path, now):
     return _remove_if_safe(project["path"], path, "foreman-" + os.path.basename(path))
 
 
+def _isolated(fn, *args, label):
+    """One item's failure must not stop the sweep of the others; it becomes a line instead."""
+    try:
+        return fn(*args)
+    except Exception as exc:
+        return "could not clean up %s (%s)" % (label, exc)
+
+
 def sweep():
     """Release the worktrees of sessions that ended without `foreman close` (the agent exited on its own) or whose
     kept worktree has since been cleaned up. Returns the result lines."""
@@ -193,7 +202,7 @@ def sweep():
     for path, recs in by_path.items():
         if any(sessions.is_open(r) for r in recs):
             continue
-        line = release(recs[-1])
+        line = _isolated(release, recs[-1], label=path)
         if line:
             lines.append(line)
     from foreman import projects
@@ -206,7 +215,7 @@ def sweep():
             path = os.path.realpath(os.path.join(wt_dir, name))
             if path in by_path or not os.path.isdir(path):
                 continue
-            line = _reclaim_orphan(proj, path, now)
+            line = _isolated(_reclaim_orphan, proj, path, now, label=path)
             if line:
                 lines.append(line)
     return lines
