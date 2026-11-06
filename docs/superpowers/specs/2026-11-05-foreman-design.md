@@ -125,7 +125,7 @@ the orchestrator owns gets its own.
   stop at permission prompts the same agent would not meet in the project folder.
 - *If it cannot be made.* The session is not opened and nothing is left behind: no folder, no branch, no
   registration, and nothing else touched. A worktree left by an `open` that was killed half way, with no
-  session, is taken back by the scheduled check once it is a few minutes old and holds no work. An explicit option opens it
+  session, is taken back by the scheduled check once it is 10 minutes old and holds no work. An explicit option opens it
   in the project folder instead; the orchestrator may use it as the user may. foreman never falls back to
   the project folder silently.
 - *Showing it.* `open` reports the worker's worktree path and branch, the journal records both, and the
