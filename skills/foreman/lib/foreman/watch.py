@@ -44,29 +44,6 @@ def loop_status(hb):
     return bool(fresh and pid_alive(hb.get("pid"))), age, interval
 
 
-def is_transport_trusted(kind, agent):
-    """A transport's idle status is trusted for a busy agent only when that transport can reliably tell
-    idle from waiting/working for that agent (D26, D27, D64).
-    - fake: trusted for all agents (file-backed test transport)
-    - herdr: trusted for all agents (has screen detection for agy, claude, codex; tracks blocked vs idle)
-    - orca: trusted for claude/codex, but NOT antigravity (agy has no permission hook and on Orca waiting
-      for permission shows as busy, D26; tui-idle times out, D27; so Orca cannot reliably tell if agy is idle)
-    """
-    if kind == "fake":
-        return True
-    if kind == "herdr":
-        return True
-    if kind == "orca":
-        if agent in ("antigravity", "agy"):
-            return False
-        return True
-    return False
-
-
-def _log_event(row):
-    store.append_jsonl(paths.events_file(), dict({"ts": timeutil.now_iso()}, **row))
-
-
 def run_pass(interval_s=60, heartbeat=True):
     """One zero-token watch pass (architecture section 8). Returns a summary dict. Only a loop writes the
     heartbeat (`heartbeat=False` for a one-off `watch run`, which must not overwrite a live loop's)."""
@@ -108,29 +85,17 @@ def run_pass(interval_s=60, heartbeat=True):
     # A failed list() (Orca restart, timeout) is "unknown", never "everything is gone": that kind is skipped.
     live_handles_by_kind = {}
     transport_by_kind = {}
-    terms_by_kind = {}
-    list_failed_or_empty = set()
     for kind in transport_kinds:
         try:
             t = transports.get_transport(kind)
-            items = t.list()
+            live_handles_by_kind[kind] = {item.handle for item in t.list()}
             transport_by_kind[kind] = t
-            live_handles_by_kind[kind] = {item.handle for item in items}
-            if items:
-                terms_by_kind[kind] = {item.handle: item for item in items}
-            else:
-                list_failed_or_empty.add(kind)
         except Exception:
-            list_failed_or_empty.add(kind)
             continue
 
     # Consecutive passes in which a session's handle was missing from list() AND alive(handle) was False.
     gone_miss_prev = state.get("gone_miss") if isinstance(state.get("gone_miss"), dict) else {}
     gone_miss = {}
-
-    # Consecutive passes in which a busy session had no hook event and transport reported it idle.
-    busy_reconcile_prev = state.get("busy_reconcile") if isinstance(state.get("busy_reconcile"), dict) else {}
-    busy_reconcile = {}
 
     # 3. Per non-closed session checks
     for s in non_closed:
@@ -190,39 +155,6 @@ def run_pass(interval_s=60, heartbeat=True):
                     dedupe.add(cond)
                     summary["wakes"] += 1
                     summary["conditions"].append(cond)
-            else:
-                # D64: False busy reconciliation. A session whose record is busy with no hook event for at least 2
-                # passes, and whose transport reports it idle or done on 2 consecutive passes, goes to idle.
-                agent = s.get("agent")
-                if not is_transport_trusted(kind, agent):
-                    # Only transports whose status can be trusted for that agent (D26, D27, D64).
-                    pass
-                elif kind in list_failed_or_empty:
-                    # D49: a failed or empty list() changes nothing; keep previous progress
-                    if sid in busy_reconcile_prev:
-                        busy_reconcile[sid] = busy_reconcile_prev[sid]
-                else:
-                    item = terms_by_kind.get(kind, {}).get(handle)
-                    if item is not None and item.idle is True:
-                        ev_key = s.get("last_event_at") or s.get("state_since") or ""
-                        prev = busy_reconcile_prev.get(sid)
-                        if isinstance(prev, dict) and prev.get("last_event") == ev_key:
-                            passes = int(prev.get("passes") or 0) + 1
-                        else:
-                            passes = 1
-
-                        if passes >= 2:
-                            sessions.set_state(sid, "idle")
-                            s = dict(s, state="idle")
-                            all_sessions = [s if x["sid"] == sid else x for x in all_sessions]
-                            _log_event({
-                                "kind": "busy_reconciled",
-                                "sid": sid,
-                                "project": project,
-                                "agent": agent,
-                            })
-                        else:
-                            busy_reconcile[sid] = {"passes": passes, "last_event": ev_key}
 
         # Waiting too long
         cur_state = s.get("state") or ""
@@ -367,7 +299,6 @@ def run_pass(interval_s=60, heartbeat=True):
     # Save state
     state["dedupe"] = sorted(list(dedupe))
     state["gone_miss"] = gone_miss
-    state["busy_reconcile"] = busy_reconcile
     store.write_json(paths.watch_state_file(), state)
 
     return summary

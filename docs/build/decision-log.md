@@ -240,14 +240,9 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   `reset_in_seconds: 0`; `window_stale` took the past `resets_at` as "this reading belongs to a finished window" and
   `summary_line` printed `?`, while the `limits` table printed the raw percentage (with level `unknown`). The agy
   parser no longer stores such a `resets_at`, so the reading ages by its `observed_at` and both views agree.
-- D64 · Watch clears a false busy. Live: a stray PreToolUse with no PostToolUse arrived about 3 s after Stop (cause
-  unproven, intermittent), leaving the record busy with the terminal idle, so `foreman close` refused and the UI
-  showed busy until the next hook. The cause is unproven and the fix does not depend on it: in the watch pass, a session
-  whose record is busy with no hook event for at least 2 passes, and whose transport reports it idle or done on 2
-  consecutive passes, goes to idle, logged as an event `busy_reconciled`. Rules: a failed or empty list() changes nothing
-  (D49); only transports whose status can be trusted for that agent (Antigravity on Orca cannot reliably tell idle from
-  waiting for permission per D26/D27 because agy has no permission hook event and on Orca waiting shows as busy, so agy
-  on Orca is left alone; Herdr screen detection and Fake are trusted; Claude on Orca is trusted); a really busy session is
-  never touched; no wake and no model call results from it. — Also in round 10: `context.last_assistant_text` reads
-  Antigravity transcripts (`source: MODEL`, `type: PLANNER_RESPONSE` rows with non-empty text), fixing D63 posting the
-  "no answer" notice for agy orchestrators whose turn ended with text only and enabling worker finished-a-turn summaries.
+- D64 · A false "busy" is not reconciled. Live: a stray PreToolUse with no PostToolUse arrived about 3 s after Stop
+  (cause unproven, intermittent), leaving the record busy with the terminal idle until the next hook, so `foreman close`
+  refused. A watch-loop reconcile was built and removed: review 10 showed live that Orca reports `done` during a
+  running Stop continuation, Herdr reports `done` while agy runs a command, and Orca `waiting` counts as idle, so it
+  typed into a working session. — A false busy is cosmetic and safe; a false idle breaks "never interrupt a busy
+  session". Accepted limit: the state clears on the session's next hook.

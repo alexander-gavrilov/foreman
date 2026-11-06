@@ -71,6 +71,8 @@ def last_assistant_text(path):
     `source: MODEL` / `type: PLANNER_RESPONSE`, else a generic `role: assistant|model` layout).
     None when nothing is found."""
     for row in reversed(_tail_rows(path)):
+        if row.get("type") == "USER_INPUT":
+            return None  # agy: the turn's start; an older answer must not pass as this turn's
         text = None
         msg = _main_chain_assistant(row)
         if msg is not None:
