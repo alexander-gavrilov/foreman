@@ -232,11 +232,27 @@ def _notify_gone(project, msg):
         pass
 
 
-def say(project, text, question=False, options=None, notify_user=False):
+def _answered(project):
+    """D63: a `say` from the project's orchestrator (or from a caller outside any session) is the answer the user
+    waits for: clear the orchestrator's awaiting mark. A say from another session does not."""
+    orch = wake.find_orchestrator(project)
+    if orch is None:
+        return
+    me = current_session()
+    if me is None or me["sid"] == orch["sid"]:
+        sessions.take_awaiting(orch["sid"])
+
+
+def say(project, text, question=False, options=None, notify_user=False, clear_awaiting=True):
     """Orchestrator -> user: append to the project chat; fan out to the notifiers for a question or on request.
     A failing notifier never fails the call."""
     if not str(text or "").strip():
         raise CliError("refusing to say an empty message")
+    if clear_awaiting:
+        try:
+            _answered(project)
+        except Exception as exc:
+            _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
     msg = projects.chat_append(project, "orchestrator", text, channel="cli", question=question,
                                options=options)
     if question or notify_user:
