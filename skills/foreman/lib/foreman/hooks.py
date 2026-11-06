@@ -17,7 +17,7 @@ PAST_IDS_KEPT = 20
 # D59: only an agent whose SessionStart says why a new session id appeared can tell a successor (/clear, resume,
 # compact) from a child session started inside the same terminal. agy and Codex keep the plain handle rebind.
 SOURCE_AGENTS = ("claude",)
-SUCCESSOR_SOURCES = ("clear", "resume", "compact")
+SUCCESSOR_SOURCES = ("clear", "resume", "compact", "fork")
 CHILD_IDS_KEPT = 200
 
 RULE_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "templates",
@@ -103,15 +103,24 @@ def _recorded_orchestrator(asid, handles):
     return False
 
 
+def _is_sdk(env):
+    """Best effort: Claude Code itself sets CLAUDE_CODE_ENTRYPOINT=sdk-cli in a `claude -p` child (verified live for
+    plain and --resume, also when the parent's value was `cli`)."""
+    return str(env.get("CLAUDE_CODE_ENTRYPOINT") or "").startswith("sdk")
+
+
 def _is_child(agent, rec, norm, env):
     """D59: a hook from the record's terminal whose agent session id is neither the record's, nor one of its past
     ids, is a genuine successor only when the record has no agent session id yet (pending launch, absorb) or it is
-    a SessionStart with source clear/resume/compact (D31). Anything else is a child session of that terminal (a
-    `claude -p` started from a hook inherits the terminal handle). The SDK entrypoint is never a successor."""
+    a SessionStart with source clear/resume/compact/fork (D31). Anything else is a child session of that terminal
+    (a `claude -p` started from a hook inherits the terminal handle). The SDK entrypoint is never a successor and
+    never takes the first binding of a record that has no id yet."""
     asid, current = norm["agent_session_id"], rec.get("agent_session_id")
-    if not asid or not current or asid == current or agent not in SOURCE_AGENTS:
+    if not asid or asid == current or agent not in SOURCE_AGENTS:
         return False
-    sdk = str(env.get("CLAUDE_CODE_ENTRYPOINT") or "").startswith("sdk")  # best effort: set by Claude Code itself
+    sdk = _is_sdk(env)
+    if not current:
+        return sdk
     return not (norm["kind"] == "session_start" and norm["source"] in SUCCESSOR_SOURCES and not sdk)
 
 
@@ -143,7 +152,7 @@ def _bind(agent, norm, env):
     if proj is None:
         return None, False, None
     pending = sessions.pending_orchestrator(proj["slug"])
-    pending = pending if pending and pending.get("agent") == agent else None
+    pending = pending if pending and pending.get("agent") == agent and not _is_sdk(env) else None
     transport = {"kind": None, "handle": None}
     for key, handle in handle_env:
         holder = _newest_open([r for r in recs if (r.get("transport") or {}).get("handle") == handle])
