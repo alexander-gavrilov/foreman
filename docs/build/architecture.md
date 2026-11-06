@@ -92,7 +92,14 @@ rotated session keeps showing "old → new" while its activity is still tracked 
 `context_tokens: null` means **unknown** and is rendered as "unknown", never 0.
 
 **Binding a hook to a session** (in order): (1) `agent_session_id` already known; (1b) a live record with the same
-transport handle (e.g. after `/clear` a Claude session gets a new `session_id`): re-bound, role and owner kept;
+transport handle (e.g. after `/clear` a Claude session gets a new `session_id`): re-bound, role and owner kept,
+**but only for a genuine successor** (D59): a SessionStart with source `clear`/`resume`/`compact`, or a record that has
+no agent session id yet. Any other event with a different session id is a **child session** of that terminal (a
+`claude -p` started by an unrelated hook inherits the terminal handle): it changes nothing in the record (id, state,
+transcript, context, lifecycle), claims no inbox, gets no digest or briefing, its SessionEnd is ignored; only its
+PreToolUse is answered, guarded with the record's role (an orchestrator's child is denied what the orchestrator would
+be). One `child_session` event is logged per child session id. Agents whose hooks carry no `source` (agy; Codex is
+unverified) keep the plain handle rebind;
 (2) a pending launch
 registered by `foreman open` with the same transport handle (from the hook's environment, e.g.
 `ORCA_TERMINAL_HANDLE`); (3) the hook's `cwd` is inside an initialised project → auto-register a new

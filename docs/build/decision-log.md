@@ -171,3 +171,13 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   reason. A false draft is cheap, a false public issue is not. Known limit: an unregistered project name in plain
   prose cannot be recognised; registered names are scrubbed. — Review 5 found 18 spec §8.10 shapes that passed both
   layers, and foreman's own paths/URLs that the old blacklist gate wrongly held.
+- D59 · A hook from a registered terminal re-binds the record to a new agent session id only for a genuine successor
+  (SessionStart source clear/resume/compact, D31, or a record with no agent session id yet). Any other new id is a
+  child session of the terminal: the record, its inbox and lifecycle stay untouched, SessionStart gets no briefing,
+  Stop answers empty, SessionEnd is ignored, PreToolUse stays guarded with the record's role (fail closed), and one
+  `child_session` event is logged per child id. — Live run: a `claude -p` (entrypoint sdk-cli) started by a user plugin
+  from a hook inherited the terminal handle, took over the orchestrator record (rule 1b), and its SessionEnd closed the
+  live orchestrator. Applies to Claude only: agy and Codex payloads give no usable `source` (Codex hooks are
+  unverified), so they keep the handle rebind. `CLAUDE_CODE_ENTRYPOINT=sdk*` also disqualifies a resume as successor
+  (best effort, not verified live). Known limit: an agent restarted by hand in the same terminal after a crash (source
+  startup, no SessionEnd) counts as a child until `foreman orchestrator adopt`; likewise a missed /clear SessionStart.

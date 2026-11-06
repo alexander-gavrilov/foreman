@@ -15,6 +15,11 @@ PROVISIONAL_AGENTS = ("antigravity", "agy")
 HEARTBEAT_STALE_INTERVALS = 3
 WARN_EVERY_S = 600
 PAST_IDS_KEPT = 20
+# D59: only an agent whose SessionStart says why a new session id appeared can tell a successor (/clear, resume,
+# compact) from a child session started inside the same terminal. agy and Codex keep the plain handle rebind.
+SOURCE_AGENTS = ("claude",)
+SUCCESSOR_SOURCES = ("clear", "resume", "compact")
+CHILD_IDS_KEPT = 200
 
 RULE_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "templates",
                              "project-rule.md")
@@ -99,10 +104,25 @@ def _recorded_orchestrator(asid, handles):
     return False
 
 
+def _is_child(agent, rec, norm, env):
+    """D59: a hook from the record's terminal whose agent session id is neither the record's, nor one of its past
+    ids, is a genuine successor only when the record has no agent session id yet (pending launch, absorb) or it is
+    a SessionStart with source clear/resume/compact (D31). Anything else is a child session of that terminal (a
+    `claude -p` started from a hook inherits the terminal handle). The SDK entrypoint is never a successor."""
+    asid, current = norm["agent_session_id"], rec.get("agent_session_id")
+    if not asid or not current or asid == current or agent not in SOURCE_AGENTS:
+        return False
+    sdk = str(env.get("CLAUDE_CODE_ENTRYPOINT") or "").startswith("sdk")  # best effort: set by Claude Code itself
+    return not (norm["kind"] == "session_start" and norm["source"] in SUCCESSOR_SOURCES and not sdk)
+
+
 def _bind(agent, norm, env):
-    """-> (record, created, by_handle). (None, False, False) when the event belongs to no foreman session.
+    """-> (record, created, how). how: None (known agent_session_id), "handle" (re-bound by terminal handle) or
+    "child" (a child session of the record's terminal: the record must not change). (None, False, None) when the
+    event belongs to no foreman session.
     Order (architecture 3): (1) agent_session_id known; (1b) an open record with the same terminal handle is
-    re-bound to the new agent_session_id (role and owner kept); (2) is the same lookup for a pending launch;
+    re-bound to the new agent_session_id (role and owner kept) if it is a genuine successor (D59), else the hook
+    is a child's; (2) is the same lookup for a pending launch;
     (3) auto-register a user worker for a cwd inside an initialised project."""
     asid = norm["agent_session_id"]
     recs = sessions.list_sessions()
@@ -111,18 +131,18 @@ def _bind(agent, norm, env):
                    (r.get("agent_session_id") == asid or asid in (r.get("past_agent_session_ids") or []))]
         rec = _newest_open(matches) or (matches[-1] if matches else None)
         if rec:
-            return rec, False, False
+            return rec, False, None
     handle_env = [(k, env[k]) for k in HANDLE_ENV if env.get(k)]
     for _, handle in handle_env:
         rec = _newest_open([r for r in recs if r.get("agent") == agent
                             and (r.get("transport") or {}).get("handle") == handle])
         if rec:
-            return rec, False, True
+            return rec, False, "child" if _is_child(agent, rec, norm, env) else "handle"
     if _recorded_orchestrator(asid, [h for _, h in handle_env]):
-        return None, False, False  # never auto-register a worker over an orchestrator's session or terminal
+        return None, False, None  # never auto-register a worker over an orchestrator's session or terminal
     proj = projects.project_for_path(norm["cwd"]) if norm["cwd"] else None
     if proj is None:
-        return None, False, False
+        return None, False, None
     pending = sessions.pending_orchestrator(proj["slug"])
     pending = pending if pending and pending.get("agent") == agent else None
     transport = {"kind": None, "handle": None}
@@ -132,7 +152,7 @@ def _bind(agent, norm, env):
             transport = {"kind": _terminal_kind(key), "handle": handle}
             break
     if not asid and not transport["handle"]:
-        return None, False, False  # nothing to identify the session by: never create a record per event (N1)
+        return None, False, None  # nothing to identify the session by: never create a record per event (N1)
     # D54: while `foreman open` is launching this project's orchestrator and has not recorded it yet, an unknown
     # session of that agent in the project IS that orchestrator: bind it as one (guarded), `open` absorbs it
     rec = sessions.create_session(
@@ -141,7 +161,7 @@ def _bind(agent, norm, env):
         state="starting")
     if pending:
         rec = sessions.update_session(rec["sid"], pending_orchestrator=True)
-    return rec, True, False
+    return rec, True, None
 
 
 def _role_of(rec):
@@ -313,6 +333,47 @@ def _foreign_prompt(rec, norm):
     return norm["prompt"] != rec.get("provisional_input")
 
 
+def _log_child(rec, agent, norm):
+    """One `child_session` event per child agent session id (not per hook)."""
+    asid = "%s:%s" % (agent, norm["agent_session_id"])
+    fresh = []
+
+    def apply(state):
+        state = state if isinstance(state, dict) else {}
+        if asid not in state:
+            fresh.append(True)
+            state[asid] = timeutil.now_iso()
+            for old in sorted(state, key=state.get)[:-CHILD_IDS_KEPT]:
+                del state[old]
+        return state
+
+    store.update_json(os.path.join(paths.home(), "child-sessions.json"), apply, default={})
+    if fresh:
+        _append_event({"kind": "child_session", "sid": rec["sid"], "project": rec.get("project"), "agent": agent,
+                       "agent_session_id": norm["agent_session_id"], "event": norm["native_event"],
+                       "source": norm["source"]})
+
+
+def _on_child(agent, ad, rec, norm):
+    """D59: a hook of a child session in the record's terminal. Nothing of the record changes, nothing is
+    claimed or injected; only PreToolUse is answered, guarded with the record's role (fail closed)."""
+    try:
+        _log_child(rec, agent, norm)
+    except Exception as exc:
+        _log_error(agent, "child", exc)
+    if norm["kind"] != "pre_tool" or _role_of(rec) != "orchestrator":
+        return {}
+    try:
+        blocked = guard.check_tool(norm, project=rec.get("project"))
+    except Exception:  # fail closed
+        blocked = guard.unverifiable(rec.get("project"))
+    if not blocked:
+        return {}
+    _append_event({"sid": rec["sid"], "project": rec.get("project"), "agent": agent, "event": norm["native_event"],
+                   "kind": "pre_tool", "tool": norm["tool_name"], "blocked": True, "child": True})
+    return ad.render_deny(blocked)
+
+
 def _process(agent, event, payload, env):
     try:
         ad = adapters.get(agent)
@@ -323,9 +384,11 @@ def _process(agent, event, payload, env):
         return {}
     os.makedirs(paths.sessions_dir(), exist_ok=True)
     with store.locked(os.path.join(paths.sessions_dir(), "_bind")):
-        rec, created, by_handle = _bind(agent, norm, env)
+        rec, created, how = _bind(agent, norm, env)
     if rec is None:
         return _unbound_pre_tool(ad, norm, env) if norm["kind"] == "pre_tool" else {}
+    if how == "child":
+        return _on_child(agent, ad, rec, norm)
     sid = rec["sid"]
     out, blocked = {}, None
     if norm["kind"] == "pre_tool" and _role_of(rec) == "orchestrator":
@@ -346,7 +409,7 @@ def _process(agent, event, payload, env):
         except Exception as exc:
             _log_error(agent, "confirm", exc)
 
-    upd = _field_updates(rec, norm, rebind=by_handle)
+    upd = _field_updates(rec, norm, rebind=how == "handle")
     _refresh_context(agent, rec, norm, upd)
     sessions.update_session(sid, **upd)
     rec = dict(rec, **upd)
