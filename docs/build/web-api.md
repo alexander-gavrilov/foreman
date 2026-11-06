@@ -43,7 +43,7 @@ The weekly window is always first in `windows`. A window with `used_pct: null` i
   "board": {"tasks": [{"id": "t1", "title": "...", "stage": "...", "owner": "fm-api (s-1a2b3c)", "next": "...",
             "links": [{"label": "PR #12", "url": "https://..."}], "status": "open|blocked|waiting|done"}]},
   "sessions": [{"sid": "s-1a2b3c", "title": "fm-api", "agent": "claude", "model": "sonnet-5-5", "role": "worker",
-                "owner": "orchestrator|user", "state": "busy", "lifecycle": "active|rotated|closed", "state_age": "3m", "context_tokens": 152000,
+                "owner": "orchestrator|user", "state": "busy", "lifecycle": "active|rotated", "live": true, "state_age": "3m", "context_tokens": 152000,
                 "context_level": "ok|warn|unknown", "replaces": null, "replaced_by": null}],
   "watches": [{"what": "watch loop", "status": "running, last pass 23s ago"}]
 }
@@ -51,7 +51,9 @@ The weekly window is always first in `windows`. A window with `used_pct: null` i
 Chat is the last 200 messages, oldest first. Only `question: true` messages carry `options`; the option
 "Ответить…" means "focus the reply box" (in Telegram its button only answers the callback "reply in the topic").
 Triage (`group`), `strip.sessions` and `strip.heaviest` consider only current sessions: closed and rotated-out ones
-are history (the `sessions` list still shows them with their `lifecycle`).
+are history. The `sessions` list holds the open sessions and the rotated ones (the old → new chain needs both
+ends); records with `lifecycle: closed` are left out. `live` marks the current ones; the UI counts those, so the
+drawer count equals `strip.sessions`, and shows the rest as history.
 
 Board tasks are exactly the records of `board.json`: ids are `t1`, `t2`, … (never reused). `status` is one of
 `open` (default; the UI treats it as active), `blocked`, `waiting`, `done`. `done` is only reachable through
