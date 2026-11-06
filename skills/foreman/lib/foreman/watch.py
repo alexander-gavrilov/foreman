@@ -19,6 +19,31 @@ _CONDITION_PREFIXES = (
 PROVISIONAL_GRACE_S = 45  # an agy continuation shows agent activity within seconds, or it was not taken
 
 
+HEARTBEAT_STALE_INTERVALS = 3
+
+
+def pid_alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass  # exists but belongs to someone else
+    return True
+
+
+def loop_status(hb):
+    """-> (running, age_s, interval_s). A heartbeat counts only while it is recent AND its process still runs: a
+    one-off `watch run` leaves a fresh heartbeat of a pid that has exited, which is not a running loop."""
+    hb = hb if isinstance(hb, dict) else {}
+    interval = hb.get("interval_s") if isinstance(hb.get("interval_s"), (int, float)) else 60
+    age = timeutil.age_seconds(hb.get("last_run_at"))
+    fresh = age is not None and age <= HEARTBEAT_STALE_INTERVALS * interval
+    return bool(fresh and pid_alive(hb.get("pid"))), age, interval
+
+
 def run_pass(interval_s=60):
     """One zero-token watch pass (architecture section 8). Returns a summary dict."""
     now_iso = timeutil.now_iso()

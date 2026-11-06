@@ -43,7 +43,8 @@ class IdleDayTest(AcceptanceCase):
             self.fm_ok("watch", "run")
         self.assertEqual(iso(self.clock), "2026-11-03T09:00:00Z")
         self.assert_nothing_spent()
-        self.assertIn("Loop: RUNNING", self.fm_ok("watch", "list"))
+        # the passes were one-off CLI runs: the heartbeat is there, but no loop process is running
+        self.assertIn("Loop: NOT RUNNING (last run", self.fm_ok("watch", "list"))
 
     def test_a_day_of_five_minute_ticks_sends_nothing(self):
         from foreman import paths, store, watch

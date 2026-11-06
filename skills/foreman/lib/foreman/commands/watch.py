@@ -59,19 +59,16 @@ def run(args):
 
     if subcmd == "list":
         hb = store.read_json(paths.watch_heartbeat_file(), default=None)
-        loop_running = False
-        loop_info = "NOT RUNNING"
-        if isinstance(hb, dict):
-            last_run = hb.get("last_run_at")
-            interval = hb.get("interval_s", 60)
-            pid = hb.get("pid")
-            age = timeutil.age_seconds(last_run)
-            if age is not None and age <= 3 * interval:
-                loop_running = True
-                loop_info = "RUNNING (pid %s, interval %ds, last run %s ago)" % (pid, interval, timeutil.humanize(age))
-            else:
-                age_str = ("%s ago" % timeutil.humanize(age)) if age is not None else "never"
-                loop_info = "NOT RUNNING (last run %s)" % age_str
+        loop_running, age, interval = watch.loop_status(hb)
+        pid = hb.get("pid") if isinstance(hb, dict) else None
+        if loop_running:
+            loop_info = "RUNNING (pid %s, interval %ds, last run %s ago)" % (pid, interval, timeutil.humanize(age))
+        elif isinstance(hb, dict):
+            age_str = ("%s ago" % timeutil.humanize(age)) if age is not None else "never"
+            loop_info = "NOT RUNNING (last run %s%s)" % (
+                age_str, "" if watch.pid_alive(pid) else "; its process %s has exited" % pid)
+        else:
+            loop_info = "NOT RUNNING"
 
         non_closed = [
             s for s in sessions.list_sessions()

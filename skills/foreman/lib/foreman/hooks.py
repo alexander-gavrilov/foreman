@@ -4,7 +4,7 @@ import json
 import os
 
 from foreman import (adapters, context, digest, guard, paths, projects, sessions, store, timeutil,
-                     wake)
+                     wake, watch)
 from foreman.messaging import HANDLE_ENV
 
 EVENTS_MAX_BYTES = 5 * 1024 * 1024
@@ -12,7 +12,6 @@ WAKE_EXCERPT = 200
 KEEP_OPEN_REASONS = ("clear", "resume")  # SessionEnd reasons after which the terminal keeps a session
 BUSY_KINDS = ("prompt", "pre_tool", "post_tool")
 PROVISIONAL_AGENTS = ("antigravity", "agy")
-HEARTBEAT_STALE_INTERVALS = 3
 WARN_EVERY_S = 600
 PAST_IDS_KEPT = 20
 # D59: only an agent whose SessionStart says why a new session id appeared can tell a successor (/clear, resume,
@@ -252,10 +251,8 @@ def _watch_warning(rec):
     """Log "watch loop not running" (at most every WARN_EVERY_S) when the heartbeat is missing or older than
     three intervals: nobody would deliver wakes to a busy orchestrator."""
     beat = store.read_json(paths.watch_heartbeat_file(), None)
-    beat = beat if isinstance(beat, dict) else {}
-    interval = beat.get("interval_s") if isinstance(beat.get("interval_s"), (int, float)) else 60
-    age = timeutil.age_seconds(beat.get("last_run_at"))
-    if age is not None and age <= HEARTBEAT_STALE_INTERVALS * interval:
+    running, _, _ = watch.loop_status(beat)
+    if running:
         return
     marker = os.path.join(paths.watch_dir(), "hook-warned.json")
     last = store.read_json(marker, None)
