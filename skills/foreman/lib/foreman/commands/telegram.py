@@ -1,7 +1,7 @@
 """foreman telegram: Bot API configuration, topic management and polling (spec §5.3, architecture §10)."""
 import sys
 
-from foreman import projects, telegram
+from foreman import config, projects, telegram
 
 NAME = "telegram"
 
@@ -80,6 +80,12 @@ def run(args):
     if subcmd == "set-chat":
         cid = telegram.set_chat(args.chat_id)
         print(f"telegram chat set to {cid}")
+        allowed = (config.load().get("telegram") or {}).get("allowed_user_ids") or []
+        if allowed:
+            print("allowed users: " + ", ".join(str(u) for u in allowed))
+        else:
+            print("no user found yet: send a message in the group and run set-chat again, "
+                  "or use `foreman telegram allow-user <id>`")
         return 0
 
     if subcmd == "allow-user":

@@ -31,6 +31,24 @@ def set_token(token):
     return token
 
 
+def _last_rejected_user(cid):
+    """The user id of the newest update the poller rejected from chat cid, or None."""
+    try:
+        with open(paths.events_file(), encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("kind") == "telegram_unauthorized" and str(event.get("chat_id")) == str(cid):
+            if event.get("user_id"):
+                return event["user_id"]
+    return None
+
+
 def set_chat(chat_id):
     """Store the supergroup chat_id in config.json and record user from setup message if available."""
     path = paths.config_file()
@@ -55,6 +73,14 @@ def set_chat(chat_id):
                             break
         except Exception:
             pass
+
+    # A running daemon consumes updates, so the setup message may only exist as a
+    # rejection in events.jsonl. Used only while nobody is allowed yet, so a
+    # stranger rejected later can never be added by re-running set-chat.
+    if not found_users and not (config.load().get("telegram") or {}).get("allowed_user_ids"):
+        rejected = _last_rejected_user(cid)
+        if rejected is not None:
+            found_users.append(rejected)
 
     def apply(cfg):
         cfg = cfg if isinstance(cfg, dict) else {}

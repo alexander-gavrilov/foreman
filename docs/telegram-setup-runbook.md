@@ -119,6 +119,7 @@ On the machine where foreman is installed:
    ```
    This stores `telegram.chat_id` in `$FOREMAN_HOME/config.json`.
    It automatically inspects recent updates to record the user ID who sent the setup message into `telegram.allowed_user_ids`.
+   With the daemon already running it consumes those updates; `set-chat` then finds the sender among the updates the daemon rejected for this chat (only while no user is allowed yet). It prints who is allowed, or what to do if nobody was found; send a message and run it again.
 
 3. **Authorize Additional Users (Optional)**:
    Foreman strictly filters inbound updates: messages and button callbacks are accepted **only** from the configured `chat_id` AND user IDs listed in `telegram.allowed_user_ids`. To allow another user:

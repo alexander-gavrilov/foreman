@@ -1,4 +1,5 @@
 """Unit and integration tests for Telegram bot operations (owner: WP6)."""
+import json
 import os
 import stat
 import unittest
@@ -353,6 +354,32 @@ class TelegramTestCase(ForemanTestCase):
 
         cfg = config.load()
         self.assertIn(444555, [int(u) for u in cfg["telegram"]["allowed_user_ids"]])
+
+    def _unauthorized_event(self, chat_id, user_id):
+        with open(paths.events_file(), "a") as f:
+            f.write(json.dumps({"kind": "telegram_unauthorized", "chat_id": chat_id,
+                                "user_id": user_id}) + "\n")
+
+    def test_set_chat_finds_the_user_the_running_daemon_rejected(self):
+        """The daemon's poller consumes updates, so getUpdates here sees nothing."""
+        self.write_config({"telegram": {"allowed_user_ids": []}})
+        self._unauthorized_event(-100111, 111)
+        self._unauthorized_event(-100888999000, 777)
+        telegram.set_chat("-100888999000")
+        cfg = config.load()
+        self.assertEqual(cfg["telegram"]["allowed_user_ids"], [777])
+
+    def test_set_chat_ignores_rejected_users_of_other_chats(self):
+        self.write_config({"telegram": {"allowed_user_ids": []}})
+        self._unauthorized_event(-100111, 111)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [])
+
+    def test_set_chat_leaves_existing_allowed_users_alone_and_adds_nobody(self):
+        self.write_config({"telegram": {"allowed_user_ids": [5]}})
+        self._unauthorized_event(-100888999000, 777)
+        telegram.set_chat("-100888999000")
+        self.assertEqual(config.load()["telegram"]["allowed_user_ids"], [5])
 
     def test_set_chat_records_allowed_user_from_setup_message(self):
         # User 888999 sends setup message in the chat
