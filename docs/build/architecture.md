@@ -297,15 +297,20 @@ a quoted reply finds its question). **Nobody waits on Telegram:** a hook never t
 (and `foreman web`) drain it on a thread every ~2 s; a CLI command that queued a row and finds no fresh daemon
 heartbeat (`telegram-outbox-drainer.json`) and no running drainer starts ONE detached, bounded
 (`FOREMAN_OUTBOX_BUDGET_S`, default 120 s) `foreman outbox drain` and exits at once (`FOREMAN_OUTBOX_SPAWN=0` turns
-that off). One drainer at a time (non-blocking flock on `telegram-outbox.jsonl.drain`); a drainer that finishes
-looks at the file again after it released the lock, so a row queued meanwhile is not stranded. **At least once:** a
+that off). One sender at a time (non-blocking flock on `telegram-outbox.jsonl.drain`) and one detached drainer
+process at a time (`.alive`, held for its whole life, also while it naps through a backoff longer than its budget).
+Before it exits a detached drainer makes one last pass; if rows remain and no daemon or other drainer is on them it
+starts ONE successor (`FOREMAN_OUTBOX_GEN` counts the chain, at most 40; the 1 h row expiry ends it anyway), so a
+row queued meanwhile is never stranded. The spawn passes `FOREMAN_HOME` explicitly. **At least once:** a
 row is removed only after the Bot API answered ok, so a message Telegram accepted but whose answer was lost (a read
 timeout) is sent again; a rare duplicate is accepted, a lost message is not. `attempts`, `next_at` (no earlier than
 the longest a send can take) and the verdict are written BEFORE each send, so a killed drainer cannot cause an
 immediate resend or hide a failure (the next drainer logs `mirror_error`: previous attempt did not finish). A
 failure is logged as `mirror_error` with the API description (never the token) and retried with backoff 1, 2, 5, 15,
-30, 60 s (a 429's `retry_after` honoured); a permanent 4xx other than 429 drops the row at once (`mirror_dropped`
-with the API text); rows older than 1 hour are dropped (`mirror_dropped`). Order is kept per project; a project in
+30, 60 s (a 429's `retry_after` honoured); only a payload-level 400 (empty, too long, unparsable text) drops the row at once (`mirror_dropped`
+with the API text); 401, 403, 404, 409, 400 "chat not found" and 400 "message thread not found" are retried with the
+same backoff until the row expires (the user fixes the token or permission; nothing is wiped meanwhile), and a
+thread-not-found also forgets the project's stored topic id, so the next attempt creates a new topic; rows older than 1 hour are dropped (`mirror_dropped`). Order is kept per project; a project in
 backoff does not block another. The rate-limit verdict of a mirror row (send / pointer / drop) is decided once per
 row and stored in it, so retries consume no slot and the pointer row survives. `watch list` reports the loop as running
 only while the heartbeat's pid is alive (a one-off `watch run` is not a loop). `telegram check` fails while

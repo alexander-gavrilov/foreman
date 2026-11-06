@@ -191,10 +191,12 @@ def _adopt(args):
         upd = {"role": "orchestrator", "owner": "user", "agent": agent}
         if args.title:
             upd["title"] = args.title
-        if rec.get("agent_session_id"):
+        if rec.get("agent_session_id") or rec.get("past_agent_session_ids"):
             # D59: an agent restarted by hand in this terminal looks like a child session until the record forgets the
-            # old id; the next hook from the terminal then binds to whatever session runs there now
+            # old id; the next hook from the terminal then binds to whatever session runs there now (also a resumed
+            # session that is listed among the past ids: they are forgotten too, or the rebind would skip it)
             upd["agent_session_id"] = None
+            upd["past_agent_session_ids"] = []
             upd["state"] = "idle" if info.idle is not False else "busy"
             rebind = True
         rec = sessions.update_session(rec["sid"], **upd)

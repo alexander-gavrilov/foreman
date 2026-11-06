@@ -331,12 +331,12 @@ class PoisonRowTest(OutboxCase):
         self.assertIn("400", drops[0]["reason"])
         self.assertIn("non-empty", drops[0]["reason"])
 
-    def test_403_is_permanent_too(self):
+    def test_403_is_retried_not_dropped(self):  # review 7 N1: a fixable cause must not wipe the outbox
         self.fail_sends(1, status=403, description="Forbidden: bot was kicked")
         messaging.say(self.slug, "x")
         outbox.drain()
-        self.assertEqual(outbox.pending(), [])
-        self.assertEqual(len(self.events("mirror_dropped")), 1)
+        self.assertEqual(len(outbox.pending()), 1)
+        self.assertEqual(self.events("mirror_dropped"), [])
 
     def test_429_and_5xx_are_still_retried(self):
         for status in (429, 500, 502):

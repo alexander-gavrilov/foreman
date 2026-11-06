@@ -90,10 +90,36 @@ def row_verdict(row):
     return _mirror_slot(row.get("project"))
 
 
+_FIXABLE_4XX = (401, 403, 404, 409)  # bad/rotated token, bot lacks permission, wrong endpoint, a second poller
+_TOPIC_GONE = ("message thread not found", "topic_deleted")  # the project's topic was deleted in Telegram
+_FIXABLE_400 = ("chat not found",) + _TOPIC_GONE
+
+
+def _topic_gone(res):
+    return any(s in str(res.get("description") or "").lower() for s in _TOPIC_GONE)
+
+
 def _permanent(res):
-    """True for a Bot API answer that no retry can change: a 4xx other than 429 (bad request, forbidden, ...)."""
+    """True for a Bot API answer about THIS message that no retry can change: a payload-level 400 (empty text,
+    too long, unparsable) or another 4xx that is not 429. A 401/403/404/409 and a 400 "chat not found" / "message
+    thread not found" fail every row alike and are fixed by the user (token, permission, topic): they are retried
+    with backoff until the row expires, so the outbox is not wiped before the user can act."""
     code = res.get("error_code")
-    return isinstance(code, int) and 400 <= code < 500 and code != 429
+    if not (isinstance(code, int) and 400 <= code < 500) or code == 429 or code in _FIXABLE_4XX:
+        return False
+    return not (code == 400 and any(s in str(res.get("description") or "").lower() for s in _FIXABLE_400))
+
+
+def _forget_topic(project, thread_id):
+    """The topic `thread_id` of `project` no longer exists: forget its id (unless somebody replaced it meanwhile),
+    so the next attempt creates a fresh topic."""
+    try:
+        proj = projects.load_project(project)
+        if proj and thread_id is not None and str(proj.get("telegram_topic_id")) == str(thread_id):
+            proj["telegram_topic_id"] = None
+            projects.save_project(proj)
+    except Exception:
+        pass
 
 
 def send_mirror_row(row):
@@ -135,6 +161,8 @@ def send_mirror_row(row):
             return out
         code = ("%s: " % res["error_code"]) if res.get("error_code") else ""
         desc = "%s%s" % (code, res.get("description") or "sendMessage failed")
+        if thread_id is not None and _topic_gone(res):
+            _forget_topic(project, thread_id)
         if _permanent(res):
             out.update(ok=False, drop="refused by Telegram, not retried: " + desc)
             return out

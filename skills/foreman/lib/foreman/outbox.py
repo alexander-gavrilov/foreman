@@ -29,6 +29,7 @@ BACKOFF_S = (1, 2, 5, 15, 30, 60)  # after the n-th failed attempt; the last val
 DRAIN_INTERVAL_S = 2.0
 DETACHED_BUDGET_S = 120.0  # a detached drainer works at most this long, then leaves the rest to the next one
 DAEMON_FRESH_S = 15.0
+MAX_SUCCESSORS = 40  # a chain of detached drainers ends here (40 x 120 s is longer than a row lives)
 HEARTBEAT_EVERY_S = 5.0
 SEND_WORST_S = 12.0  # topic creation + send, each bounded by notify.SEND_TIMEOUT_S: the least a send can take to fail
 _now = time.time
@@ -80,9 +81,9 @@ def _clean(text):
 
 
 @contextlib.contextmanager
-def _drainer_lock():
-    """Non-blocking exclusive lock: yields True if this process is the only drainer, False otherwise."""
-    fd = os.open(path() + ".drain", os.O_RDWR | os.O_CREAT, 0o600)
+def _flock(suffix):
+    """Non-blocking exclusive lock on `telegram-outbox.jsonl<suffix>`: yields True if this process got it."""
+    fd = os.open(path() + suffix, os.O_RDWR | os.O_CREAT, 0o600)
     got = False
     try:
         try:
@@ -97,6 +98,17 @@ def _drainer_lock():
                 fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
+
+
+def _drainer_lock():
+    """Held while rows are being sent (a pass of `drain`): at most one sender at a time."""
+    return _flock(".drain")
+
+
+def _alive_lock():
+    """Held for the whole life of a detached drainer process, also while it naps between passes: at most one
+    detached drainer lives at a time, so a chain of successors can never pile up."""
+    return _flock(".alive")
 
 
 def _update(row_id, fields=None):
@@ -271,10 +283,9 @@ def start_drain_thread(stop_event, interval=None):
     return t
 
 
-def drainer_running():
-    """True if another process holds the drainer lock right now."""
+def _locked(suffix):
     try:
-        fd = os.open(path() + ".drain", os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(path() + suffix, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
         return False
     try:
@@ -288,19 +299,50 @@ def drainer_running():
         os.close(fd)
 
 
+def drainer_running():
+    """True if another process is draining or is a live detached drainer."""
+    return _locked(".drain") or _locked(".alive")
+
+
+def _generation():
+    try:
+        return int(os.environ.get("FOREMAN_OUTBOX_GEN") or 0)
+    except ValueError:
+        return 0
+
+
+def _spawning_allowed():
+    return os.environ.get("FOREMAN_OUTBOX_SPAWN") != "0"
+
+
 def drain_detached(budget_s=DETACHED_BUDGET_S):
-    """The body of `foreman outbox drain`: work through the file, sleeping through backoffs, for at most
-    `budget_s`. If another drainer holds the lock, leave at once: it looks at the file again after it lets go."""
+    """The body of `foreman outbox drain`: work through the file for at most `budget_s`, sleeping through
+    backoffs (also those longer than the budget: it naps in 1 s steps, never spins). It is the only detached drainer
+    alive (`_alive_lock`); if a daemon or another drainer works on the file it leaves at once. Before it leaves it
+    makes one last pass, so a row queued while it was finishing is sent; if rows remain and nobody else is on them,
+    it starts ONE successor (after letting go of the alive lock; at most MAX_SUCCESSORS in a chain, and a row
+    older than an hour is dropped, which ends the chain)."""
     started = time.monotonic()
-    while True:
-        left = budget_s - (time.monotonic() - started)
-        if left <= 0 or not os.path.exists(path()):
+    with _alive_lock() as alive:
+        if not alive:
             return
-        if drain(budget_s=left, wait=True).get("busy"):
+        while True:
+            left = budget_s - (time.monotonic() - started)
+            if left <= 0 or not os.path.exists(path()):
+                break
+            if drain(budget_s=left, wait=True).get("busy"):
+                return  # a daemon drains
+            left = budget_s - (time.monotonic() - started)
+            if left <= 0 or not pending():
+                break
+            if not has_work(within_s=0.0):
+                time.sleep(min(1.0, max(0.0, left)))  # everything is backing off (maybe beyond the budget)
+        if os.path.exists(path()) and drain(budget_s=SEND_WORST_S, wait=False).get("busy"):
             return
-        left = budget_s - (time.monotonic() - started)
-        if left <= 0 or not has_work(within_s=left):
-            return
+    if os.path.exists(path()) and pending() and not daemon_active() and not drainer_running():
+        gen = _generation()
+        if gen < MAX_SUCCESSORS and _spawning_allowed():
+            spawn_drainer(generation=gen + 1)
 
 
 def _launcher_argv():
@@ -312,13 +354,16 @@ def _launcher_argv():
             "sys.exit(main(sys.argv[1:]))" % os.path.dirname(here)]
 
 
-def spawn_drainer():
-    """Start a detached `foreman outbox drain` (its own session, no inherited streams) and return at once."""
+def spawn_drainer(generation=0):
+    """Start a detached `foreman outbox drain` (its own session, no inherited streams) and return at once. The state
+    root travels explicitly in FOREMAN_HOME (a pinned or derived home would otherwise be lost); `generation`
+    counts the successors in a chain."""
     argv = _launcher_argv() + ["outbox", "drain"]
     try:
         os.makedirs(paths.home(), exist_ok=True)
+        env = dict(os.environ, FOREMAN_HOME=paths.home(), FOREMAN_OUTBOX_GEN=str(generation))
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         close_fds=True, start_new_session=True, cwd=paths.home())
+                         close_fds=True, start_new_session=True, cwd=paths.home(), env=env)
         return True
     except Exception as exc:
         _log("mirror_error", error="could not start the outbox drainer: %s: %s" % (type(exc).__name__, exc))
@@ -330,7 +375,7 @@ def kick():
     another drainer is on it, start a detached one. Costs a fork, never waits. $FOREMAN_OUTBOX_SPAWN=0 turns it
     off (tests; rows then wait for the daemon). -> True if one was started."""
     try:
-        if os.environ.get("FOREMAN_OUTBOX_SPAWN") == "0":
+        if not _spawning_allowed():
             return False
         if not _queued_here or not os.path.exists(path()) or daemon_active() or drainer_running():
             return False

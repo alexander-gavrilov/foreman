@@ -193,15 +193,21 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   (review 6 measured 3.7 s per hook with a blackholed Telegram under the first design, an exit flush). One drainer at
   a time; a row leaves the file only after Bot API ok; `attempts`/`next_at` are persisted BEFORE each send. Failures
   are retried with backoff and logged with the API description, 429 `retry_after` honoured; a permanent 4xx other
-  than 429 drops the row at once with an event; rows over 1 hour are dropped with an event; per-project order; the
+  than 429 drops the row at once with an event (round 8 narrowed this, see below); rows over 1 hour are dropped with an event; per-project order; the
   rate-limit verdict of mirror rows is stored in the row; notify rows are never rate limited and keep the Telegram →
   chat message id mapping. — **Delivery is at-least-once:** a real send in the live test hit "The read operation
   timed out", so Telegram may have accepted a message we then retry. A rare duplicate is accepted, a lost message is
   not. Live run that led here: the orchestrator's `foreman say` was in the chat but never reached the topic and
   nothing was logged: the mirror thread died with the CLI, and a Bot API failure returned `ok: False` without
-  `error`. Known gap: a deleted topic (400 thread not found) drops its rows one by one; the project keeps the dead
-  topic id. `watch list` and the web UI count the loop as running only while the heartbeat's pid is alive, and a
-  one-off `watch run` no longer writes the heartbeat.
+  `error`. `watch list` and the web UI count the loop as running only while the heartbeat's pid is alive, and a
+  one-off `watch run` no longer writes the heartbeat. — **Round 8 (review 7):** 401/403/404/409 and 400 "chat not
+  found" / "message thread not found" fail every row alike and are fixable by the user, so they keep their rows and
+  retry with backoff until the 1 h expiry (logged); only payload-level 400s drop at once. On thread-not-found the
+  project's stored topic id is forgotten (if unchanged meanwhile) and the next attempt creates a new topic. A detached
+  drainer holds an `.alive` lock for its life (one at a time), naps in 1 s steps instead of leaving when every row
+  backs off beyond its budget, makes one last pass before exit and starts one successor if rows remain and no daemon
+  or drainer is on them (chain capped at 40, `FOREMAN_OUTBOX_GEN`). `spawn_drainer` passes `FOREMAN_HOME`.
+  `orchestrator adopt` also clears `past_agent_session_ids`, so a resumed past session rebinds.
 - D61 · `telegram set-chat` allows a user only while nobody is allowed yet, on both of its paths (a pending update, or a
   `telegram_unauthorized` event of the running daemon). Bots never count, only events of the last 24 hours count, and
   with more than one distinct human candidate nobody is added: the command prints their ids and first names for
