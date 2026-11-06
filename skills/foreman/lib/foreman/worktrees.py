@@ -55,10 +55,11 @@ def create(project, title, agent):
     """New worktree + branch for a worker of `project` (a git repo root). Returns {"path", "branch"}.
     WorktreeError when anything fails; nothing is left behind then."""
     slug = re.sub(r"[^a-z0-9]+", "-", (title or "worker").lower()).strip("-")[:30] or "worker"
-    name = "%s-%s" % (slug, secrets.token_hex(2))
-    path = os.path.join(os.path.realpath(paths.worktrees_dir(project["slug"])), name)
-    branch = "foreman-" + name
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    root = os.path.realpath(paths.worktrees_dir(project["slug"]))
+    os.makedirs(root, exist_ok=True)
+    path, branch = _claim(project["path"], root, slug)
+    # From here on the folder and the branch name are ours alone, so cleaning up after a failure cannot touch
+    # anything that belongs to another worker, or a branch kept from an earlier one.
     try:
         _git(project["path"], "worktree", "add", "-q", "-b", branch, path)
         write_hook_files(project["path"], path, agent)
@@ -66,6 +67,27 @@ def create(project, title, agent):
         discard(project["path"], path, branch)
         raise WorktreeError(str(exc).strip().splitlines()[0] if str(exc).strip() else "git failed")
     return {"path": path, "branch": branch}
+
+
+def _claim(project_path, root, slug, attempts=20):
+    """Pick a worktree name nobody uses: neither a folder under `root` nor a branch of that name (a branch kept from
+    a closed session counts). The folder is made here, atomically, so two opens racing for one name cannot both
+    get it; `git worktree add` accepts the empty folder. Returns (path, branch)."""
+    for _ in range(attempts):
+        name = "%s-%s" % (slug, secrets.token_hex(2))
+        path, branch = os.path.join(root, name), "foreman-" + name
+        try:
+            os.mkdir(path)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise WorktreeError(str(exc))
+        try:
+            _git(project_path, "rev-parse", "--verify", "-q", "refs/heads/" + branch)
+        except WorktreeError:  # no such branch: the name is free
+            return path, branch
+        os.rmdir(path)
+    raise WorktreeError("no free worktree name for %r after %d tries" % (slug, attempts))
 
 
 def discard(project_path, path, branch):

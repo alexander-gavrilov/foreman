@@ -145,6 +145,59 @@ class OpenWorktreeTest(WorktreeCase):
         self.assertEqual(self.worktrees(), [self.repo])
         self.assertEqual(git(self.repo, "branch", "--format=%(refname:short)"), "main")
 
+    def _forced_suffixes(self, *suffixes):
+        """Make the 4 hex digits of a worktree name come from `suffixes` (the last one repeats)."""
+        from unittest import mock
+        from foreman import worktrees
+        it = iter(suffixes)
+        last = []
+
+        def token_hex(_n):
+            last[:] = [next(it, last[0] if last else suffixes[-1])]
+            return last[0]
+        # replace the module's reference only: patching secrets.token_hex itself would reach session ids too
+        return mock.patch.object(worktrees, "secrets", mock.Mock(token_hex=token_hex))
+
+    def test_a_name_collision_with_an_open_worker_never_touches_that_worker(self):
+        with self._forced_suffixes("abcd"):
+            a = self.open_one()
+            with open(os.path.join(a["cwd"], "wip.txt"), "w") as f:
+                f.write("work in progress\n")
+            git(a["cwd"], "add", "wip.txt")
+            git(a["cwd"], "commit", "-q", "-m", "A's commit")
+            with open(os.path.join(a["cwd"], "unsaved.txt"), "w") as f:
+                f.write("uncommitted\n")
+            head = git(a["cwd"], "rev-parse", "HEAD")
+            code, _, err = self.open()  # same title, same suffix every time: no free name
+        self.assertEqual(code, 1)
+        self.assertTrue(os.path.isfile(os.path.join(a["cwd"], "unsaved.txt")), err)
+        self.assertEqual(git(a["cwd"], "rev-parse", "HEAD"), head)
+        self.assertEqual(git(self.repo, "rev-parse", a["worktree"]["branch"]), head)
+        self.assertIn(a["cwd"], self.worktrees())
+        self.assertEqual(len(self.sessions()), 1)
+
+    def test_a_name_collision_picks_another_name(self):
+        with self._forced_suffixes("abcd", "abcd", "ef01"):
+            a = self.open_one()
+            code, _, err = self.open()
+        self.assertEqual(code, 0, err)
+        a2, b = sorted(self.sessions(), key=lambda r: r["worktree"]["branch"])
+        self.assertEqual(a["worktree"]["branch"], "foreman-fm-api-abcd")
+        self.assertEqual(b["worktree"]["branch"], "foreman-fm-api-ef01")
+        self.assertEqual(len(self.worktrees()), 3)
+
+    def test_a_name_collision_with_a_kept_branch_never_deletes_it(self):
+        with self._forced_suffixes("abcd"):
+            a = self.open_one()
+            git(a["cwd"], "commit", "-q", "--allow-empty", "-m", "unmerged work")
+            head = git(a["cwd"], "rev-parse", "HEAD")
+            code, out, err = run_main("close", "--project", self.slug, "fm-api")
+            self.assertEqual(code, 0, err)
+            self.assertIn(a["worktree"]["branch"], git(self.repo, "branch", "--format=%(refname:short)").split())
+            code, _, err = self.open()  # the kept branch has the same name
+        self.assertEqual(code, 1)
+        self.assertEqual(git(self.repo, "rev-parse", a["worktree"]["branch"]), head)
+
     def test_a_project_in_a_repository_subfolder_says_it_gets_no_worktree(self):
         sub = os.path.join(self.repo, "pkg")
         os.makedirs(sub)
