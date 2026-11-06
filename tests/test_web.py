@@ -184,7 +184,9 @@ class StateViewTest(ForemanTestCase):
         sessions.update_session(orch["sid"], context_tokens=100)
         detail = state_view.build_project("p-closed")
         self.assertEqual(detail["strip"]["heaviest"]["context_tokens"], 100)
-        self.assertEqual(len(detail["sessions"]), 3)  # the drawer still lists all of them
+        # D62-round: the list has the open sessions and the rotated ones; the closed record is left out
+        self.assertEqual(sorted(d["lifecycle"] for d in detail["sessions"]), ["active", "rotated"])
+        self.assertEqual(sum(1 for d in detail["sessions"] if d["live"]), detail["strip"]["sessions"])
 
     def test_strip_of_project_with_only_closed_sessions(self):
         from foreman import sessions

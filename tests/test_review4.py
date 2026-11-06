@@ -131,4 +131,6 @@ class N2DigestRowForgeryTest(RuntimeCase):
     def test_real_user_rows_are_unchanged(self):
         from foreman import digest
         row = {"from": "user", "kind": "user", "channel": "telegram", "text": "Да"}
-        self.assertIn("- USER (telegram): Да", digest.format_digest([row]))
+        out = digest.format_digest([row])
+        self.assertEqual(out.split("\n")[:2], ["[foreman · message from your user via telegram · reply with "
+                                                "foreman say]", "Да"])

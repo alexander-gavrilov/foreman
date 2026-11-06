@@ -2028,6 +2028,7 @@
           owner: s.owner,
           state: s.state,
           lifecycle: s.lifecycle,
+          live: s.live,
           context_tokens: s.context_tokens,
           context_level: s.context_level,
           replaces: s.replaces,
@@ -2523,10 +2524,12 @@
 
     const tasks = (proj.board && Array.isArray(proj.board.tasks)) ? proj.board.tasks : [];
     const sessions = Array.isArray(proj.sessions) ? proj.sessions : [];
+    // the count is the live sessions (the same number as the header); rotated and vanished ones are listed as history
+    const liveSessions = sessions.filter((s) => s.live !== false);
     const watches = Array.isArray(proj.watches) ? proj.watches : [];
 
     tabCountBoard.textContent = '(' + tasks.length + ')';
-    tabCountSessions.textContent = '(' + sessions.length + ')';
+    tabCountSessions.textContent = '(' + liveSessions.length + ')';
 
     // Board Tab
     let boardHtml = '<div class="drawer-sec-label"><span>Доска задач (' + tasks.length + ')</span><span>Этап</span></div>';
@@ -2575,7 +2578,7 @@
     const softTarget = (appState.state && appState.state.thresholds && appState.state.thresholds.context_soft) || 150000;
     const softLabel = Math.round(softTarget / 1000) + 'k';
 
-    let sessHtml = '<div class="drawer-sec-label"><span>Сессии (' + sessions.length + ')</span><span>Ориентир ~' + softLabel + '</span></div>';
+    let sessHtml = '<div class="drawer-sec-label"><span>Сессии (' + liveSessions.length + (sessions.length > liveSessions.length ? ' · история ' + (sessions.length - liveSessions.length) : '') + ')</span><span>Ориентир ~' + softLabel + '</span></div>';
     if (sessions.length === 0) {
       sessHtml += '<div class="d-card"><div class="d-card-sub">Активных сессий нет.</div></div>';
     } else {

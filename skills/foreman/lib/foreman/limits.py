@@ -96,10 +96,24 @@ def parse_antigravity_statusline(payload):
                 rem = float(entry["remaining_fraction"])
                 used_pct = int(round(100.0 * (1.0 - rem)))
                 resets_at = _to_iso(entry.get("reset_time"))
+                if _unrestarted(entry, resets_at):
+                    resets_at = None
                 windows[target_k] = {"used_pct": used_pct, "resets_at": resets_at}
             except (ValueError, TypeError):
                 continue
     return windows
+
+
+def _unrestarted(entry, resets_at):
+    """agy keeps sending the `reset_time` of a window it has not restarted: already in the past, with
+    reset_in_seconds 0. That is no sign that the reading is old (live: the digest showed '?' for a 24-minute-old
+    reading), so it is not stored; the reading then ages by its observed_at like one without a reset time."""
+    try:
+        left = float(entry.get("reset_in_seconds"))
+    except (ValueError, TypeError):
+        return False
+    when = timeutil.parse(resets_at)
+    return left <= 0 and when is not None and when <= timeutil.now()
 
 
 def _newest_observed(windows):

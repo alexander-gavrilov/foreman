@@ -276,6 +276,8 @@ def build_project(slug):
     live_count = 0
 
     for s in proj_sessions:
+        if not sessions.is_open(s):
+            continue  # a closed record is history: not listed (rotated ones stay, old -> new needs them)
         tokens = s.get("context_tokens")
         lvl = _context_level(tokens, context_soft)
         age = _format_age(s.get("state_since"), ref_now)
@@ -296,6 +298,7 @@ def build_project(slug):
             "owner": s.get("owner"),
             "state": s.get("state"),
             "lifecycle": lifecycle,
+            "live": is_live,
             "state_age": age,
             "context_tokens": tokens,
             "context_level": lvl,
@@ -312,7 +315,7 @@ def build_project(slug):
             }
 
     # If no tokens known, heaviest can still show a live session with unknown level
-    live_formatted = [f for f, s in zip(formatted_sessions, proj_sessions) if sessions.is_live(s)]
+    live_formatted = [f for f in formatted_sessions if f["live"]]
     if heaviest is None and live_formatted:
         first = live_formatted[0]
         heaviest = {

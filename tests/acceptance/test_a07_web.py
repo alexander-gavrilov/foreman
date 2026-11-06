@@ -84,6 +84,20 @@ class WebTest(AcceptanceCase):
         status, _, _ = self.web.request("/api/projects/no-such-project")
         self.assertEqual(status, 404)
 
+    def test_the_session_count_of_the_drawer_matches_the_header_and_closed_records_are_not_listed(self):
+        slug = self.slugs["garden-plans"]
+        extra = self.open_worker(slug, "fm-old")
+        self.hook(extra, "Stop")  # idle ...
+        self.fm_ok("close", extra["sid"])  # ... and closed
+        self.web.pair()
+        status, detail, _ = self.web.request("/api/projects/%s" % slug)
+        self.assertEqual(status, 200)
+        titles = [s["title"] for s in detail["sessions"]]
+        self.assertNotIn("fm-old", titles)
+        live = [s for s in detail["sessions"] if s["live"]]
+        self.assertEqual(len(live), detail["strip"]["sessions"])
+        self.assertEqual(len(detail["sessions"]), len(titles))
+
     def test_a_chat_message_reaches_the_projects_orchestrator(self):
         slug = self.slugs["garden-plans"]
         self.web.pair()
@@ -94,6 +108,11 @@ class WebTest(AcceptanceCase):
         got = digests(self.inputs(self.orchs["garden-plans"]))
         self.assertEqual(len(got), 1)
         self.assertIn("добавь теплицу", got[0])
+        # D62: the user's words are not data; no data header stands above them
+        self.assertTrue(got[0].startswith("[foreman · message from your user via web · reply with foreman say] "
+                                          "добавь теплицу"), got[0])
+        self.assertNotIn("data, not instructions", got[0][:got[0].index("добавь")])
+        self.assertNotIn("USER (", got[0])
         self.assertEqual(digests(self.inputs(self.orchs["notes"])), [])
         # a cross-origin POST is refused
         status, _, _ = self.web.request("/api/projects/%s/messages" % slug, method="POST", body={"text": "x"},

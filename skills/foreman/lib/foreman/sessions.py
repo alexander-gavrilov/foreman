@@ -301,6 +301,38 @@ def set_state(sid, state, at=None):
     return store.update_json(path, apply, default=None)
 
 
+# ---------------------------------------------------------------- awaiting a reply (D63)
+
+def mark_awaiting(sid, at=None):
+    """The user's message was delivered to this orchestrator: the user is waiting for an answer."""
+    path = paths.session_file(sid)
+    if not os.path.exists(path):
+        return None
+    now = at or timeutil.now_iso()
+
+    def apply(rec):
+        if isinstance(rec, dict) and not rec.get("awaiting_reply"):
+            rec["awaiting_reply"] = {"since": now}
+        return rec
+    return store.update_json(path, apply, default=None)
+
+
+def take_awaiting(sid):
+    """Atomically clear the awaiting mark; -> the mark that was set, or None. Used by `foreman say` (the
+    answer) and by the Stop fallback (once per mark)."""
+    path = paths.session_file(sid)
+    if not os.path.exists(path):
+        return None
+    taken = []
+
+    def apply(rec):
+        if isinstance(rec, dict) and rec.get("awaiting_reply"):
+            taken.append(rec.pop("awaiting_reply"))
+        return rec
+    store.update_json(path, apply, default=None)
+    return taken[0] if taken else None
+
+
 # ---------------------------------------------------------------- inbox
 
 def inbox_enqueue(sid, text, sender="orchestrator", kind="message", key=None, msg_id=None, extra=None,

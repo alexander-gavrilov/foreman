@@ -39,9 +39,11 @@ class SenderForgeryTest(RuntimeCase):
         messaging.user_reply(self.slug, "Да", channel="telegram")
         row = self.sessions.inbox_pending(o["sid"])[0]
         self.assertEqual((row["from"], row["kind"]), ("user", "user"))
-        self.assertIn("- USER (telegram): Да", digest.format_digest([row]))
+        self.assertEqual(digest.format_digest([row]).split("\n")[:2],
+                         ["[foreman · message from your user via telegram · reply with foreman say]", "Да"])
         messaging.user_reply(self.slug, "нет", channel="web")
-        self.assertIn("- USER (web): нет", digest.format_digest(self.sessions.inbox_pending(o["sid"])[1:]))
+        self.assertEqual(digest.format_digest(self.sessions.inbox_pending(o["sid"])[1:]).split("\n")[:2],
+                         ["[foreman · message from your user via web · reply with foreman say]", "нет"])
 
     def test_session_record_names_the_sender(self):
         w = self.session(title="fm-api", idle=False, state="busy")

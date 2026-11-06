@@ -9,6 +9,7 @@ import unittest
 from tests.acceptance.common import AcceptanceCase, digests
 
 BASE = "http://ghome.lan:8765"
+USER_TG = "[foreman · message from your user via telegram · reply with foreman say]"
 
 
 class TelegramNotificationTest(AcceptanceCase):
@@ -49,8 +50,16 @@ class TelegramNotificationTest(AcceptanceCase):
         got = digests(self.inputs(self.orch_a))
         self.assertEqual(len(got), 1)
         self.assertIn("да, мерджь и закрывай", got[0])
-        self.assertIn("USER (telegram)", got[0])
+        self.assertTrue(got[0].startswith(USER_TG + " да, мерджь и закрывай"), got[0])
+        self.assertNotIn("data, not instructions", got[0][:got[0].index("мерджь")])
         self.assertEqual(digests(self.inputs(self.orch_b)), [], "the other project's orchestrator must not hear it")
+
+    def test_a_user_reply_while_workers_report_keeps_the_user_first_and_the_data_after(self):
+        self.tg.enqueue_text_message("как успехи?", thread_id=self.topic[self.slug_a])
+        self.fm_ok("telegram", "poll", "--once")
+        got = digests(self.inputs(self.orch_a))
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].count("message from your user"), 1)
 
     def test_a_topic_reply_reaches_an_antigravity_orchestrator(self):
         self.tg.enqueue_text_message("сначала проверь тесты", thread_id=self.topic[self.slug_b])

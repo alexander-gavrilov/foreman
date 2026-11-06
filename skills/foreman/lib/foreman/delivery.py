@@ -33,6 +33,15 @@ def inspect(rec):
     return ("busy" if alive else "gone"), transport
 
 
+def _mark_if_user(sid, claimed):
+    """D63: the user's message reached the orchestrator, so the user now waits for an answer."""
+    if any(m.get("kind") == "user" for m in claimed):
+        try:
+            sessions.mark_awaiting(sid)
+        except Exception:
+            pass
+
+
 def deliver_pending(sid):
     """Deliver pending inbox messages of session `sid` if its terminal is idle: claims them (so no other
     deliverer can send the same ones), types the digest, and gives them back if typing fails. Returns
@@ -68,6 +77,7 @@ def deliver_pending(sid):
     except Exception:
         sessions.inbox_release(sid, [m["id"] for m in claimed])
         return "queued"
+    _mark_if_user(sid, claimed)
     return "delivered"
 
 
