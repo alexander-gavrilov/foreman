@@ -67,13 +67,16 @@ def _content_text(content):
 
 
 def last_assistant_text(path):
-    """Best-effort text of the last assistant message in a transcript (Claude layout, else a generic
-    `role: assistant|model` layout). None when nothing is found."""
+    """Best-effort text of the last assistant message in a transcript (Claude layout, Antigravity
+    `source: MODEL` / `type: PLANNER_RESPONSE`, else a generic `role: assistant|model` layout).
+    None when nothing is found."""
     for row in reversed(_tail_rows(path)):
         text = None
         msg = _main_chain_assistant(row)
         if msg is not None:
             text = _content_text(msg.get("content"))
+        elif row.get("source") == "MODEL" and row.get("type") == "PLANNER_RESPONSE":
+            text = _content_text(row.get("content"))
         elif row.get("role") in ("assistant", "model") and not row.get("isSidechain"):
             text = _content_text(row.get("content"))
         if text and text.strip():

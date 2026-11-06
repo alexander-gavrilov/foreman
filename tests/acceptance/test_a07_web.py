@@ -24,6 +24,7 @@ class WebTest(AcceptanceCase):
         # garden-plans: working (a busy worker)
         worker = self.open_worker(self.slugs["garden-plans"], "fm-api")
         self.hook(worker, "UserPromptSubmit")
+        self.terminal().set_idle(worker["transport"]["handle"], False)
         # billing: stuck (a worker whose terminal vanished)
         gone = self.open_worker(self.slugs["billing"], "fm-db")
         self.hook(gone, "UserPromptSubmit")
