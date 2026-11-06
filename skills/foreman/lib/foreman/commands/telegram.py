@@ -78,11 +78,17 @@ def run(args):
         return 0
 
     if subcmd == "set-chat":
-        cid = telegram.set_chat(args.chat_id)
+        info = {}
+        cid = telegram.set_chat(args.chat_id, info=info)
         print(f"telegram chat set to {cid}")
         allowed = (config.load().get("telegram") or {}).get("allowed_user_ids") or []
         if allowed:
             print("allowed users: " + ", ".join(str(u) for u in allowed))
+        elif len(info.get("candidates") or []) > 1:
+            print("several people wrote in the group, so nobody was allowed. Pick yours and run "
+                  "`foreman telegram allow-user <id>`:")
+            for c in info["candidates"]:
+                print("  %s (%s)" % (c["id"], c["first_name"] or "no first name"))
         else:
             print("no user found yet: send a message in the group and run set-chat again, "
                   "or use `foreman telegram allow-user <id>`")

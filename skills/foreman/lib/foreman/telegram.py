@@ -31,66 +31,90 @@ def set_token(token):
     return token
 
 
-def _last_rejected_user(cid):
-    """The user id of the newest update the poller rejected from chat cid, or None."""
+SETUP_EVENT_MAX_AGE_S = 24 * 3600  # a rejection older than this says nothing about who set the group up now
+
+
+def _human(user):
+    """{"id", "first_name"} for a Telegram user dict that is a person, else None."""
+    if not isinstance(user, dict) or not user.get("id") or user.get("is_bot"):
+        return None
+    return {"id": user["id"], "first_name": str(user.get("first_name") or "")}
+
+
+def _rejected_humans(cid):
+    """The people the poller rejected from chat `cid` during the last 24 hours (events.jsonl)."""
+    found = []
     try:
         with open(paths.events_file(), encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
-        return None
-    for line in reversed(lines):
+        return found
+    for line in lines:
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if event.get("kind") == "telegram_unauthorized" and str(event.get("chat_id")) == str(cid):
-            if event.get("user_id"):
-                return event["user_id"]
-    return None
+        if event.get("kind") != "telegram_unauthorized" or str(event.get("chat_id")) != str(cid):
+            continue
+        age = timeutil.age_seconds(event.get("ts"))
+        if age is None or age > SETUP_EVENT_MAX_AGE_S:
+            continue
+        user = event.get("from") if isinstance(event.get("from"), dict) else {"id": event.get("user_id")}
+        user = dict(user, id=user.get("id") or event.get("user_id"))
+        human = _human(user)
+        if human:
+            found.append(human)
+    return found
 
 
-def set_chat(chat_id):
-    """Store the supergroup chat_id in config.json and record user from setup message if available."""
+def _pending_humans(cid):
+    """The people whose messages in chat `cid` wait in getUpdates (nobody consumes them without a daemon)."""
+    found = []
+    if not get_token():
+        return found
+    try:
+        res = _api_call("getUpdates", {"limit": 100}, timeout=5)
+        if res and res.get("ok"):
+            for u in res.get("result", []):
+                msg = u.get("message") or {}
+                if str(msg.get("chat", {}).get("id")) == str(cid):
+                    human = _human(msg.get("from"))
+                    if human:
+                        found.append(human)
+    except Exception:
+        pass
+    return found
+
+
+def set_chat(chat_id, info=None):
+    """Store the supergroup chat_id in config.json. While nobody is allowed yet, the one person who wrote in the
+    group (a pending update, or a rejection of the running daemon in the last 24 hours; bots do not count) is
+    allowed; with several candidates nobody is added and `info["candidates"]` lists them for `allow-user`. Once
+    somebody is allowed, set-chat never adds anyone. `info`, if given, receives "candidates" and "added"."""
     path = paths.config_file()
     try:
         cid = int(chat_id)
     except (ValueError, TypeError):
         cid = chat_id
 
-    # Try to find setup user from recent updates if token is available
-    found_users = []
-    token = get_token()
-    if token:
-        try:
-            res = _api_call("getUpdates", {"limit": 10}, timeout=5)
-            if res and res.get("ok"):
-                for u in reversed(res.get("result", [])):
-                    msg = u.get("message") or {}
-                    if str(msg.get("chat", {}).get("id")) == str(cid):
-                        user = msg.get("from", {})
-                        if user.get("id"):
-                            found_users.append(user["id"])
-                            break
-        except Exception:
-            pass
-
-    # A running daemon consumes updates, so the setup message may only exist as a
-    # rejection in events.jsonl. Used only while nobody is allowed yet, so a
-    # stranger rejected later can never be added by re-running set-chat.
-    if not found_users and not (config.load().get("telegram") or {}).get("allowed_user_ids"):
-        rejected = _last_rejected_user(cid)
-        if rejected is not None:
-            found_users.append(rejected)
+    candidates = []
+    if not (config.load().get("telegram") or {}).get("allowed_user_ids"):
+        seen = set()
+        for human in _pending_humans(cid) + _rejected_humans(cid):
+            if str(human["id"]) not in seen:
+                seen.add(str(human["id"]))
+                candidates.append(human)
+    found_users = [candidates[0]["id"]] if len(candidates) == 1 else []
+    if info is not None:
+        info["candidates"] = candidates
+        info["added"] = list(found_users)
 
     def apply(cfg):
         cfg = cfg if isinstance(cfg, dict) else {}
         tg = cfg.setdefault("telegram", {})
         tg["chat_id"] = cid
-        if found_users:
-            allowed = tg.setdefault("allowed_user_ids", [])
-            for u in found_users:
-                if u not in allowed and str(u) not in [str(x) for x in allowed]:
-                    allowed.append(u)
+        if found_users and not tg.get("allowed_user_ids"):
+            tg["allowed_user_ids"] = list(found_users)
         return cfg
 
     store.update_json(path, apply, default={})
@@ -223,18 +247,18 @@ def check():
     }
 
 
-def create_topic(name):
+def create_topic(name, timeout=15):
     """Create a forum topic in the machine's group; return its message_thread_id or None if not configured."""
     chat_id = get_chat_id()
     if not chat_id or not get_token():
         return None
-    res = _api_call("createForumTopic", {"chat_id": chat_id, "name": name})
+    res = _api_call("createForumTopic", {"chat_id": chat_id, "name": name}, timeout=timeout)
     if res and res.get("ok"):
         return res["result"].get("message_thread_id")
     return None
 
 
-def create_project_topic(project_slug):
+def create_project_topic(project_slug, timeout=15):
     """Ensure a project has a Telegram topic (idempotent). Returns message_thread_id or None."""
     proj = projects.load_project(project_slug)
     if not proj:
@@ -243,7 +267,7 @@ def create_project_topic(project_slug):
         return proj["telegram_topic_id"]
 
     name = proj.get("name") or proj["slug"]
-    tid = create_topic(name)
+    tid = create_topic(name) if timeout == 15 else create_topic(name, timeout=timeout)
     if tid:
         proj["telegram_topic_id"] = tid
         projects.save_project(proj)
