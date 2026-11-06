@@ -210,6 +210,17 @@ class OpenWorktreeTest(WorktreeCase):
         self.assertIn("no worktree (the project is a subfolder", out)
         self.assertEqual(self.worktrees(), [self.repo])
 
+    def test_a_repository_with_no_commit_says_it_gets_no_worktree(self):
+        fresh = self.init_project("fresh")
+        git(fresh["path"], "init", "-q", "-b", "main")
+        code, out, err = run_main("open", "--project", fresh["slug"], "--purpose", "p", "--title", "fm-n",
+                                  "--transport", "fake", "--prompt", "go")
+        self.assertEqual(code, 0, err)
+        self.assertIn("no worktree (the repository has no commit yet)", out)
+        from foreman import sessions
+        (rec,) = sessions.list_sessions(fresh["slug"])
+        self.assertEqual(rec["cwd"], fresh["path"])
+
     def test_codex_worker_is_told_to_approve_the_hook(self):
         code, out, err = self.open("--agent", "codex")
         self.assertEqual(code, 0, err)
@@ -245,6 +256,12 @@ class HookFilesTest(WorktreeCase):
         rec = self.open_one("--agent", "claude")
         install.remove_project_hooks()
         self.assertFalse(os.path.exists(os.path.join(rec["cwd"], ".claude", "settings.local.json")))
+
+    def test_init_remove_inside_a_worktree_is_refused(self):
+        rec = self.open_one()
+        code, out, err = run_main("init", "--remove", "--path", rec["cwd"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("worker worktree", err + out)
 
     def test_init_inside_a_worktree_is_refused(self):
         rec = self.open_one()
@@ -396,6 +413,28 @@ class CloseWorktreeTest(WorktreeCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(out.strip(), "closed %s (fm-api)" % rec["sid"])
 
+    def test_a_branch_merged_into_the_main_checkout_is_deleted(self):
+        rec = self.open_one()
+        git(rec["cwd"], "commit", "-q", "--allow-empty", "-m", "work")
+        git(self.repo, "merge", "-q", "--no-ff", "-m", "merge", rec["worktree"]["branch"])
+        code, out, err = self.close()
+        self.assertEqual(code, 0, err)
+        self.assertNotIn(rec["worktree"]["branch"], git(self.repo, "branch", "--format=%(refname:short)").split())
+
+    def test_a_branch_pushed_but_not_merged_into_the_main_checkout_is_kept(self):
+        # `git branch -d` also accepts a branch merged into its upstream; that is not "merged" here
+        remote = self.repo + "-remote.git"
+        git(self.repo, "init", "-q", "--bare", remote)
+        git(self.repo, "remote", "add", "origin", remote)
+        rec = self.open_one()
+        git(rec["cwd"], "commit", "-q", "--allow-empty", "-m", "work")
+        git(rec["cwd"], "push", "-q", "-u", "origin", rec["worktree"]["branch"])
+        code, out, err = self.close()
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.isdir(rec["cwd"]))
+        self.assertIn(rec["worktree"]["branch"], git(self.repo, "branch", "--format=%(refname:short)").split())
+        self.assertIn("not merged", out)
+
     def test_a_worktree_still_used_by_another_open_session_is_not_removed(self):
         rec = self.open_one()
         from foreman import sessions
@@ -418,6 +457,31 @@ class RotateWorktreeTest(WorktreeCase):
         self.assertEqual(new["cwd"], rec["cwd"])
         self.assertEqual(new["worktree"], rec["worktree"])
         self.assertEqual(len(self.worktrees()), 2)  # main + the one shared worktree
+
+    def test_rotation_fails_when_the_worktree_is_gone_and_the_old_session_stays(self):
+        import shutil
+        from foreman import sessions
+        rec = self.open_one()
+        sessions.update_session(rec["sid"], state="idle")
+        shutil.rmtree(rec["cwd"])
+        code, out, err = run_main("rotate", "--project", self.slug, "fm-api")
+        self.assertEqual(code, 1)
+        self.assertIn("worktree", err)
+        self.assertFalse(os.path.exists(rec["cwd"]))  # not recreated as a stray folder
+        self.assertEqual(len(self.sessions()), 1)
+        self.assertEqual(sessions.load_session(rec["sid"])["lifecycle"], "active")
+
+    def test_rotation_fails_when_the_hook_files_cannot_be_written(self):
+        from unittest import mock
+        from foreman import sessions, worktrees
+        rec = self.open_one()
+        sessions.update_session(rec["sid"], state="idle")
+        with mock.patch.object(worktrees, "write_hook_files", side_effect=OSError("read-only")):
+            code, out, err = run_main("rotate", "--project", self.slug, "fm-api", "--agent", "codex")
+        self.assertEqual(code, 1)
+        self.assertIn("hook files", err)
+        self.assertEqual(len(self.sessions()), 1)
+        self.assertEqual(sessions.load_session(rec["sid"])["lifecycle"], "active")
 
 
 if __name__ == "__main__":

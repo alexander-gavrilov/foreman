@@ -110,14 +110,19 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
     if wt:  # rotate: continue in the same checkout (launch_cwd = the old session's cwd); the new agent may be
         # one the worktree has no hook file for yet
         base = (projects.load_project(project["slug"]) or project)["path"]
+        if not os.path.isdir(wt["path"]):  # writing the hook files would recreate it as a stray, empty folder
+            raise CliError("the worktree %s is gone; the session was not rotated" % wt["path"], code=1)
         try:
             worktrees.write_hook_files(base, wt["path"], chosen_agent)
         except Exception as exc:
-            note = (note + "; " if note else "") + "hook files not written in the worktree (%s)" % exc
+            raise CliError("hook files could not be written in the worktree %s (%s); the session was not rotated"
+                           % (wt["path"], exc), code=1)
     elif worktree is True and role == "worker" and owner == "orchestrator":
         kind = worktrees.applicable(project["path"])
         if kind == "subfolder":
             note = (note + "; " if note else "") + "no worktree (the project is a subfolder of a repository)"
+        elif kind == "nocommit":
+            note = (note + "; " if note else "") + "no worktree (the repository has no commit yet)"
         elif kind == "root":
             try:
                 new_wt = wt = worktrees.create(project, title or purpose, chosen_agent)

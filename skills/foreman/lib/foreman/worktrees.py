@@ -27,12 +27,16 @@ def _git(cwd, *args):
 
 def applicable(path):
     """"root" when `path` is the top folder of a git work tree with a commit (a worktree can be made),
-    "subfolder" when it is inside one, else None (not a repository: nothing to isolate)."""
+    "subfolder" when it is inside one, "nocommit" when it is a repository without a commit yet, else None (not a
+    repository: nothing to isolate)."""
     try:
         top = _git(path, "rev-parse", "--show-toplevel")
-        _git(path, "rev-parse", "--verify", "-q", "HEAD")
     except WorktreeError:
         return None
+    try:
+        _git(path, "rev-parse", "--verify", "-q", "HEAD")
+    except WorktreeError:
+        return "nocommit"
     return "root" if os.path.realpath(top) == os.path.realpath(path) else "subfolder"
 
 
@@ -128,7 +132,10 @@ def release(rec):
     except WorktreeError as exc:
         return "kept worktree %s (%s)" % (path, (str(exc).splitlines() or ["git failed"])[0])
     try:
-        _git(base, "branch", "-d", branch)  # only when merged into the main checkout's HEAD
+        # `git branch -d` alone also accepts a branch merged into its upstream (pushed, not merged here), so the
+        # target is checked explicitly: the branch the main checkout is on
+        _git(base, "merge-base", "--is-ancestor", branch, "HEAD")
+        _git(base, "branch", "-d", branch)
     except WorktreeError:
         return "removed worktree %s, kept branch %s (not merged)" % (path, branch)
     return "removed worktree %s" % path

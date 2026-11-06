@@ -206,10 +206,14 @@ def remove_hooks(project_path, agent):
     return True
 
 
-def remove_project(path, home=None):
+def remove_project(path, home=None, in_worktree=False):
     """`foreman init --remove`: foreman's hook handlers out of the project's hook files (the user's stay) and the
     lines init added out of .git/info/exclude. Project state under FOREMAN_HOME is kept. Idempotent."""
     path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    owner = None if in_worktree else projects.worktree_project(path)
+    if owner:  # the git exclude it would strip is shared with the main checkout; uninstall passes in_worktree
+        raise InitError("%s is a worker worktree of project %s; run init --remove in %s"
+                        % (path, owner["slug"], owner["path"]))
     changes = []
     for agent, rel in HOOK_FILES.items():
         if _has_foreman_hooks(path, agent) and is_tracked(path, rel):
