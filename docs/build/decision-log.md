@@ -181,3 +181,13 @@ with the reason. The user reviews these after delivery. Format: `D<n> · date ·
   unverified), so they keep the handle rebind. `CLAUDE_CODE_ENTRYPOINT=sdk*` also disqualifies a resume as successor
   (best effort, not verified live). Known limit: an agent restarted by hand in the same terminal after a crash (source
   startup, no SessionEnd) counts as a child until `foreman orchestrator adopt`; likewise a missed /clear SessionStart.
+- D60 · The Telegram mirror is a durable outbox, not a daemon thread of a short-lived CLI. `say`/`user_reply` append a
+  row and return; `foreman serve`/`web` drain every ~2 s, a CLI without a daemon makes one bounded attempt at exit;
+  one drainer at a time; a row leaves the file only after Bot API ok; failures are retried with backoff and logged
+  with the API description, 429 `retry_after` honoured, rows over 1 hour dropped with an event; per-project order;
+  the rate-limit verdict is stored in the row. — Live run: the orchestrator's `foreman say` was in the chat but never
+  reached the topic and nothing was logged: the mirror thread died with the CLI after the 2 s atexit wait, and a Bot
+  API failure returned `ok: False` without `error`, so nothing was logged; rate-limit drops were silent too.
+  Trade-off: at-least-once (a duplicate is possible if a drainer dies between the send and the row removal); a
+  permanently failing head row (e.g. a deleted topic) blocks its project for up to an hour, then is dropped.
+  `watch list` now requires the heartbeat's pid to be alive, so a one-off `watch run` no longer shows RUNNING.

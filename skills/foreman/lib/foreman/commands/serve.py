@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 
-from foreman import config, paths, store, telegram, watch
+from foreman import config, outbox, paths, store, telegram, watch
 from foreman.web import server
 
 NAME = "serve"
@@ -90,6 +90,9 @@ def run_daemon(binds=None, port=None, watch_interval=60.0, telegram_timeout=25.0
     )
     tg_thread.start()
 
+    # D60: drains the Telegram mirror outbox every ~2 s (CLI processes leave their rows here)
+    outbox_thread = outbox.start_drain_thread(stop_event)
+
     # Run web server
     try:
         server.run_server(binds=binds, port=port, stop_event=stop_event, on_ready=on_ready)
@@ -97,6 +100,7 @@ def run_daemon(binds=None, port=None, watch_interval=60.0, telegram_timeout=25.0
         stop_event.set()
         watch_thread.join(timeout=2.0)
         tg_thread.join(timeout=2.0)
+        outbox_thread.join(timeout=2.0)
 
 
 def run(args):

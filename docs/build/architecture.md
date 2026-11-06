@@ -281,9 +281,20 @@ without a caption arrives as `[non-text message: <type>]`; service messages are 
 button (callback) is a reply with that option, except «Ответить…» (answered with "reply in the topic") and an
 unknown/expired callback (answered "expired", nothing delivered). `foreman serve` always runs the poller and
 re-reads the Telegram configuration on every pass, so `telegram set-token` / `set-chat` need no restart.
-**Mirror (D51):** the project's topic mirrors the project chat (see §7). Mirrored messages are cut at 4000
+**Mirror (D51, D60):** the project's topic mirrors the project chat (see §7). Mirrored messages are cut at 4000
 characters with a web-chat link, and limited to 10 per project per minute (the first one over the limit posts a
-single "more messages in the web chat" pointer; the rest of the window is dropped). `telegram check` fails while
+single "more messages in the web chat" pointer; the rest of the window is dropped, each drop logged as
+`mirror_dropped`). Delivery goes through a **durable outbox** (`FOREMAN_HOME/telegram-outbox.jsonl`, rows
+`{id, project, text, msg_id, created_at, created_ts, attempts, next_at, verdict}`): `say`/`user_reply` only append a
+row after the message was delivered. `foreman serve` (and `foreman web`) drain it on a thread every ~2 s; a CLI
+process makes one bounded attempt (≈3 s) at exit unless a daemon heartbeat (`telegram-outbox-drainer.json`) is
+fresh. One drainer at a time (non-blocking flock on `telegram-outbox.jsonl.drain`). A row is removed only after the
+Bot API answered ok (at-least-once: a drainer killed between send and removal can repeat one message); a failure is
+logged as `mirror_error` with the API description (never the token) and retried with backoff 1, 2, 5, 15, 30, 60 s
+(a 429's `retry_after` honoured); rows older than 1 hour are dropped (`mirror_dropped`). Order is kept per project;
+a project in backoff does not block another. The rate-limit verdict (send / pointer / drop) is decided once per row
+and stored in it, so retries consume no slot and the pointer row survives. `watch list` reports the loop as running
+only while the heartbeat's pid is alive (a one-off `watch run` is not a loop). `telegram check` fails while
 `allowed_user_ids` is empty.
 
 ## 11. Findings, clean, init, install

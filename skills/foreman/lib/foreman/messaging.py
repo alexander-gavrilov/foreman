@@ -194,8 +194,19 @@ def compact(rec, what=None):
     return "delivered"
 
 
-_mirror_threads = []
-MIRROR_FLUSH_S = 2.0  # at process exit, wait at most this long for pending mirrors (the reply is long delivered)
+MIRROR_FLUSH_S = 5.0
+
+
+def _mirror(project, text, msg_id):
+    """D51/D60: the project's Telegram topic mirrors the project chat. Appends a row to the durable outbox and
+    returns at once, AFTER the message was delivered, so an unreachable Telegram never delays a reply. A drainer
+    (`foreman serve`, or the exit of this CLI process) sends it. Never raises."""
+    try:
+        from foreman import notify, outbox
+        if notify.mirror_enabled(project):
+            outbox.enqueue(project, text, msg_id)
+    except Exception as exc:
+        _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
 
 
 def _log_mirror_error(error):
@@ -206,37 +217,19 @@ def _log_mirror_error(error):
         pass
 
 
-def _mirror(project, text, msg_id):
-    """D51: the project's Telegram topic mirrors the project chat. Runs on a daemon thread AFTER the message was
-    delivered, so an unreachable Telegram never delays the reply; failures are logged, never raised."""
-    import threading
-    from foreman import paths
-    home = paths.home()  # captured now: the thread must not resolve the state root later (env may have changed)
-
-    def work():
-        with paths.pinned_home(home):
-            try:
-                from foreman import notify
-                res = notify.mirror_to_topic(project, text, msg_id=msg_id)
-                if isinstance(res, dict) and not res.get("ok") and res.get("error"):
-                    _log_mirror_error(res["error"])
-            except Exception as exc:
-                _log_mirror_error("%s: %s" % (type(exc).__name__, exc))
-    t = threading.Thread(target=work, name="foreman-mirror", daemon=True)
-    _mirror_threads[:] = [x for x in _mirror_threads if x.is_alive()]
-    _mirror_threads.append(t)
-    t.start()
-
-
 def flush_mirrors(timeout=MIRROR_FLUSH_S):
-    """Wait (bounded) for the mirror threads started so far. Used at exit of short-lived CLI processes and by tests."""
-    deadline = time.time() + timeout
-    for t in list(_mirror_threads):
-        t.join(max(0.0, deadline - time.time()))
+    """Drain the outbox now, bounded (tests, and callers that want the mirror sent before they go on)."""
+    from foreman import outbox
+    return outbox.drain(budget_s=timeout)
+
+
+def _exit_flush():
+    from foreman import outbox
+    outbox.exit_flush()
 
 
 import atexit  # noqa: E402
-atexit.register(flush_mirrors)
+atexit.register(_exit_flush)
 
 
 def _notify_gone(project, msg):

@@ -69,27 +69,50 @@ def _mirror_slot(project):
     return verdict[0]
 
 
-def mirror_to_topic(project, text, msg_id=None):
-    """D51: post one project-chat message to the project's Telegram topic (created on demand). Only when telegram
-    is a notify channel and configured. Rate- and size-limited; the web chat link marks what was cut. Failures never
-    raise. -> {"ok": bool, ...}"""
+def mirror_enabled(project):
+    """True when a chat message of `project` should be mirrored to its Telegram topic at all."""
     try:
-        if not project or not _telegram_enabled():
-            return {"ok": False, "skipped": True}
+        return bool(project) and _telegram_enabled()
+    except Exception:
+        return False
+
+
+def send_mirror_row(row):
+    """D51/D60: post one outbox row to the project's Telegram topic (created on demand). Size-limited; the web chat
+    link marks what was cut. The rate limit (10 per project per minute, then one pointer, then silence) is decided
+    once per row and returned as `verdict`, so a retry neither consumes another slot nor loses the pointer.
+    Never raises. -> {"ok": True} | {"ok": False, "drop": reason} | {"ok": False, "description": api text,
+    "retry_after": seconds|None}; "verdict" is set whenever it was decided."""
+    project, text, msg_id = row.get("project"), row.get("text") or "", row.get("msg_id")
+    try:
+        if not mirror_enabled(project):
+            return {"ok": False, "drop": "telegram is not configured as a notify channel"}
+        verdict = row.get("verdict")
+        if not verdict:
+            verdict = _mirror_slot(project)
+        out = {"verdict": verdict}
+        if verdict == "drop":
+            out.update(ok=False, drop="rate limit: more than %d messages a minute" % MIRROR_MAX_PER_WINDOW)
+            return out
         thread_id = telegram.create_project_topic(project)
         if not thread_id:
-            return {"ok": False, "error": "no topic"}
-        verdict = _mirror_slot(project)
-        if verdict == "drop":
-            return {"ok": False, "dropped": True}
+            out.update(ok=False, description="could not find or create the project's Telegram topic")
+            return out
         if verdict == "notice":
             body = "… more messages in the web chat: " + web_link(project)
         else:
             body = _fit_for_telegram(text, web_link(project, msg_id), always_link=False)
-        res = telegram.send_message(thread_id, body, timeout=5)
-        return {"ok": bool(res and res.get("ok")), "result": res}
+        res = telegram.send_message(thread_id, body, timeout=5) or {}
+        if res.get("ok"):
+            out["ok"] = True
+            return out
+        params = res.get("parameters") if isinstance(res.get("parameters"), dict) else {}
+        out.update(ok=False, retry_after=params.get("retry_after"),
+                   description="%s%s" % (("%s: " % res["error_code"]) if res.get("error_code") else "",
+                                         res.get("description") or "sendMessage failed"))
+        return out
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "description": "%s: %s" % (type(exc).__name__, exc)}
 
 
 def notify(project, text, msg_id=None, question=False, options=None, macos_runner=None):
