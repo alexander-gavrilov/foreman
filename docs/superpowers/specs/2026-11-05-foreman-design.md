@@ -130,7 +130,7 @@ the orchestrator owns gets its own.
   agent (initialised before this rule, or the agent was skipped), the session is not opened until the user
   runs `init`. The same holds for the launched agent when the worktree's checkout carries content that its
   trust would switch on and that is not foreman's (§5.5); the next step is then the user's: remove the
-  content, or trust the folder by hand. Workers of other agents are not held up.
+  content, or trust the folder by hand and run `init` again (the waiver is set by `init`). Workers of other agents are not held up.
 - *If it cannot be made.* The session is not opened and nothing is left behind: no folder, no branch, no
   registration, no trust entry (§5.5), and nothing else touched. A worktree left by an `open` that was killed half way, with no
   session, is taken back by the scheduled check once it is 10 minutes old and holds no work. An explicit option opens it
@@ -424,13 +424,16 @@ except foreman's `hooks.json` (Codex). Trusting such a folder is the user's own 
   on the worktree's own files, because a tracked file arrives with the checkout and a commit may add one after
   `init`. Foreign content at `open` or `rotate` means the session is not opened (the rotation fails), whatever
   consent `init` recorded.
-- *The user's own trust ends the skip.* If the user has already trusted the folder by hand (for Antigravity,
-  an exact entry for the project folder that is not in foreman's record; for Codex, Codex reports foreman's
-  hooks `trusted` and the table is not in the record), that is the user's decision about that content: `init`
-  writes nothing, counts the agent as consented, and the check above is waived for that agent in the project's
-  worktrees, which then get the same trust as the folder. `init` still prints what the folder switches on. When
-  the trust is foreman's own (in the record) and foreign content has appeared since, nothing is waived: `init`
-  reports it, and `open` refuses for that agent while the content is in the checkout.
+- *The user's own trust, for the content the user was shown.* If `init` finds foreign content and the user has
+  already trusted the folder by hand (for Antigravity, an exact entry for the project folder that is not in
+  foreman's record; for Codex, Codex reports foreman's hooks `trusted` and the table is not in the record),
+  `init` prints that content, writes nothing, counts the agent as consented and records a digest of the
+  content with the consent. The waiver covers **that content only**: at `open` and `rotate` the check still
+  runs, and content that is new or changed since the digest means the session is not opened, with "review it
+  and run `init` again". The waiver lapses when the user's entry is gone. Without such a waiver the check
+  always runs, whoever owns the entry: an entry that predates foreman, or a pending one left by a crash, is
+  not a waiver. When the trust is foreman's own (in the record) and foreign content appears, nothing is
+  waived: `init` reports it, and `open` refuses for that agent while the content is in the checkout.
 
 **Consent, and who may trigger the write.**
 - Running `foreman init` in a folder is the user's consent to trust **that folder**, for the agents the
@@ -534,7 +537,7 @@ home.) The scheduled check repeats that for every initialised project and its op
 hour per project, and reports drift once per occurrence, with `status`: an Antigravity entry dropped by the agent
 rewriting its file, a Codex hook turned `modified` by a moved install or a changed `FOREMAN_HOME`, or a
 `.codex/` content other than foreman's `hooks.json` or a foreign `.agents/hooks.json` that appeared in a trusted
-folder or one of its worktrees. It only reports. `init` repairs the project folder and the entries of live
+folder or one of its worktrees, and is not covered by a waiver (content inside a waiver is not reported again). It only reports. `init` repairs the project folder and the entries of live
 worktrees. A `.codex/config.toml` that a worker drops into a worktree after `init` takes effect for the next
 Codex session there before the report: that residual risk is accepted, not prevented.
 
@@ -667,7 +670,8 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
 14. Trust is refused, with a reason and a failure status, and the files are unchanged, for: `/`, the home
     folder or a link to it; a folder of repositories such as `~/projects`, as the first project or after its
     children; a folder with a foreign `.agents/hooks.json` or, for Codex, anything in `.codex/` but foreman's
-    `hooks.json`, also when it arrives with a worktree's checkout; a hook file whose command is not what foreman generates; a malformed
+    `hooks.json`, also when it arrives with a worktree's checkout, and also when the folder's entry predates
+    foreman and the content was committed after `init`; a hook file whose command is not what foreman generates; a malformed
     settings file; an orchestrator's session running `init --path`. Two workers opened at once both end up
     trusted. An entry that is already there is never removed by foreman, including after a crash between the
     record and the edit.
