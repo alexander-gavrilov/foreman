@@ -126,8 +126,9 @@ the orchestrator owns gets its own.
 - *Trust.* Antigravity loads a folder's hook files only when the folder is trusted, so `open` also makes the
   worktree trusted there, under the consent the user gave at `init` (§5.5): only the worktree's own path,
   never the folder above it. Codex works per repository: its trust is given once at `init` for the main
-  checkout and covers the worktrees, so `open` only checks it. A project initialised before this rule has no
-  such consent, and the session is not opened until `init` is run again.
+  checkout and covers the worktrees, so `open` only checks it. If the project has no consent for the launched
+  agent (initialised before this rule, or the agent was skipped), the session is not opened until the user
+  runs `init`; so is a worktree whose checkout carries hook files that are not foreman's.
 - *If it cannot be made.* The session is not opened and nothing is left behind: no folder, no branch, no
   registration, no trust entry (§5.5), and nothing else touched. A worktree left by an `open` that was killed half way, with no
   session, is taken back by the scheduled check once it is 10 minutes old and holds no work. An explicit option opens it
@@ -409,19 +410,30 @@ write.
 **What trust really grants.** It is not only "let foreman's hooks run".
 - *Antigravity:* a trusted workspace runs **every** hook file the workspace has (`.agents/hooks.json`, with
   no hash), foreman's and the repository's own.
-- *Codex:* `trust_level = "trusted"` turns on the project's whole config layer, so a `.codex/config.toml` in
-  the project (approval policy, sandbox mode, MCP servers) takes effect, and so does one that appears later,
-  also in a worktree. Hook approval is separate and per hook (measured on Codex 0.146.1).
-So `init` skips the trust of an agent, and says why, when the folder already holds what that trust would
-switch on: a `.agents/hooks.json` with hooks that are not foreman's (Antigravity), or a `.codex/config.toml`
-(Codex). Trusting such a folder is the user's own decision, made by hand.
+- *Codex:* `trust_level = "trusted"` turns on the project's whole config layer: Codex's own message for an
+  untrusted project says it withholds "project-local config, hooks, and exec policies". So a
+  `.codex/config.toml` (approval policy, sandbox mode, MCP servers) takes effect, and so does one that appears
+  later, also in a worktree; exec policies (`.codex/rules`) are meant to as well (not exercised separately).
+  Hook approval is separate and per hook (measured on Codex 0.146.1).
+So foreman skips the trust of an agent, and says why, when the folder already holds what that trust would
+switch on: a `.agents/hooks.json` with hooks that are not foreman's (Antigravity), or anything in `.codex/`
+except foreman's `hooks.json` (Codex). Trusting such a folder is the user's own decision, made by hand. The
+check runs at `init` and again, on the worktree's own files, at every `open` and `rotate` that would write
+trust, because a tracked file arrives with the checkout. The skip does not fire for Codex when Codex already
+reports foreman's hooks `trusted` (the user trusted the folder by hand): `init` then writes nothing and counts
+the agent as consented.
 
 **Consent, and who may trigger the write.**
 - Running `foreman init` in a folder is the user's consent to trust **that folder**, for the agents the
   project has hooks for. `init` prints exactly what it trusted, what each kind of trust switches on (above),
-  and what it skipped. Only `init` ever adds a project folder. A project initialised before this rule has no
-  consent on record: `open` and `rotate` do not write trust for it, they say "run `foreman init` again"
-  (§4.2: the session is not opened).
+  and what it skipped. Only `init` ever adds a project folder.
+- *Consent is a field.* `init` sets, in the project's record, a consent per agent: *granted* (including when the
+  entry was already there, or Codex already reports the hooks `trusted`) or unset (the agent was skipped or
+  refused). `open` and `rotate` write trust only for an agent whose consent is granted. A project initialised
+  before this rule has none: for the agent being launched, `open` is refused and `rotate` fails with "run
+  `foreman init` again"; for the project's other agents `open` only warns. The orchestrator cannot run `init`
+  (it writes trust), so on existing projects autonomous work with Antigravity or Codex workers waits for the
+  user to run `init` once; Claude workers are not held up.
 - `open` adds the worktree it just made, and `rotate` the same worktree when it first gets Antigravity hook
   files (Antigravity only, below). Neither adds a project folder.
 - The write is refused when the command runs inside a session of the orchestrator's side (an orchestrator, or
@@ -429,16 +441,22 @@ switch on: a `.agents/hooks.json` with hooks that are not foreman's (Antigravity
   a session the user owns, which is how an agent installs foreman for the user. `open` and `rotate` are
   run by an orchestrator by design and write only the paths in the next bullet.
 - A path is acceptable only if, after resolving links, it is none of: `/`, the user's home or any folder
-  above it, the state folder or anything inside it except a worktree foreman made for this project, the
-  Antigravity or Codex configuration folder, or a folder that contains another registered project. A worktree
+  above it, the state folder or anything inside it except a worktree foreman made for this project, any folder
+  above the state folder, the Antigravity or Codex configuration folder or any folder above them, a folder
+  that contains another registered project, or a folder that is not itself the root of a git repository and
+  has a direct child that is (a folder of repositories such as `~/projects`; a monorepo root is itself a
+  repository, so it is allowed). The last rule does not depend on what is registered, so it does not depend
+  on the order of `init`s. A worktree
   must also be a direct child of `<state>/worktrees/<project>/`, equal to the path in the session's record, and
   listed by `git worktree list` of the project. Anything else: no trust is written, `init` does everything
   else and exits with a failure status naming the reason, and `open` and `rotate` refuse.
 - *Threat model.* An agent that runs as the user can edit the agents' settings files directly; this section
-  does not defend against that. It makes sure that foreman itself is not the lever: no session on the orchestrator's side
-  can make foreman trust a folder, and nothing but the user's `init` consents to a project folder.
-- The paths written are the path foreman starts the agent in, and its resolved form when that differs, so the
-  entry matches whichever form the agent compares.
+  does not defend against that. It makes sure that foreman itself is not the lever: a session of the
+  orchestrator's side, found through the session environment it was started with, cannot make foreman trust a
+  folder. A process that removes that environment looks like a terminal; that is the agent-as-the-user case
+  above and is out of scope.
+- The path written is the resolved one, and only that: Codex does not match a link, and an entry that is a
+  link would follow a later retarget to another folder.
 
 **Add-only.** foreman never removes, reorders or rewrites an entry that is already there, and adds no pattern
 and no folder above the project. An entry already there is left alone and is not recorded as foreman's. An
@@ -450,9 +468,13 @@ decision: it is kept, and `init` reports the project as not trusted instead of p
   `~/.codex`; Antigravity's `settings.json`. A link is followed and its target edited (a file that is not a
   regular file owned by the user is refused), so a managed dotfile is not replaced by a plain copy.
 - *Lock.* foreman holds a lock for that file from the read to the end of the rename and the update of
-  `trust.json`, so two foreman commands (two `open`s at once, §8.12) cannot lose each other's entry. The
-  agents cannot be locked: after the rename foreman reads the file back and, if its entry is missing, starts
-  again from the read, up to three times, then reports failure.
+  `trust.json`, so two foreman commands (two `open`s at once, §8.12) cannot lose each other's entry. The lock
+  file lives in the state folder, not beside the target. Every foreman edit of these files takes the same
+  lock, the statusline wrapping and unwrapping included (which also gets the atomic rename below).
+- *Against the agents.* They cannot be locked. Just before the rename foreman compares the file with what it
+  read, and starts again from the read if it changed; after the rename it reads the file back and, if its
+  entry is missing, starts again too. Up to three times, then it reports failure. A change made inside the
+  last instant can still be lost; the check under "Is it working" finds a lost entry later.
 - *Narrow.* The new text is the old text plus the added lines; comments, order and formatting survive.
   Paths are encoded by a real JSON or TOML encoder, and a path with a control character is refused. Before
   the rename foreman parses the old and the new text and requires the difference to be exactly the intended
@@ -469,15 +491,18 @@ decision: it is kept, and `init` reports the project as not trusted instead of p
   `<file>.foreman-bak` and never overwritten. It is the file as it was before foreman's first edit, for the
   user to compare; it is not used to undo a trust edit. The Antigravity file already has one from the
   statusline wrapping, and they share it. `uninstall` deletes a backup only if the file equals it again.
-- *Which state.* Trust is written only when the state folder is the default one for the HOME in effect, so a
-  trial instance with a throwaway state folder cannot leave entries its own record would never remove (it
-  redirects HOME as well). Otherwise the step is skipped and said so.
+- *Which state.* Trust is written only when the state folder is the default one for the HOME in effect and
+  every file it would edit, `CODEX_HOME` included, lies under that HOME, so a trial instance with a throwaway
+  state folder cannot leave entries its own record would never remove (it redirects HOME and `CODEX_HOME`
+  as well). Otherwise the step is skipped and said so.
 
 **What is recorded.** `trust.json` in the state folder lists, per file, the entries foreman added: the path or
-the Codex key, the project, whether it is for the project folder or a worktree, and the time. An entry is
+the Codex key and the hash written, the project, whether it is for the project folder or a worktree, and the
+time. An entry is
 written to the record as *pending* before the file is edited and becomes *applied* after the read-back. A
 pending entry is never removed from the agent's file, because after a crash foreman cannot know whether the
-entry was already the user's; it is reported and then dropped from the record. If `trust.json` cannot be
+entry was already the user's; it is reported and then dropped from the record, so a crash can leave one
+entry that nobody removes. If `trust.json` cannot be
 read, foreman adds nothing and removes nothing, and reports it.
 
 **Taking it back.** foreman removes only *applied* entries, and only while they are still as foreman wrote them
@@ -492,11 +517,14 @@ reported).
 - A file that cannot be read then keeps its records and is reported.
 
 **Is it working.** After a write foreman reads the file back (Antigravity), or asks Codex read-only about the
-real state and expects `trusted`. The scheduled check repeats that for every initialised project and its
-open workers, and reports drift once per occurrence, with `status`: an Antigravity entry dropped by the agent
+real state and expects `trusted`. (Codex's query is not free of side effects: it can create files in the Codex
+home.) The scheduled check repeats that for every initialised project and its open workers, at most once an
+hour per project, and reports drift once per occurrence, with `status`: an Antigravity entry dropped by the agent
 rewriting its file, a Codex hook turned `modified` by a moved install or a changed `FOREMAN_HOME`, or a
-`.codex/config.toml` or foreign `.agents/hooks.json` that appeared in a trusted folder or one of its worktrees.
-It only reports. `init` repairs the project folder and the entries of live worktrees.
+`.codex/` content other than foreman's `hooks.json` or a foreign `.agents/hooks.json` that appeared in a trusted
+folder or one of its worktrees. It only reports. `init` repairs the project folder and the entries of live
+worktrees. A `.codex/config.toml` that a worker drops into a worktree after `init` takes effect for the next
+Codex session there before the report: that residual risk is accepted, not prevented.
 
 **Antigravity.**
 - *Where.* `trustedWorkspaces`, a list of absolute folder paths, in `~/.gemini/antigravity-cli/settings.json`,
@@ -504,8 +532,8 @@ It only reports. `init` repairs the project folder and the entries of live workt
   entries it wrote for earlier worktrees next to broad ones for the home folder and `~/projects`. foreman
   neither relies on the broad ones nor removes them. A missing file is created with mode 0600 holding only
   this key, if its folder exists.
-- *What.* The project folder at `init`. A worktree at `open`, after it and its hook files exist and before the
-  agent is launched, whenever the worktree gets Antigravity hook files, whichever agent is launched in it, so
+- *What.* The project folder at `init`. A worktree at `open`, after it and its hook files exist, once its own
+  `.agents/hooks.json` is checked to hold only foreman's hooks, and before the agent is launched, whenever the worktree gets Antigravity hook files, whichever agent is launched in it, so
   a session started by hand there is seen as well (§4.2).
 - *Evidence.* Antigravity loads a workspace's hook files only for a trusted workspace, and loaded them in a run
   that supplied the entry (`docs/build/integration-facts.md`, Antigravity).
@@ -531,12 +559,14 @@ Antigravity and is not a manual step**, with one difference: Codex works **per r
   6. Any change to a hook (a new `FOREMAN_HOME`, a moved install) turns it `modified`; Codex then skips it
      without a word.
 - *What.* At `init`, for the main checkout: the `[projects."<folder>"]` entry with `trust_level = "trusted"`
-  (skipped as above when `.codex/config.toml` exists), and for each of foreman's hooks in its
+  (skipped as above when `.codex/` holds more than foreman's `hooks.json`), and for each of foreman's hooks in its
   `.codex/hooks.json` a `[hooks.state."<key>"]` table with `enabled = true` and the hash. `open` and `rotate`
-  write nothing for Codex; they check, read-only, that Codex reports foreman's hooks `trusted` from the
-  worktree. If it does not (for example Codex was not installed at `init`, so the main checkout has no Codex
-  hooks), the session is not opened or the rotation fails with "run `foreman init` again". The Codex hook file
-  that `open` writes into a worktree is ignored by Codex.
+  write nothing for Codex; for a Codex worker they check, read-only, that Codex reports foreman's hooks
+  `trusted` from the worktree. If it does not (for example Codex was not installed at `init`, so the main
+  checkout has no Codex hooks), the session is not opened or the rotation fails with "run `foreman init`
+  again". The Codex hook file that `open` writes into a worktree is ignored by Codex. `init` inside a linked
+  worktree that foreman did not make (an Orca workspace) writes no Codex trust and says that Codex trust is the
+  main checkout's: run `init` there.
 - *Which hooks.* "foreman's hooks" means exactly the handlers foreman generates now. foreman approves a hook
   only if `hooks/list` reports its command, timeout and matcher equal to those, its source `project`, and its
   path the project's `.codex/hooks.json`. Anything else in a slot that looks like foreman's is reported and never
@@ -547,7 +577,10 @@ Antigravity and is not a manual step**, with one difference: Codex works **per r
   no login) about the folder, with its Codex home pointing at a scratch folder that holds only the
   `[projects]` entry, and writes the key and `currentHash` it reports. The user's real `config.toml` is not
   touched by this check. A table that foreman recorded and whose key or hash is no longer right (a changed hook,
-  or a shifted group index) is replaced; one that foreman did not add is never touched.
+  or a shifted group index) is replaced; one that foreman did not add is never touched. When such a table
+  leaves a foreman hook `modified` (the user approved an older hook by hand), `init` reports the next step:
+  approve the hook in Codex `/hooks` from the main checkout, or delete that table from `config.toml` and run
+  `init` again.
 - *If it cannot.* When `codex` is missing, does not answer within 10 seconds, or reports none of foreman's
   hooks for the folder, nothing is written and `init` says that the hooks still need approval in Codex
   `/hooks`. A worker whose hooks Codex skips is not seen by foreman.
@@ -556,14 +589,18 @@ Antigravity and is not a manual step**, with one difference: Codex works **per r
 
 **When the file cannot be edited.**
 
-| State of the file | `init` | `open` (Antigravity worker) | `rotate` to the agent |
+| State of the file | `init` | `open` of a worker whose agent needs it | `rotate` to that agent |
 |---|---|---|---|
 | fine, entry added | continues | continues | continues |
 | missing | Antigravity: created; Codex: created holding only the added tables | same | same |
 | invalid, wrong shape, unwritable, lock lost three times | does everything else, then exits with failure and the manual step | session not opened, nothing left behind | rotation fails, old session stays |
-| trust refused by the user, or by the rules above | exits with failure naming the reason | session not opened | rotation fails |
+| trust refused (by the user, by the rules above, or foreign content in the folder) | exits with failure naming the reason and the user's next step; passes once the user has trusted the folder and Codex reports the hooks `trusted` | session not opened | rotation fails |
 
-Codex never blocks `open`, except that foreman's hooks must already report `trusted` (above).
+For a worker of another agent in the same project, a failed or refused write is a warning in the result of
+`open`, not a refusal.
+
+Codex trust is never written by `open` or `rotate`; for a Codex worker they require that foreman's hooks
+already report `trusted` (above).
 
 **What the skills say.** The rule "never trust a hook on the user's behalf" becomes: *`foreman init` does the
 narrow trust write; sessions and orchestrators never do it themselves.* An agent that installs foreman for the
@@ -612,11 +649,13 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
 13. After `foreman init` in a folder, a new Antigravity session started there and an Antigravity worker opened
     in a worktree load foreman's hooks with no trust step done by hand, and Codex reports foreman's hooks
     `trusted` for the folder and for its worktrees. `foreman uninstall` leaves both agents' settings files
-    with every entry that was there before and none that foreman added. A Codex hook actually firing in a
+    with every entry that was there before and none that foreman added (but for one a crash left pending, §5.5).
+    A Codex hook actually firing in a
     worktree needs a logged-in Codex session; until one exists (D23) that part is checked with `hooks/list`.
 14. Trust is refused, with a reason and a failure status, and the files are unchanged, for: `/`, the home
-    folder or a link to it; a folder holding another project; a folder with a foreign `.agents/hooks.json` or,
-    for Codex, a `.codex/config.toml`; a hook file whose command is not what foreman generates; a malformed
+    folder or a link to it; a folder of repositories such as `~/projects`, as the first project or after its
+    children; a folder with a foreign `.agents/hooks.json` or, for Codex, anything in `.codex/` but foreman's
+    `hooks.json`, also when it arrives with a worktree's checkout; a hook file whose command is not what foreman generates; a malformed
     settings file; an orchestrator's session running `init --path`. Two workers opened at once both end up
     trusted. An entry that is already there is never removed by foreman, including after a crash between the
     record and the edit.
@@ -643,5 +682,7 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
    check reports the hooks as not trusted.
 6. A logged-in Codex session is needed to confirm that a hook fires from a worktree, and with which working
    folder.
-7. Should foreman ever write Codex trust for a repository that has its own `.codex/config.toml`, after showing
-   the user what it contains? §5.5 says no, the user does it by hand.
+7. Should foreman ever write Codex trust for a repository that has its own `.codex/` content (a
+   `config.toml`, rules), after showing the user what it contains? §5.5 says no, the user does it by hand.
+   Whatever the answer, a config file that a worker drops into a worktree after `init` takes effect before the
+   scheduled check reports it; the user should accept that knowingly.
