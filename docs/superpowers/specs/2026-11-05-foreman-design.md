@@ -428,12 +428,14 @@ except foreman's `hooks.json` (Codex). Trusting such a folder is the user's own 
   already trusted the folder by hand (for Antigravity, an exact entry for the project folder that is not in
   foreman's record; for Codex, Codex reports foreman's hooks `trusted` and the table is not in the record),
   `init` prints that content, writes nothing, counts the agent as consented and records a digest of the
-  content with the consent. The waiver covers **that content only**: at `open` and `rotate` the check still
+  content with the consent. The digest covers only the content that is not foreman's (the other hooks, the other
+  files), so a moved install that changes foreman's own handlers in the same file does not void the waiver. The waiver covers **that content only**: at `open` and `rotate` the check still
   runs, and content that is new or changed since the digest means the session is not opened, with "review it
   and run `init` again". The waiver lapses when the user's entry is gone. Without such a waiver the check
   always runs, whoever owns the entry: an entry that predates foreman, or a pending one left by a crash, is
   not a waiver. When the trust is foreman's own (in the record) and foreign content appears, nothing is
-  waived: `init` reports it, and `open` refuses for that agent while the content is in the checkout.
+  waived: `init` reports it, and `open` refuses for that agent while the content is in the checkout. The
+  route to a waiver then is `foreman init --remove`, the user's own entry, and `init` again; `init` says so.
 
 **Consent, and who may trigger the write.**
 - Running `foreman init` in a folder is the user's consent to trust **that folder**, for the agents the
@@ -671,7 +673,8 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
     folder or a link to it; a folder of repositories such as `~/projects`, as the first project or after its
     children; a folder with a foreign `.agents/hooks.json` or, for Codex, anything in `.codex/` but foreman's
     `hooks.json`, also when it arrives with a worktree's checkout, and also when the folder's entry predates
-    foreman and the content was committed after `init`; a hook file whose command is not what foreman generates; a malformed
+    foreman and the content was committed after `init`. With a waiver: the same content opens, changed content
+    is refused, and so is an `open` after the user's entry was removed; a hook file whose command is not what foreman generates; a malformed
     settings file; an orchestrator's session running `init --path`. Two workers opened at once both end up
     trusted. An entry that is already there is never removed by foreman, including after a crash between the
     record and the edit.
