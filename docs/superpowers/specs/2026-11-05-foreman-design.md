@@ -123,9 +123,11 @@ the orchestrator owns gets its own.
   untracked local settings file with the user's own hooks or permissions) are not copied. The cost: a
   worker in a worktree does not have the owner's local permission allow-list, so an unattended worker may
   stop at permission prompts the same agent would not meet in the project folder.
-- *Trust.* Antigravity and Codex load a folder's hook files only when the folder is trusted, so `open` also
-  makes the worktree trusted, under the consent the user gave at `init` (§5.5). Only the worktree's own path
-  is trusted, never the folder above it.
+- *Trust.* Antigravity loads a folder's hook files only when the folder is trusted, so `open` also makes the
+  worktree trusted there, under the consent the user gave at `init` (§5.5): only the worktree's own path,
+  never the folder above it. Codex works per repository: its trust is given once at `init` for the main
+  checkout and covers the worktrees, so `open` only checks it. A project initialised before this rule has no
+  such consent, and the session is not opened until `init` is run again.
 - *If it cannot be made.* The session is not opened and nothing is left behind: no folder, no branch, no
   registration, no trust entry (§5.5), and nothing else touched. A worktree left by an `open` that was killed half way, with no
   session, is taken back by the scheduled check once it is 10 minutes old and holds no work. An explicit option opens it
@@ -397,106 +399,175 @@ Rules:
   purge refuses while any worktree remains.
 
 ### 5.5 Trust in Antigravity and Codex
-Antigravity loads a folder's hook files only when the folder is in its list of trusted workspaces. Codex
-loads a project's hook files only when the folder is trusted, and runs each hook only when its hash is
-approved. Without that trust foreman's hooks silently do not run: the session is invisible and the rules of
-§4.1 are not enforced. The user does not do this by hand: foreman writes the trust itself, narrowly. This
-replaces the earlier rule that the user approves foreman's hooks in each agent (decision D24). Claude Code
-needs no such write.
+Antigravity loads a folder's hook files only when the folder is in its list of trusted workspaces. Codex loads
+a project's hook files only when the project is trusted, and runs each hook only when its hash is approved.
+Without that trust foreman's hooks silently do not run: the session is invisible and the rules of §4.1 are not
+enforced. The user does not do this by hand: foreman writes the trust itself, narrowly. This replaces the
+earlier rule that the user approves foreman's hooks in each agent (decision D24). Claude Code needs no such
+write.
 
-**Consent and reach.**
+**What trust really grants.** It is not only "let foreman's hooks run".
+- *Antigravity:* a trusted workspace runs **every** hook file the workspace has (`.agents/hooks.json`, with
+  no hash), foreman's and the repository's own.
+- *Codex:* `trust_level = "trusted"` turns on the project's whole config layer, so a `.codex/config.toml` in
+  the project (approval policy, sandbox mode, MCP servers) takes effect, and so does one that appears later,
+  also in a worktree. Hook approval is separate and per hook (measured on Codex 0.146.1).
+So `init` skips the trust of an agent, and says why, when the folder already holds what that trust would
+switch on: a `.agents/hooks.json` with hooks that are not foreman's (Antigravity), or a `.codex/config.toml`
+(Codex). Trusting such a folder is the user's own decision, made by hand.
+
+**Consent, and who may trigger the write.**
 - Running `foreman init` in a folder is the user's consent to trust **that folder**, for the agents the
-  project has hooks for. `open` extends it to the worktree it makes for a worker of that project (§4.2), or
-  to the project folder when a worker is opened there; `rotate` extends it to the agent a rotation switches
-  to, in the folder the session already uses.
-- Trust is written only by those commands, and only for the project folder of an initialised project or a
-  worktree foreman made for it. No command, option or message lets a session or an orchestrator name another
-  path, and an orchestrator still cannot edit the agents' settings files itself.
-- Add-only. foreman never removes, reorders or rewrites an entry that is already there (one exception for
-  Codex, below), never adds a folder above the project (the user's home, a projects folder, the state folder
-  or its `worktrees` folder, the filesystem root), and never adds a pattern. An entry that is already there
-  is left alone and is not recorded as foreman's.
+  project has hooks for. `init` prints exactly what it trusted, what each kind of trust switches on (above),
+  and what it skipped. Only `init` ever adds a project folder. A project initialised before this rule has no
+  consent on record: `open` and `rotate` do not write trust for it, they say "run `foreman init` again"
+  (§4.2: the session is not opened).
+- `open` adds the worktree it just made, and `rotate` the same worktree when it first gets Antigravity hook
+  files (Antigravity only, below). Neither adds a project folder.
+- The write is refused when the command runs inside a session of the orchestrator's side (an orchestrator, or
+  a worker it owns), whatever path it names (`init --path` included). It is allowed from a terminal, and from
+  a session the user owns, which is how an agent installs foreman for the user. `open` and `rotate` are
+  run by an orchestrator by design and write only the paths in the next bullet.
+- A path is acceptable only if, after resolving links, it is none of: `/`, the user's home or any folder
+  above it, the state folder or anything inside it except a worktree foreman made for this project, the
+  Antigravity or Codex configuration folder, or a folder that contains another registered project. A worktree
+  must also be a direct child of `<state>/worktrees/<project>/`, equal to the path in the session's record, and
+  listed by `git worktree list` of the project. Anything else: no trust is written, `init` does everything
+  else and exits with a failure status naming the reason, and `open` and `rotate` refuse.
+- *Threat model.* An agent that runs as the user can edit the agents' settings files directly; this section
+  does not defend against that. It makes sure that foreman itself is not the lever: no session on the orchestrator's side
+  can make foreman trust a folder, and nothing but the user's `init` consents to a project folder.
+- The paths written are the path foreman starts the agent in, and its resolved form when that differs, so the
+  entry matches whichever form the agent compares.
+
+**Add-only.** foreman never removes, reorders or rewrites an entry that is already there, and adds no pattern
+and no folder above the project. An entry already there is left alone and is not recorded as foreman's. An
+entry that refuses the trust (Codex `trust_level = "untrusted"`, a hook with `enabled = false`) is the user's
+decision: it is kept, and `init` reports the project as not trusted instead of passing silently.
 
 **How a file is edited** (the same for both agents' files):
-- *Backup.* Before the first edit of a file, a copy with the same permissions is saved as
-  `<file>.foreman-bak` and never overwritten after that. The Antigravity settings file already has this
-  backup from the statusline wrapping; they share it.
+- *Target.* The file the agent really reads: Codex's `config.toml` under `CODEX_HOME` when set, else
+  `~/.codex`; Antigravity's `settings.json`. A link is followed and its target edited (a file that is not a
+  regular file owned by the user is refused), so a managed dotfile is not replaced by a plain copy.
+- *Lock.* foreman holds a lock for that file from the read to the end of the rename and the update of
+  `trust.json`, so two foreman commands (two `open`s at once, §8.12) cannot lose each other's entry. The
+  agents cannot be locked: after the rename foreman reads the file back and, if its entry is missing, starts
+  again from the read, up to three times, then reports failure.
 - *Narrow.* The new text is the old text plus the added lines; comments, order and formatting survive.
-- *Atomic.* The whole new file is written next to the original with the same permissions, then renamed over
-  it. The agents write these files too, so foreman re-reads the file just before the rename; if it changed
-  since foreman read it, foreman starts again from the read, up to three times, then gives up without
-  writing.
+  Paths are encoded by a real JSON or TOML encoder, and a path with a control character is refused. Before
+  the rename foreman parses the old and the new text and requires the difference to be exactly the intended
+  one; otherwise nothing is written.
+- *Atomic.* The temporary file and the backup are created exclusively, with the original's permissions set
+  before any content is written, in the target's folder; the temporary file is then renamed over the target.
 - *Idempotent.* When everything is already there, nothing is written, no backup is made and the state does
   not change.
-- *Failure.* A file that is not valid, not the expected shape, or not writable is left exactly as it was,
-  with no backup, and the reason is reported.
+- *Invalid input.* A file that is not valid (strict JSON, no BOM or comments; TOML), is not the expected shape
+  (`trustedWorkspaces` not a list or holding non-strings; `hooks` or `projects` not a table), or is not writable is left exactly as it was, with no backup,
+  and the reason is reported. Parsing TOML needs Python 3.11 (`tomllib`); on an older Python Codex trust is not
+  written and `init` says so.
+- *Backup.* Before the first edit of a file, a copy with the same permissions is saved as
+  `<file>.foreman-bak` and never overwritten. It is the file as it was before foreman's first edit, for the
+  user to compare; it is not used to undo a trust edit. The Antigravity file already has one from the
+  statusline wrapping, and they share it. `uninstall` deletes a backup only if the file equals it again.
+- *Which state.* Trust is written only when the state folder is the default one for the HOME in effect, so a
+  trial instance with a throwaway state folder cannot leave entries its own record would never remove (it
+  redirects HOME as well). Otherwise the step is skipped and said so.
 
-**What is recorded.** The state folder keeps `trust.json`: for each file, the entries foreman added, each with
-its project, whether it is for the project folder or a worktree, and the time (for Codex also the hook key and
-the hash written). The record is written before the file is edited, so a crash leaves at worst a recorded
-entry that is not there, never an entry that nobody owns.
+**What is recorded.** `trust.json` in the state folder lists, per file, the entries foreman added: the path or
+the Codex key, the project, whether it is for the project folder or a worktree, and the time. An entry is
+written to the record as *pending* before the file is edited and becomes *applied* after the read-back. A
+pending entry is never removed from the agent's file, because after a crash foreman cannot know whether the
+entry was already the user's; it is reported and then dropped from the record. If `trust.json` cannot be
+read, foreman adds nothing and removes nothing, and reports it.
 
-**Taking it back.** foreman removes only entries in the record, and only while they are still as foreman wrote
-them; one the user has changed stays, and is reported.
-- Closing a worktree (or the scheduled check taking it back) removes that worktree's entries. The scheduled
-  check also removes recorded worktree entries whose folder no longer exists.
-- `init --remove` removes the project's entries, including those of its kept worktrees.
-- `uninstall` removes all of them, before it restores the statusline commands, so a settings file that
-  nothing else changed returns to its original bytes. A full purge refuses while a recorded entry could not
-  be removed, so the record is never deleted while foreman's entries remain.
-- A file that cannot be read at that moment keeps its records and is reported.
+**Taking it back.** foreman removes only *applied* entries, and only while they are still as foreman wrote them
+(a Codex table must hold exactly the keys and values foreman wrote; one the user has changed stays and is
+reported).
+- When a worktree is removed (§4.2) its entries go with it; a kept worktree stays trusted. The scheduled
+  check also removes recorded worktree entries whose folder no longer exists. A launch that fails after the
+  write takes its entry back.
+- `init --remove` removes the project's entries, and those of its kept worktrees that have no open session.
+- `uninstall` removes all of them, before it restores the statusline commands, so a settings file that nothing
+  else changed returns to its original bytes. A full purge refuses while a recorded entry could not be removed.
+- A file that cannot be read then keeps its records and is reported.
+
+**Is it working.** After a write foreman reads the file back (Antigravity), or asks Codex read-only about the
+real state and expects `trusted`. The scheduled check repeats that for every initialised project and its
+open workers, and reports drift once per occurrence, with `status`: an Antigravity entry dropped by the agent
+rewriting its file, a Codex hook turned `modified` by a moved install or a changed `FOREMAN_HOME`, or a
+`.codex/config.toml` or foreign `.agents/hooks.json` that appeared in a trusted folder or one of its worktrees.
+It only reports. `init` repairs the project folder and the entries of live worktrees.
 
 **Antigravity.**
 - *Where.* `trustedWorkspaces`, a list of absolute folder paths, in `~/.gemini/antigravity-cli/settings.json`,
   the file whose statusline foreman already wraps. Antigravity adds entries there itself: today's file holds
   entries it wrote for earlier worktrees next to broad ones for the home folder and `~/projects`. foreman
-  neither relies on the broad ones nor removes them. If the file does not exist, it is created holding only
-  this key.
-- *What.* The exact, resolved path of the project folder at `init`; the worktree's path at `open`, after the
-  worktree and its hook files exist and before the agent is launched.
-- *Failure.* `init` does everything else, then reports that Antigravity is not trusted, why, and the path to
-  add by hand, and exits with a failure status, so that whoever ran it does not report success; running it
-  again after the cause is fixed completes it. `open` of an Antigravity worker whose worktree cannot be
-  trusted does not open the session, as in §4.2 ("If it cannot be made").
+  neither relies on the broad ones nor removes them. A missing file is created with mode 0600 holding only
+  this key, if its folder exists.
+- *What.* The project folder at `init`. A worktree at `open`, after it and its hook files exist and before the
+  agent is launched, whenever the worktree gets Antigravity hook files, whichever agent is launched in it, so
+  a session started by hand there is seen as well (§4.2).
 - *Evidence.* Antigravity loads a workspace's hook files only for a trusted workspace, and loaded them in a run
   that supplied the entry (`docs/build/integration-facts.md`, Antigravity).
 
-**Codex.** Whether the hook hash can be reproduced, which decides the case: **it can, so Codex is handled like
-Antigravity; it does not stay a manual step.**
+**Codex.** Whether the hook hash can be reproduced decides the case: **it can, so Codex is handled like
+Antigravity and is not a manual step**, with one difference: Codex works **per repository**, not per worktree.
 - *Evidence (Codex 0.146.1, and its source).*
-  1. `~/.codex/config.toml` holds, per approved hook, a table `[hooks.state."<hooks file path>:<event>:<group>:<handler>"]`
-     with `enabled` and `trusted_hash = "sha256:…"`. The key contains the hooks file's absolute path, so a
-     worktree needs its own entries.
+  1. `~/.codex/config.toml` holds, per approved hook, `[hooks.state."<hooks file path>:<event>:<group>:<handler>"]`
+     with `enabled` and `trusted_hash = "sha256:…"`.
   2. The hash is the SHA-256 of the compact JSON, with sorted keys, of
      `{"event_name": <snake_case event>, "matcher": <only if the group has one>, "hooks": [{"type": "command",
-     "command": …, "timeout": <seconds, 600 if none>, "async": false}]}`. It covers the command text, the
-     timeout and the matcher, not the script the command runs. This is what Codex's source does (a normalised
-     hook identity hashed by `version_for_toml`).
+     "command": …, "timeout": <seconds, 600 if none>, "async": false}]}`. It covers the command text, timeout
+     and matcher, not the script the command runs. This is what Codex's source does (a normalised hook
+     identity hashed by `version_for_toml`).
   3. Reproduced: this recipe gives all 9 hashes in the user's real file. For three hooks shaped like foreman's
-     (one with matcher `*`, one with the SessionEnd default timeout), Codex's own `hooks/list` reported the same
+     (one with matcher `*`, one with the SessionEnd default timeout), Codex's `hooks/list` reported the same
      `currentHash`, and the status changed from `untrusted` to `trusted` once those hashes were written to a
      scratch Codex home.
-  4. A project's hook files are listed at all only when `[projects."<folder>"]` has `trust_level = "trusted"`
-     (a scratch home without it listed none). Codex writes such entries itself for folders the user trusts;
-     the real file holds some for worktrees.
-  5. Any change to foreman's hook (a new `FOREMAN_HOME`, a moved install) turns its status to `modified`, and
-     Codex then skips it without a word, so `init` must be run again after such a change.
-- *What.* For the project folder or worktree: the `[projects."<folder>"]` entry with `trust_level = "trusted"`,
-  and for each of foreman's hooks in that folder's `.codex/hooks.json` a `[hooks.state."<key>"]` table with
-  `enabled = true` and the hash. Other hooks in the file are never trusted.
+  4. A project's hook files are listed at all only when `[projects."<folder>"]` is trusted.
+  5. In a linked git worktree Codex ignores the worktree's `.codex/hooks.json` and reads the main checkout's;
+     the key names the main checkout's file, and approving it makes the hooks `trusted` in every worktree
+     (measured twice, independently). A worktree needs no Codex entry of its own.
+  6. Any change to a hook (a new `FOREMAN_HOME`, a moved install) turns it `modified`; Codex then skips it
+     without a word.
+- *What.* At `init`, for the main checkout: the `[projects."<folder>"]` entry with `trust_level = "trusted"`
+  (skipped as above when `.codex/config.toml` exists), and for each of foreman's hooks in its
+  `.codex/hooks.json` a `[hooks.state."<key>"]` table with `enabled = true` and the hash. `open` and `rotate`
+  write nothing for Codex; they check, read-only, that Codex reports foreman's hooks `trusted` from the
+  worktree. If it does not (for example Codex was not installed at `init`, so the main checkout has no Codex
+  hooks), the session is not opened or the rotation fails with "run `foreman init` again". The Codex hook file
+  that `open` writes into a worktree is ignored by Codex.
+- *Which hooks.* "foreman's hooks" means exactly the handlers foreman generates now. foreman approves a hook
+  only if `hooks/list` reports its command, timeout and matcher equal to those, its source `project`, and its
+  path the project's `.codex/hooks.json`. Anything else in a slot that looks like foreman's is reported and never
+  approved, even if it matches today's test for a foreman handler. After the query foreman checks that the
+  file has not changed, else starts again.
 - *Where the hash comes from.* From Codex, not from a copy of the recipe in foreman, because the recipe is
   Codex's internal and may change between versions. foreman asks `codex app-server` (`hooks/list`, which needs
   no login) about the folder, with its Codex home pointing at a scratch folder that holds only the
-  `[projects]` entry, and writes the key and `currentHash` it reports for foreman's own hooks. The user's real
-  `config.toml` is not touched by this check.
-- *The one exception to add-only.* If the table for a key of foreman's own hook exists with a different hash
-  (for example the user approved an older foreman hook by hand and the hook has changed), foreman replaces
-  the hash and records the replacement. No other existing table is touched.
+  `[projects]` entry, and writes the key and `currentHash` it reports. The user's real `config.toml` is not
+  touched by this check. A table that foreman recorded and whose key or hash is no longer right (a changed hook,
+  or a shifted group index) is replaced; one that foreman did not add is never touched.
 - *If it cannot.* When `codex` is missing, does not answer within 10 seconds, or reports none of foreman's
-  hooks for the folder, nothing is written and `init` and `open` say that the hooks still need approval in
-  Codex `/hooks`. The worker still opens, but a worker whose hooks Codex skips is not seen by foreman.
+  hooks for the folder, nothing is written and `init` says that the hooks still need approval in Codex
+  `/hooks`. A worker whose hooks Codex skips is not seen by foreman.
 - *Role.* Codex is still a worker agent only in v1. The reason is not trust: its hooks have not been exercised
-  in a logged-in session (decision D23).
+  in a logged-in session (D23), and the findings above come from `hooks/list`, not from a hook firing.
+
+**When the file cannot be edited.**
+
+| State of the file | `init` | `open` (Antigravity worker) | `rotate` to the agent |
+|---|---|---|---|
+| fine, entry added | continues | continues | continues |
+| missing | Antigravity: created; Codex: created holding only the added tables | same | same |
+| invalid, wrong shape, unwritable, lock lost three times | does everything else, then exits with failure and the manual step | session not opened, nothing left behind | rotation fails, old session stays |
+| trust refused by the user, or by the rules above | exits with failure naming the reason | session not opened | rotation fails |
+
+Codex never blocks `open`, except that foreman's hooks must already report `trusted` (above).
+
+**What the skills say.** The rule "never trust a hook on the user's behalf" becomes: *`foreman init` does the
+narrow trust write; sessions and orchestrators never do it themselves.* An agent that installs foreman for the
+user may run `foreman init`; an orchestrator or a worker it owns may not trigger the write.
 
 ## 6. Where it runs
 - **Machines**: Linux (the home server) and macOS (the work computer) **(user)**.
@@ -513,7 +584,8 @@ Antigravity; it does not stay a manual step.**
   instructions or rule changes by themselves.
 - The web UI is never reachable from the public internet (§5.2).
 - foreman never grants permissions to itself (§4.12). The one trust it grants is the narrow, recorded write of
-  §5.5, on the user's consent at `init`. A session, an orchestrator or a message never writes trust.
+  §5.5, on the user's consent at `init`. An orchestrator, a worker it owns or a message cannot make it
+  write trust; trust is not limited to hooks, and §5.5 says what each kind switches on.
 
 ## 8. Acceptance: how we know it works
 1. Over a normal week of work, the user does not have to kick the orchestrator or ask how things are going.
@@ -537,9 +609,17 @@ Antigravity; it does not stay a manual step.**
 12. Two workers opened at once in a git project each work in their own worktree and branch, and neither
     changes the other's files. Closing one removes its worktree unless that would lose work, and leaves
     the other untouched.
-13. After `foreman init` in a folder, a new Antigravity session and a new Codex session started there, and a
-    worker opened in a worktree, load foreman's hooks with no trust step done by hand. `foreman uninstall`
-    leaves both agents' settings files with every entry that was there before and none that foreman added.
+13. After `foreman init` in a folder, a new Antigravity session started there and an Antigravity worker opened
+    in a worktree load foreman's hooks with no trust step done by hand, and Codex reports foreman's hooks
+    `trusted` for the folder and for its worktrees. `foreman uninstall` leaves both agents' settings files
+    with every entry that was there before and none that foreman added. A Codex hook actually firing in a
+    worktree needs a logged-in Codex session; until one exists (D23) that part is checked with `hooks/list`.
+14. Trust is refused, with a reason and a failure status, and the files are unchanged, for: `/`, the home
+    folder or a link to it; a folder holding another project; a folder with a foreign `.agents/hooks.json` or,
+    for Codex, a `.codex/config.toml`; a hook file whose command is not what foreman generates; a malformed
+    settings file; an orchestrator's session running `init --path`. Two workers opened at once both end up
+    trusted. An entry that is already there is never removed by foreman, including after a crash between the
+    record and the edit.
 
 ## 9. Left to the builder
 - Thresholds for "stuck" and "waiting too long", and what counts as "quiet" in the triage rail.
@@ -553,11 +633,15 @@ Antigravity; it does not stay a manual step.**
    Telegram → self-improvement → permissions), and whether shopping-list is the first project to switch
    to foreman (replacing its local `orchestrator/`).
 3. Does any agent ask the user to trust a new worktree folder under Herdr? Claude Code and Antigravity were
-   tried on Orca and no trust prompt blocked them. (Codex approves hooks per path, so each worktree gets its
-   own entries; §5.5 writes them.)
+   tried on Orca and no trust prompt blocked them. (Codex needs nothing for a worktree: it reads the main
+   checkout's hooks, §5.5.)
 4. Does Antigravity treat a workspace as trusted when only a parent folder is listed (the user's file lists
-   the home folder and `~/projects`), and does it compare resolved or unresolved paths? §5.5 adds the exact
-   resolved path whatever the answer, so this affects only how many entries pile up.
-5. Codex's `hooks/list` (inside `codex app-server`) is the only source of the hook key and hash that §5.5
-   relies on. Is it stable across Codex versions? If a version drops it, Codex trust falls back to the
-   user's approval in `/hooks` for that version.
+   the home folder and `~/projects`)? §5.5 adds the exact path, in the form the agent is started with and
+   resolved, so this decides only how many entries pile up.
+5. Codex's `hooks/list` is the only source of the hook key and hash that §5.5 relies on. If a Codex version
+   drops it, Codex trust falls back to the user's approval in `/hooks` for that version, and the scheduled
+   check reports the hooks as not trusted.
+6. A logged-in Codex session is needed to confirm that a hook fires from a worktree, and with which working
+   folder.
+7. Should foreman ever write Codex trust for a repository that has its own `.codex/config.toml`, after showing
+   the user what it contains? §5.5 says no, the user does it by hand.
