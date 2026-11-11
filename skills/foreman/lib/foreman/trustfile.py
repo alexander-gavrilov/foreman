@@ -26,6 +26,11 @@ class TrustEditError(Exception):
     """A file could not be edited; the message is the reason shown to the user. The file was left as it was."""
 
 
+class TrustEditWritten(TrustEditError):
+    """The new text IS in the file, but the read-back or the record update failed afterwards. The caller must keep the
+    record as it is (a pending entry stays, so uninstall reports it) and never drop it."""
+
+
 # ------------------------------------------------------------ target, lock, read
 
 def resolve_target(path):
@@ -114,6 +119,17 @@ def make_backup(target, raw):
             os.link(tmp, backup)  # exclusive: fails when a backup appeared meanwhile
         except FileExistsError:
             return False
+        except OSError:  # no hard links here (some FUSE, exFAT, SMB): create it exclusively instead
+            try:
+                _write_exclusive(backup, raw, stat.S_IMODE(os.stat(target).st_mode))
+            except FileExistsError:
+                return False
+            except OSError:
+                try:
+                    os.unlink(backup)  # never leave a truncated backup that would then stay for good
+                except OSError:
+                    pass
+                raise
         return True
     finally:
         try:
@@ -159,6 +175,7 @@ def edit(target, build, verify, present, before_write=None, after_applied=None, 
     target = resolve_target(target)
     recorded = [False]
     aborted = [False]
+    renamed = [False]  # the new text is in the file: from here on nothing may be dropped from the record
 
     def abort():
         """Drop what was recorded as pending: nothing was, or will be, written by foreman."""
@@ -172,6 +189,7 @@ def edit(target, build, verify, present, before_write=None, after_applied=None, 
         with file_lock(target):
             existed = check_target(target)
             for _ in range(MAX_TRIES):
+                renamed[0] = False
                 raw = read_bytes(target)
                 text = decode(raw, target)
                 new_text = build(text, raw is not None)
@@ -189,6 +207,7 @@ def edit(target, build, verify, present, before_write=None, after_applied=None, 
                     continue
                 mode = stat.S_IMODE(os.stat(target).st_mode) if raw is not None else 0o600
                 atomic_write(target, new_text.encode("utf-8"), mode)
+                renamed[0] = True
                 if present(decode(read_bytes(target), target)):
                     if after_applied:
                         after_applied()
@@ -197,10 +216,18 @@ def edit(target, build, verify, present, before_write=None, after_applied=None, 
             abort()
             raise TrustEditError("%s kept changing while it was edited (tried %d times); nothing was lost, run "
                                  "again" % (target, MAX_TRIES))
+    except TrustEditWritten:
+        raise
     except TrustEditError:
-        abort()
+        if not renamed[0]:
+            abort()
         raise
     except (OSError, UnicodeError) as exc:  # a full disk, an I/O error, a path that is not UTF-8: a refusal, not a crash
+        if renamed[0]:
+            # the entry is in the file but the read-back or the record update failed: the pending record stays, so
+            # uninstall reports it (spec 5.5) instead of leaving an unrecorded entry
+            raise TrustEditWritten("%s was edited but the result could not be checked or recorded (%s); the record "
+                                   "was left as it was and uninstall will report the entry" % (target, exc))
         abort()
         raise TrustEditError("%s could not be written (%s); nothing was changed" % (target, exc))
 

@@ -426,6 +426,8 @@ def agy_add(value, project, scope, worktree=None):
         load_record()  # an unreadable record: nothing is added
         done = trustfile.edit(target, build, verify, present, before_write=pending,
                               after_applied=applied, on_abort=lambda: _drop([eid]))
+    except trustfile.TrustEditWritten as exc:
+        raise TrustRefused(str(exc))  # the entry is in the file: its pending record stays
     except TrustEditError as exc:
         _drop_pending_quiet(eid)
         raise TrustRefused(str(exc))
@@ -768,6 +770,8 @@ def codex_add(folder, project, hooks, fm):
         load_record()
         done = trustfile.edit(target, build, verify, present, before_write=pending, after_applied=applied,
                               on_abort=lambda: _drop(list(ids.values())))
+    except trustfile.TrustEditWritten as exc:
+        raise TrustRefused(str(exc))  # the tables are in the file: their pending records stay
     except TrustEditError as exc:
         _drop_pending_quiet_many(list(ids.values()))
         raise TrustRefused(str(exc))
