@@ -166,7 +166,7 @@ Normalised kinds: `session_start, prompt, pre_tool, post_tool, stop, wait_input,
 
 | | Claude Code | Antigravity (agy) | Codex |
 |---|---|---|---|
-| project hook file written by `init` | `.claude/settings.local.json` (`hooks` key, Claude layout) | `.agents/hooks.json` (top key = hook name `foreman`, then events; flat lists except Pre/PostToolUse) + workspace must be trusted | `.codex/hooks.json` (Claude layout); the user approves the hook once in Codex `/hooks` (foreman never trusts itself) |
+| project hook file written by `init` | `.claude/settings.local.json` (`hooks` key, Claude layout) | `.agents/hooks.json` (top key = hook name `foreman`, then events; flat lists except Pre/PostToolUse) + workspace trusted by `init` (D66) | `.codex/hooks.json` (Claude layout); `init` writes the project trust and the hook hashes Codex reports (D66) |
 | events used | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification (permission_prompt / idle_prompt), PermissionRequest, SessionEnd | SessionStart, PreInvocation, PreToolUse, PostToolUse, Stop (`fullyIdle`) — event name passed as argument | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Stop, SessionEnd |
 | session id | `session_id` | `conversationId` | `session_id` |
 | block an edit | stdout `hookSpecificOutput.permissionDecision: deny` | stdout `{"decision":"deny","reason":…}` | `hookSpecificOutput.permissionDecision: deny` (or exit 2) |
@@ -346,7 +346,7 @@ allows nobody and prints their ids and first names for `allow-user`.
 - `foreman init`: project state + board; hooks per agent present (project-local files, each added to
   `.git/info/exclude`, so the working tree stays clean: Claude `.claude/settings.local.json`, agy `.agents/hooks.json`,
   Codex `.codex/hooks.json`); no committed file is edited (the rule arrives by the SessionStart hook); agy workspace
-  trust and Codex hook trust are one-time user steps;
+  trust and Codex project/hook trust are written by `init` itself, narrowly, on the user's consent (D66, spec 5.5);
   Telegram topic; registers already-open sessions in the project folder as `owner: user`. Idempotent.
 - `foreman install`: `~/.local/bin/foreman` symlink, `FOREMAN_HOME`, config defaults for this OS, service unit,
   statusline taps, prints the pairing code. Idempotent; `foreman uninstall` reverts.

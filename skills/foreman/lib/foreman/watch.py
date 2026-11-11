@@ -283,6 +283,17 @@ def run_pass(interval_s=60, heartbeat=True):
         import sys
         print("foreman: worktree sweep failed: %s" % exc, file=sys.stderr)
 
+    # 7c. Trust (spec 5.5): once an hour per project, repeat the checks; each drift is reported once per occurrence
+    try:
+        from foreman import trust
+        for slug, msg in trust.scheduled_check(state):
+            wake.wake(slug, "trust: " + msg)
+            summary["wakes"] += 1
+            summary["conditions"].append("trust:" + slug)
+    except Exception as exc:  # the pass goes on, but a broken check must not be silent
+        import sys
+        print("foreman: trust check failed: %s" % exc, file=sys.stderr)
+
     # 8. Weekly lessons reminder
     lessons_state = state.setdefault("lessons", {})
     for p in all_projs:

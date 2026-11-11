@@ -111,6 +111,17 @@ def discard(project_path, path, branch):
             pass
     if os.path.lexists(path):  # git never registered it (a failed `worktree add` leaves the claimed folder)
         shutil.rmtree(path, ignore_errors=True)
+    _take_back_trust(path)
+
+
+def _take_back_trust(path):
+    """The trust entries foreman added for a worktree that is going away (spec 5.5). A failure stays recorded and is
+    retried by the scheduled check; it never stops a cleanup."""
+    try:
+        from foreman import trust
+        trust.remove_worktree(path)
+    except Exception:
+        pass
 
 
 def _inside(path, root):
@@ -137,6 +148,7 @@ def _remove_if_safe(base, path, branch):
         _git(base, "worktree", "remove", path, timeout=REMOVE_TIMEOUT_S)  # no --force
     except WorktreeError as exc:
         return "kept worktree %s (%s)" % (path, (str(exc).splitlines() or ["git failed"])[0])
+    _take_back_trust(path)
     try:
         # `git branch -d` alone also accepts a branch merged into its upstream (pushed, not merged here), so the
         # target is checked explicitly: the branch the main checkout is on
@@ -178,6 +190,7 @@ def _reclaim_orphan(project, path, now):
     if not os.path.lexists(os.path.join(path, ".git")):  # git never got to register it
         try:
             os.rmdir(path)  # only when empty
+            _take_back_trust(path)
             return "removed empty worktree folder %s (no session)" % path
         except OSError:
             return None
@@ -218,4 +231,9 @@ def sweep():
             line = _isolated(_reclaim_orphan, proj, path, now, label=path)
             if line:
                 lines.append(line)
+    try:  # entries recorded for worktrees whose folder is gone (a removal that failed earlier, a folder deleted by hand)
+        from foreman import trust
+        lines += trust.remove_missing_worktrees()
+    except Exception as exc:
+        lines.append("could not take back trust entries (%s)" % exc)
     return lines

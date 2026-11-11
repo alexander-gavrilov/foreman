@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""A stand-in for `codex app-server` (hooks/list only), for tests: the real Codex must never be started from a test.
+
+It follows what the spec (5.5) measured on Codex 0.146.1: a project's hook files are listed only when
+`[projects."<folder>"]` is trusted; in a linked git worktree the main checkout's `.codex/hooks.json` is read; the key is
+`<hooks file>:<snake_event>:<group>:<handler>`; the hash is the SHA-256 of the compact sorted JSON of the normalised
+hook identity; the status is `untrusted` (no table), `trusted` (same hash) or `modified` (another hash).
+Environment: CODEX_HOME (config.toml), CODEX_STUB_LOG (one line per start), CODEX_STUB_MODE = hang | exit | garbage.
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+import tomllib
+
+if os.environ.get("CODEX_STUB_LOG"):
+    with open(os.environ["CODEX_STUB_LOG"], "a") as f:
+        f.write("%s CODEX_HOME=%s\n" % (" ".join(sys.argv[1:]), os.environ.get("CODEX_HOME")))
+mode = os.environ.get("CODEX_STUB_MODE")
+if sys.argv[1:2] != ["app-server"]:
+    sys.exit(2)
+if mode == "exit":
+    sys.exit(1)
+
+
+def snake(name):
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def main_checkout(folder):
+    git = os.path.join(folder, ".git")
+    if os.path.isfile(git):
+        gitdir = open(git).read().strip().split(":", 1)[1].strip()
+        common = os.path.normpath(os.path.join(gitdir, open(os.path.join(gitdir, "commondir")).read().strip()))
+        return os.path.dirname(common)
+    return folder
+
+
+def listing(folder):
+    home = os.environ["CODEX_HOME"]
+    try:
+        cfg = tomllib.load(open(os.path.join(home, "config.toml"), "rb"))
+    except FileNotFoundError:
+        cfg = {}
+    root = main_checkout(folder)
+    if (cfg.get("projects", {}).get(root) or {}).get("trust_level") != "trusted":
+        return []
+    path = os.path.join(root, ".codex", "hooks.json")
+    try:
+        data = json.load(open(path))
+    except (FileNotFoundError, ValueError):
+        return []
+    state, out, order = cfg.get("hooks", {}).get("state", {}), [], 0
+    for event, groups in (data.get("hooks") or {}).items():
+        for gi, group in enumerate(groups):
+            for hi, h in enumerate(group.get("hooks") or []):
+                ident = {"event_name": snake(event)}
+                if group.get("matcher") is not None:
+                    ident["matcher"] = group["matcher"]
+                timeout = h.get("timeout") or 600
+                ident["hooks"] = [{"type": "command", "command": h["command"], "timeout": timeout, "async": False}]
+                digest = "sha256:" + hashlib.sha256(
+                    json.dumps(ident, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                key = "%s:%s:%d:%d" % (path, snake(event), gi, hi)
+                row = state.get(key)
+                status = "untrusted" if row is None else "trusted" if row.get("trusted_hash") == digest else "modified"
+                out.append({"key": key, "eventName": event[0].lower() + event[1:], "handlerType": "command",
+                            "matcher": group.get("matcher"), "command": h["command"], "timeoutSec": timeout,
+                            "sourcePath": path, "source": "project", "displayOrder": order,
+                            "enabled": (row or {}).get("enabled", True), "isManaged": False,
+                            "currentHash": digest, "trustStatus": status})
+                order += 1
+    return out
+
+
+def reply(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if mode == "hang":
+        time.sleep(60)
+    if mode == "garbage":
+        reply({"id": msg.get("id"), "result": {"nope": 1}})
+        continue
+    if msg.get("method") == "initialize":
+        reply({"id": msg["id"], "result": {"codexHome": os.environ["CODEX_HOME"]}})
+    elif msg.get("method") == "hooks/list":
+        cwds = msg["params"].get("cwds") or []
+        reply({"id": msg["id"], "result": {"data": [{"cwd": c, "errors": [], "warnings": [], "hooks": listing(c)}
+                                                    for c in cwds]}})

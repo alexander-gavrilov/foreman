@@ -215,6 +215,15 @@ def remove_project(path, home=None, in_worktree=False):
         raise InitError("%s is a worker worktree of project %s; run init --remove in %s"
                         % (path, owner["slug"], owner["path"]))
     changes = []
+    if not in_worktree:
+        # the trust entries foreman added for the project, and for its kept worktrees with no open session
+        from foreman import sessions, trust
+        for proj in projects.list_projects():
+            if os.path.realpath(proj.get("path") or "") != path:
+                continue
+            busy = [(r.get("worktree") or {}).get("path") for r in sessions.list_sessions(proj["slug"])
+                    if r.get("worktree") and sessions.is_open(r)]
+            changes += trust.remove_project(proj["slug"], in_use=busy)
     for agent, rel in HOOK_FILES.items():
         if _has_foreman_hooks(path, agent) and is_tracked(path, rel):
             changes.append("left %s alone: it is tracked by git (remove the foreman hooks there yourself)" % rel)
@@ -385,10 +394,16 @@ def register_open_sessions(project, transports):
 
 # ------------------------------------------------------------ init
 
-def init_project(path, name=None, home=None, agents=None, transports=None, fm=None):
+def init_project(path, name=None, home=None, agents=None, transports=None, fm=None, failures=None):
+    """`failures`, when given, receives what init could not do (trust refused or not written); the caller exits with
+    a failure status for it. Everything else init does is done regardless (spec 5.5)."""
+    from foreman import trust
     path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
     if not os.path.isdir(path):
         raise InitError("%s is not a folder" % path)
+    if trust.orchestrator_side():
+        raise InitError("refused: `foreman init` writes agent trust, and an orchestrator or a worker it owns may not "
+                        "trigger that; the user runs it (nothing was changed)")
     owner = projects.worktree_project(path)
     if owner:
         raise InitError("%s is a worker worktree of project %s; run init in %s" % (path, owner["slug"], owner["path"]))
@@ -416,12 +431,15 @@ def init_project(path, name=None, home=None, agents=None, transports=None, fm=No
             continue
         if write_hooks(path, agent, fm):
             changes.append("wrote %s hooks (%s)" % (agent, HOOK_FILES[agent]))
-            if agent == "codex":
-                notes.append("Codex: approve the foreman hook once in Codex /hooks (foreman never trusts itself)")
-            elif agent == "antigravity":
-                notes.append("Antigravity: trust this workspace in Antigravity so .agents/hooks.json can run")
     for rel in exclude_from_git(path, ours):
         changes.append("excluded %s from git (.git/info/exclude)" % rel)
+
+    # the user's consent to trust this folder (spec 5.5): the narrow trust write for Antigravity and Codex
+    res = trust.run_init(project, path, agents, fm)
+    changes += res["changes"]
+    notes += res["notes"]
+    if failures is not None:
+        failures += res["failures"]
 
     if project.get("telegram_topic_id") is None:
         try:

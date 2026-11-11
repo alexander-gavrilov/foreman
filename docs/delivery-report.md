@@ -44,7 +44,7 @@ Windows results are in `$W/live/tg/win-results.md`, copied from the relayed mess
 1. Install: tell an agent "установи плагин" on ghome, then check `systemctl --user status` for the foreman service.
 2. The same on the work Mac: launchd, Homebrew `terminal-notifier`, and the click-through of a desktop notification. **macOS was never run on real hardware.**
 3. Phone over WireGuard: open a Telegram notification, reply in the topic. Live tests used a browser on Windows over the VPN (web UI at 10.94.51.100), not a phone; the bot and group already exist.
-4. Trust steps: Antigravity workspace trust per project (`.agents/hooks.json`), and Codex hook approval in `/hooks`.
+4. Trust steps: written by `foreman init` since D66 (Antigravity workspace trust, Codex project trust and hook hashes), except for a folder that holds hooks or a `.codex/` config that are not foreman's: the user trusts those by hand. Not tested live: Antigravity loading a worktree's hooks after the entry, Codex firing a hook in a logged-in session.
 5. Live a real week and judge item 1.
 
 ## Moving to the live install (foreman as the first project)

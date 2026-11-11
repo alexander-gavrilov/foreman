@@ -60,6 +60,25 @@ class Packaging(ForemanTestCase):
         self.assertIn("~/.agents/skills/foreman/bin/foreman install", text)
         self.assertIn("foreman init", text)
 
+    def test_skills_state_the_trust_rule_of_spec_5_5(self):
+        """The rule "never trust a hook on the user's behalf" became: `foreman init` does the narrow trust write;
+        sessions and orchestrators never do it themselves (spec 5.5, "What the skills say")."""
+        main = " ".join(read("skills", "foreman", "SKILL.md").split())
+        self.assertNotIn("Never trust it for them", main)
+        self.assertNotIn("workspace must be trusted in agy", main)
+        self.assertIn("`foreman init` does the narrow trust write", main)
+        self.assertIn("sessions and orchestrators never write trust themselves", main)
+        self.assertIn("an orchestrator or a worker it owns cannot trigger it", main)
+        orch = " ".join(read("skills", "foreman-orchestrator", "SKILL.md").split())
+        self.assertNotIn("trust a hook on the user's behalf", orch)
+        self.assertIn("or write agent trust", orch)
+        self.assertIn("you may not trigger it", orch)
+
+    def test_the_decision_log_supersedes_d24(self):
+        log = read("docs", "build", "decision-log.md")
+        self.assertIn("D24 · (superseded by D66)", log)
+        self.assertIn("D66 · foreman writes the narrow agent trust itself", log)
+
     def test_plugin_manifests(self):
         plugin = json.loads(read(".claude-plugin", "plugin.json"))
         self.assertEqual(plugin["name"], "foreman")

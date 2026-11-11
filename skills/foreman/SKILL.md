@@ -60,15 +60,19 @@ The user says it to any supported agent; you do the rest. No manual steps for th
    It registers the project and its board, writes hooks for each agent present (Claude, Antigravity, Codex;
    project-local, excluded from git via `.git/info/exclude`; the work-file rule is injected by the SessionStart hook so no committed file is edited), creates the Telegram topic when the machine has Telegram, and registers sessions already
    open in that folder as user-owned workers.
-   - Codex: tell the user to approve the foreman hook once in Codex `/hooks`. Never trust it for them.
-   - Antigravity: the workspace must be trusted in agy.
+   - Trust: `foreman init` does the narrow trust write itself: the project folder in Antigravity's trusted
+     workspaces, and Codex's project entry and foreman's hook hashes. It prints what it trusted and what that
+     switches on, and skips a folder that already holds hooks or a `.codex/` config that are not foreman's (the
+     user trusts those by hand). You may run `foreman init` for the user; sessions and orchestrators never write
+     trust themselves, and an orchestrator or a worker it owns cannot trigger it. `open` saying "run `foreman
+     init`" is for the user to act on.
    - Running `foreman init` again changes nothing that is already correct.
 4. Verify: `foreman status` shows the project; `foreman watch list` shows the watch loop running.
 
 Undo: `foreman uninstall` (restores statusline commands, removes the service and the symlink, takes foreman's
-hooks out of every initialised project, keeps state); `foreman uninstall --purge` also deletes the state folder:
+hooks and the trust entries it added out of every initialised project, keeps state); `foreman uninstall --purge` also deletes the state folder:
 ask the user first (it refuses any folder not named `foreman`). One project only: `foreman init --remove` (removes foreman's hook handlers, keeps yours, and
-the `.git/info/exclude` lines init added; project state stays).
+the `.git/info/exclude` lines init added, the trust entries it added; project state stays).
 
 ## Orchestrator
 

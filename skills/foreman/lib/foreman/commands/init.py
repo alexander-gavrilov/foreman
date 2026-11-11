@@ -25,8 +25,9 @@ def run(args, **kw):
         if not changes:
             print("nothing to remove")
         return 0
+    failures = []
     try:
-        changes, notes = initproj.init_project(args.path, name=args.name, **kw)
+        changes, notes = initproj.init_project(args.path, name=args.name, failures=failures, **kw)
     except initproj.InitError as exc:
         raise CliError(str(exc), 1)
     for line in changes:
@@ -35,4 +36,6 @@ def run(args, **kw):
         print("already correct")
     for line in notes:
         print("note: " + line)
-    return 0
+    for line in failures:
+        print("failed: " + line)
+    return 1 if failures else 0
