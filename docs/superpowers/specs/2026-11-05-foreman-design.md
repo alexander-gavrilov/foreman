@@ -513,8 +513,8 @@ decision: it is kept, and `init` reports the project as not trusted instead of p
   trial instance with a throwaway state folder cannot leave entries its own record would never remove. A file
   outside that HOME (a `CODEX_HOME` elsewhere, a dotfile link whose target lies outside) is written only when
   HOME is the account's own home, so a real user's setup works and a trial with a redirected HOME cannot reach
-  the real files through an inherited `CODEX_HOME`. Otherwise the step is skipped and said so. In such a trial
-  instance `init` records no consent, so `open` and `rotate` do not require it either (§4.2); they write no
+  the real files through an inherited `CODEX_HOME`. Otherwise the step is skipped and said so. In a trial
+  instance (the state folder is not the default one) `init` records no consent, so `open` and `rotate` do not require it either (§4.2); they write no
   trust, and the check for content that is not foreman's still runs for the launched agent. No waiver can exist
   there, so any such content refuses the launch.
 
