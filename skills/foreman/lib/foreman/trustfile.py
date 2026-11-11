@@ -218,9 +218,11 @@ def edit(target, build, verify, present, before_write=None, after_applied=None, 
                                  "again" % (target, MAX_TRIES))
     except TrustEditWritten:
         raise
-    except TrustEditError:
-        if not renamed[0]:
-            abort()
+    except TrustEditError as exc:
+        if renamed[0]:  # e.g. the read-back found a file somebody else rewrote and that no longer parses
+            raise TrustEditWritten("%s was edited but the result could not be checked or recorded (%s); the record "
+                                   "was left as it was and uninstall will report the entry" % (target, exc))
+        abort()
         raise
     except (OSError, UnicodeError) as exc:  # a full disk, an I/O error, a path that is not UTF-8: a refusal, not a crash
         if renamed[0]:

@@ -122,6 +122,8 @@ class TrialContentCheckTest(TrustCase):
         code, out, err = self.open("antigravity")
         self.assertEqual(code, 1)
         self.assertIn("does not trust a folder", err)
+        self.assertIn("a trial instance cannot waive it", err)  # R3-2: no advice that cannot work there
+        self.assertNotIn("run `foreman init` again", err)
         self.assertEqual(sessions.list_sessions(), [])
         self.assertEqual(code == 1 and self.open("claude")[0], 0)  # other agents are not held up
 

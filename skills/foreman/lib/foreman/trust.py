@@ -964,12 +964,15 @@ def user_entry_still_there(slug, agent, folder, fm):
         return False
 
 
-def content_allowed(slug, agent, folder, units, fm, project_folder):
+def content_allowed(slug, agent, folder, units, fm, project_folder, trial=False):
     """None when the launched agent may open in `folder` with this foreign content; else the reason it may not."""
     if not units:
         return None
     c = consent(slug, agent) or {}
     waiver = c.get("waiver")
+    if not waiver and trial:
+        return "%s holds %s; foreman does not trust a folder with content its trust would switch on. Remove it (a " \
+               "trial instance cannot waive it)" % (folder, foreign_text(agent, units))
     if not waiver:
         return "%s holds %s; foreman does not trust a folder with content its trust would switch on. Remove it, or " \
                "trust the folder by hand and run `foreman init` again" % (folder, foreign_text(agent, units))
@@ -1199,7 +1202,7 @@ def prepare_launch(slug, agent, cwd, worktree=None, expect=None):
         # a trial instance writes no trust and asks for no consent, but the content check costs nothing: foreign content
         # means no session for the launched agent whatever consent says (4.2, 5.5)
         if agent in AGENTS:
-            why = content_allowed(slug, agent, cwd, foreign(agent, cwd, fm), fm, base)
+            why = content_allowed(slug, agent, cwd, foreign(agent, cwd, fm), fm, base, trial=True)
             if why:
                 raise TrustRefused(why)
         return launch

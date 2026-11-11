@@ -47,6 +47,23 @@ class FailureAfterRenameTest(TrustCase):
         self.assertIn("/p/one", read(self.agy))
 
 
+class ReadBackRefusalTest(TrustCase):
+    """R3-1. A TrustEditError from the read-back (an unparseable file) after the rename keeps the pending record too."""
+
+    def test_a_read_back_that_does_not_parse_leaves_the_entry_pending(self):
+        write(self.agy, "{}")
+        real = trustfile.atomic_write
+
+        def atomic_write(target, data, mode=None):
+            real(target, data, mode)
+            write(target, "{ not json")  # an agent rewrote the file between the rename and the read-back
+        with mock.patch.object(trustfile, "atomic_write", side_effect=atomic_write):
+            with self.assertRaises(trust.TrustRefused) as cm:
+                trust.agy_add("/p/one", "proj", "project")
+        self.assertIn("could not be checked or recorded", cm.exception.reason)
+        self.assertEqual([r["state"] for r in self.record()], ["pending"])
+
+
 class NoHardLinksTest(TrustCase):
     """R2-2. A file system without hard links still gets its backup."""
 
