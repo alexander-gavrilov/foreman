@@ -155,6 +155,21 @@ def _drop(ids):
     _mutate(fn)
 
 
+def key_created(target):
+    """foreman made the `trustedWorkspaces` list of this file (it was not there): the list goes with its last entry."""
+    return bool((load_record().get("keys") or {}).get(target))
+
+
+def _set_key_created(target, flag):
+    def fn(data):
+        keys = data.setdefault("keys", {})
+        if flag:
+            keys[target] = True
+        else:
+            keys.pop(target, None)
+    _mutate(fn)
+
+
 def _set_state(eid, state):
     def fn(data):
         for e in data["entries"]:
@@ -248,9 +263,10 @@ def check_path(path, slug=None, worktree_of=None, expect=None):
     if not _git_root(real):
         try:
             with os.scandir(real) as it:
-                children = [e.path for e in it if e.is_dir(follow_symlinks=False)]
-        except OSError:
-            children = []
+                children = [e.path for e in it if e.is_dir()]  # a link to a repository is a repository child
+        except OSError as exc:
+            raise TrustRefused("%s cannot be listed, so it cannot be told from a folder of repositories (%s)"
+                               % (real, exc))
         if any(_git_root(c) for c in children):
             raise TrustRefused("%s is a folder of repositories, not a repository" % real)
     return real
@@ -399,17 +415,21 @@ def agy_add(value, project, scope, worktree=None):
 
     def pending():
         _put({"id": eid, "file": target, "kind": "agy-workspace", "value": value, "project": project,
-              "scope": scope, "worktree": worktree, "state": "pending", "at": timeutil.now_iso(),
-              "key_created": bool(seen.get("created_key"))})
+              "scope": scope, "worktree": worktree, "state": "pending", "at": timeutil.now_iso()})
+
+    def applied():
+        _set_state(eid, "applied")
+        if seen.get("created_key"):
+            _set_key_created(target, True)  # per file, not per entry: it decides when the last entry goes
 
     try:
         load_record()  # an unreadable record: nothing is added
         done = trustfile.edit(target, build, verify, present, before_write=pending,
-                              after_applied=lambda: _set_state(eid, "applied"), on_abort=lambda: _drop([eid]))
+                              after_applied=applied, on_abort=lambda: _drop([eid]))
     except TrustEditError as exc:
         _drop_pending_quiet(eid)
         raise TrustRefused(str(exc))
-    except RecordError as exc:
+    except (RecordError, OSError) as exc:
         raise TrustRefused(str(exc))
     return "present" if done == "unchanged" else "added"
 
@@ -424,6 +444,7 @@ def _drop_pending_quiet(eid):
 def _remove_agy(entry):
     """Take one applied Antigravity entry back. Returns (ok, line)."""
     target, value = entry["file"], entry["value"]
+    created = key_created(target)
     seen = {}
 
     def build(text, existed):
@@ -433,28 +454,38 @@ def _remove_agy(entry):
         if not lst or value not in lst:
             seen["gone"] = True
             return None
-        new = trustfile.json_remove_from_list(text, AGY_KEY, value, drop_key_if_empty=bool(entry.get("key_created")))
+        seen["drops_key"] = created and len(lst) == 1
+        new = trustfile.json_remove_from_list(text, AGY_KEY, value, drop_key_if_empty=created)
         if new is None:
             raise TrustEditError("the entry could not be located in the text")
         return new
 
     def verify(old, new):
         want = dict(trustfile.parse_json_strict(old, target))
-        left = [v for v in want[AGY_KEY] if v != value]
-        if left or not entry.get("key_created"):
-            want[AGY_KEY] = left
+        lst = list(want[AGY_KEY])
+        lst.pop(len(lst) - 1 - lst[::-1].index(value))  # one occurrence: a copy somebody else added stays
+        if lst or not created:
+            want[AGY_KEY] = lst
         else:
             del want[AGY_KEY]
         if trustfile.parse_json_strict(new, target) != want:
             raise TrustEditError("the edit would change more than the one entry; nothing was written")
 
     def gone(text):
-        return value not in (trustfile.json_list(trustfile.parse_json_strict(text, target), AGY_KEY) or [])
+        lst = trustfile.json_list(trustfile.parse_json_strict(text, target), AGY_KEY) or []
+        return len(lst) < seen.get("before", 1 << 30)
+
+    def count_before(text, existed):
+        lst = trustfile.json_list(trustfile.parse_json_strict(text, target), AGY_KEY) if existed and text.strip() else []
+        seen["before"] = len(lst or [])
+        return build(text, existed)
 
     try:
-        trustfile.edit(target, build, verify, gone)
+        trustfile.edit(target, count_before, verify, gone)
     except TrustEditError as exc:
         return False, "left the Antigravity trust entry %s: %s" % (value, exc)
+    if seen.get("drops_key"):
+        _set_key_created(target, False)
     return True, "removed the Antigravity trust entry %s" % value
 
 
@@ -633,6 +664,10 @@ def codex_config_state(folder):
     return level, dict(hooks_t.get("state") or {})
 
 
+def _table_ok(table, current_hash):
+    return isinstance(table, dict) and table.get("trusted_hash") == current_hash and table.get("enabled") is not False
+
+
 def _codex_blocks(folder, hooks, project_trusted):
     blocks = []
     if not project_trusted:
@@ -683,8 +718,10 @@ def codex_add(folder, project, hooks, fm):
                 continue  # a table that is there is never touched (the caller reports a modified hook)
             todo.append((kind, key, values, block))
         if not todo:
+            added.clear()
             return None
         new, texts = trustfile.toml_append_tables(text, [b[3] for b in todo])
+        added.clear()  # the plan is made again on every try: a table somebody added meanwhile is not ours
         for (kind, key, values, _), t in zip(todo, texts):
             added[(kind, key)] = (values, t)
         return new
@@ -715,6 +752,8 @@ def codex_add(folder, project, hooks, fm):
         return True
 
     def pending():
+        stale = [ids.pop(k) for k in list(ids) if k not in added]  # planned by an earlier try, not written by this one
+        _drop_pending_quiet_many(stale)
         for (kind, key), (values, text) in added.items():
             eid = ids.setdefault((kind, key), _new_id())
             _put({"id": eid, "file": target, "kind": "codex-" + kind, "value": key, "values": values, "text": text,
@@ -732,7 +771,7 @@ def codex_add(folder, project, hooks, fm):
     except TrustEditError as exc:
         _drop_pending_quiet_many(list(ids.values()))
         raise TrustRefused(str(exc))
-    except RecordError as exc:
+    except (RecordError, OSError) as exc:
         raise TrustRefused(str(exc))
     return [] if done == "unchanged" else ["%s %s" % (k, v) for (k, v) in sorted(added)]
 
@@ -1030,6 +1069,13 @@ def _init_codex(slug, path, fm, out):
                            "approved" % (len(wlook), initproj.HOOK_FILES["codex"]))
     # a table foreman recorded whose key or hash is no longer right is replaced; one it did not add is never touched
     keys = {h["key"]: h["currentHash"] for h in wanted.values()}
+    recorded_keys = {e["value"] for e in entries(project=slug) if e.get("kind") == "codex-hook"}
+    clash = sorted(k for k, h in keys.items() if k in state and k not in recorded_keys
+                   and not _table_ok(state[k], h))
+    if clash:
+        raise TrustRefused("config.toml already has a table of yours for a foreman hook with another hash or switched "
+                           "off (%s); foreman writes nothing: approve the hook in Codex /hooks from the main checkout, "
+                           "or delete that table from config.toml and run `foreman init` again" % ", ".join(clash))
     stale = [e for e in entries(project=slug) if e.get("kind") == "codex-hook" and e.get("state") == "applied"
              and (e["value"] not in keys or (e.get("values") or {}).get("trusted_hash") != keys[e["value"]])]
     for line in _remove_entries(stale):
@@ -1081,7 +1127,7 @@ def run_init(project, path, agents, fm):
                 set_consent(slug, agent, False)
             except Exception:
                 pass
-        except (TrustEditError, CodexError) as exc:
+        except (TrustEditError, CodexError, OSError, ValueError) as exc:
             out["failures"].append("%s: trust not written: %s (by hand: %s)" % (agent, exc, MANUAL[agent]))
     # `init` repairs the entries of live worktrees too
     for rec in sessions.list_sessions(slug):
@@ -1142,11 +1188,17 @@ def prepare_launch(slug, agent, cwd, worktree=None, expect=None):
     Launch; raises TrustRefused for the launched agent's problem (a problem of another agent is a note)."""
     launch = Launch()
     ok, _ = active()
-    if not ok:
-        return launch
     fm = machine.foreman_bin(None)
     proj = projects.load_project(slug) or {}
     base = proj.get("path") or cwd
+    if not ok:
+        # a trial instance writes no trust and asks for no consent, but the content check costs nothing: foreign content
+        # means no session for the launched agent whatever consent says (4.2, 5.5)
+        if agent in AGENTS:
+            why = content_allowed(slug, agent, cwd, foreign(agent, cwd, fm), fm, base)
+            if why:
+                raise TrustRefused(why)
+        return launch
     if agent in AGENTS:
         try:
             load_record()  # an unreadable record: nothing is added, and nothing is opened that needs trust

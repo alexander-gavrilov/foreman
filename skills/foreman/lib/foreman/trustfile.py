@@ -98,12 +98,28 @@ def _write_exclusive(path, data, mode):
 
 
 def make_backup(target, raw):
-    """The file as it was before foreman's first edit, never overwritten. Returns True when it was made."""
+    """The file as it was before foreman's first edit, never overwritten. Returns True when it was made. Written to a
+    temporary name and linked into place, so a failure never leaves a truncated backup that would then stay for good."""
     backup = target + BACKUP_SUFFIX
     if raw is None or os.path.lexists(backup):
         return False
-    _write_exclusive(backup, raw, stat.S_IMODE(os.stat(target).st_mode))
-    return True
+    tmp = "%s.tmp-%d" % (backup, os.getpid())
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    try:
+        _write_exclusive(tmp, raw, stat.S_IMODE(os.stat(target).st_mode))
+        try:
+            os.link(tmp, backup)  # exclusive: fails when a backup appeared meanwhile
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _tmp_name(target):
@@ -141,32 +157,52 @@ def edit(target, build, verify, present, before_write=None, after_applied=None, 
         read-back, dropped when the edit finally fails).
     Returns "unchanged", "created" or "edited". Raises TrustEditError after MAX_TRIES lost races."""
     target = resolve_target(target)
-    with file_lock(target):
-        existed = check_target(target)
-        for _ in range(MAX_TRIES):
-            raw = read_bytes(target)
-            text = decode(raw, target)
-            new_text = build(text, raw is not None)
-            if new_text is None:
-                return "unchanged"
-            verify(text, new_text)
-            if before_write:
-                before_write()  # recorded as pending before the edit, again if the text changed and we start over
-            if raw is not None:
-                make_backup(target, raw)
-            # the agents cannot be locked: compare with what was read, just before the rename
-            if read_bytes(target) != raw:
-                continue
-            mode = stat.S_IMODE(os.stat(target).st_mode) if raw is not None else 0o600
-            atomic_write(target, new_text.encode("utf-8"), mode)
-            if present(decode(read_bytes(target), target)):
-                if after_applied:
-                    after_applied()
-                return "edited" if existed else "created"
-        if on_abort:
-            on_abort()
-        raise TrustEditError("%s kept changing while it was edited (tried %d times); nothing was lost, run again"
-                             % (target, MAX_TRIES))
+    recorded = [False]
+    aborted = [False]
+
+    def abort():
+        """Drop what was recorded as pending: nothing was, or will be, written by foreman."""
+        if on_abort and not aborted[0]:
+            aborted[0] = True
+            try:
+                on_abort()
+            except Exception:
+                pass
+    try:
+        with file_lock(target):
+            existed = check_target(target)
+            for _ in range(MAX_TRIES):
+                raw = read_bytes(target)
+                text = decode(raw, target)
+                new_text = build(text, raw is not None)
+                if new_text is None:
+                    abort()  # what an earlier try recorded as pending was written by somebody else meanwhile
+                    return "unchanged"
+                verify(text, new_text)
+                if before_write:
+                    before_write()  # pending before the edit; again if the text changed and we start over
+                    recorded[0] = True
+                if raw is not None:
+                    make_backup(target, raw)
+                # the agents cannot be locked: compare with what was read, just before the rename
+                if read_bytes(target) != raw:
+                    continue
+                mode = stat.S_IMODE(os.stat(target).st_mode) if raw is not None else 0o600
+                atomic_write(target, new_text.encode("utf-8"), mode)
+                if present(decode(read_bytes(target), target)):
+                    if after_applied:
+                        after_applied()
+                    recorded[0] = False
+                    return "edited" if existed else "created"
+            abort()
+            raise TrustEditError("%s kept changing while it was edited (tried %d times); nothing was lost, run "
+                                 "again" % (target, MAX_TRIES))
+    except TrustEditError:
+        abort()
+        raise
+    except (OSError, UnicodeError) as exc:  # a full disk, an I/O error, a path that is not UTF-8: a refusal, not a crash
+        abort()
+        raise TrustEditError("%s could not be written (%s); nothing was changed" % (target, exc))
 
 
 # ------------------------------------------------------------ strict JSON text scanning
@@ -321,12 +357,16 @@ def json_remove_from_list(text, key, value, drop_key_if_empty=False):
         if name != key:
             continue
         elems, arr_close = _elements(text, v_start)
+        found = []
         for ei, (s, e) in enumerate(elems):
             try:
-                if json.loads(text[s:e]) != value:
-                    continue
+                if json.loads(text[s:e]) == value:
+                    found.append(ei)
             except ValueError:
                 continue
+        if found:
+            ei = found[-1]  # a copy of the same path that somebody else added stays; foreman's append is the last
+            s, e = elems[ei]
             if len(elems) == 1 and drop_key_if_empty:
                 if len(members) == 1:
                     return text[:obj + 1] + text[close:]

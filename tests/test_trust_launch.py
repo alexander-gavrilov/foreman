@@ -215,7 +215,7 @@ class WorktreeLifecycleTest(LaunchCase):
         write(os.path.join(kept["worktree"]["path"], "work.txt"), "unsaved\n")
         run_main("close", kept["sid"], "--project", self.slug)
         install.uninstall(home=self.home, platform="linux", runner=lambda argv: 0)
-        self.assertEqual(self.agy_list(), [])
+        self.assertEqual(json.loads(read(self.agy)), {})  # the list foreman made went with its last entry
         self.assertEqual(self.record(), [])
 
     def test_the_sweep_takes_back_entries_whose_folder_no_longer_exists(self):
