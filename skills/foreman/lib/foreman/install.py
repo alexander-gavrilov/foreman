@@ -138,6 +138,12 @@ def _load_settings(path):
     return (data if isinstance(data, dict) else None), text
 
 
+def _write_settings(path, text):
+    """The statusline edit goes through the same lock and atomic rename as the trust edits of the file."""
+    from foreman import trustfile
+    trustfile.atomic_write(path, text.encode("utf-8"))
+
+
 def _swap_command(path, data, text, old, new):
     """Replace the statusLine command: a literal edit of the file text when the old value appears exactly once
     (keeps the user's formatting, so uninstall restores the file byte for byte), else a re-dump."""
@@ -148,8 +154,7 @@ def _swap_command(path, data, text, old, new):
     else:
         data["statusLine"]["command"] = new
         out = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(out)
+    _write_settings(path, out)
 
 
 def _backup(path, backup):
@@ -163,48 +168,68 @@ def _backup(path, backup):
 
 
 def tap_statuslines(fm, home=None):
+    from foreman import trustfile
     changes = []
     for agent, parts in STATUSLINES:
         path = _statusline_file(home, parts)
-        data, text = _load_settings(path)
-        sl = (data or {}).get("statusLine")
-        cmd = sl.get("command") if isinstance(sl, dict) else None
-        if not cmd:
+        if not os.path.exists(path):
             continue
-        original = unwrap_command(cmd)
-        new = wrap_command(original if original is not None else cmd, fm, agent)
-        if new == cmd:
-            continue
-        backup = path + ".foreman-bak"
-        if original is None and not os.path.exists(backup):
-            _backup(path, backup)
-        _swap_command(path, data, text, cmd, new)
-        changes.append("tapped the %s statusline (%s)" % (agent, path))
+        path = trustfile.resolve_target(path)
+        with trustfile.file_lock(path):
+            changes += _tap_one(agent, path, fm)
+    return changes
+
+
+def _tap_one(agent, path, fm):
+    changes = []
+    data, text = _load_settings(path)
+    sl = (data or {}).get("statusLine")
+    cmd = sl.get("command") if isinstance(sl, dict) else None
+    if not cmd:
+        return changes
+    original = unwrap_command(cmd)
+    new = wrap_command(original if original is not None else cmd, fm, agent)
+    if new == cmd:
+        return changes
+    backup = path + ".foreman-bak"
+    if original is None and not os.path.exists(backup):
+        _backup(path, backup)
+    _swap_command(path, data, text, cmd, new)
+    changes.append("tapped the %s statusline (%s)" % (agent, path))
     return changes
 
 
 def untap_statuslines(home=None):
+    from foreman import trustfile
     changes = []
     for agent, parts in STATUSLINES:
         path = _statusline_file(home, parts)
-        data, text = _load_settings(path)
-        sl = (data or {}).get("statusLine")
-        cmd = sl.get("command") if isinstance(sl, dict) else None
-        original = unwrap_command(cmd) if cmd else None
-        if original is None:
+        if not os.path.exists(path):
             continue
-        _swap_command(path, data, text, cmd, original)
-        backup = path + ".foreman-bak"
-        saved, saved_text = _load_settings(backup)
-        if saved_text is not None and saved is not None and saved == _load_settings(path)[0]:
-            # same settings as before the tap: put the original bytes back (formatting, escapes) and drop the copy
-            with open(backup, "rb") as f:
-                raw = f.read()
-            with open(path, "wb") as f:
-                f.write(raw)
-            os.unlink(backup)
-        changes.append("restored the %s statusline (%s)" % (agent, path))
+        path = trustfile.resolve_target(path)
+        with trustfile.file_lock(path):
+            changes += _untap_one(agent, path)
     return changes
+
+
+def _untap_one(agent, path):
+    from foreman import trustfile
+    data, text = _load_settings(path)
+    sl = (data or {}).get("statusLine")
+    cmd = sl.get("command") if isinstance(sl, dict) else None
+    original = unwrap_command(cmd) if cmd else None
+    if original is None:
+        return []
+    _swap_command(path, data, text, cmd, original)
+    backup = path + ".foreman-bak"
+    saved, saved_text = _load_settings(backup)
+    if saved_text is not None and saved is not None and saved == _load_settings(path)[0]:
+        # same settings as before the tap: put the original bytes back (formatting, escapes) and drop the copy
+        with open(backup, "rb") as f:
+            raw = f.read()
+        trustfile.atomic_write(path, raw)
+        os.unlink(backup)
+    return ["restored the %s statusline (%s)" % (agent, path)]
 
 
 # ------------------------------------------------------------ service units
@@ -376,7 +401,14 @@ def uninstall(purge=False, home=None, platform=None, runner=None):
     if purge:
         check_purge_target(paths.home(), home)  # before anything is undone
     changes = remove_project_hooks()
+    from foreman import trust
+    changes += trust.remove_all()  # every trust entry foreman added, before the statusline commands are restored
+    if purge and trust.remaining():
+        raise InstallError("refusing to purge: a trust entry foreman added could not be removed (%s); fix it, run "
+                           "`foreman uninstall` again" % "; ".join("%s %s" % (e.get("kind"), e.get("value"))
+                                                                 for e in trust.remaining()))
     changes += untap_statuslines(home)
+    changes += trust.drop_backups_if_equal()
     changes += uninstall_service(home, platform, runner)
     link = symlink_path(home)
     if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(launcher()):

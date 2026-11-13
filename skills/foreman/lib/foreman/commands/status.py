@@ -39,6 +39,17 @@ def _state_text(rec, now):
     return text
 
 
+def _trust_drift(slug):
+    """Trust that the scheduled check found not working (spec 5.5), as it last reported it."""
+    from foreman import paths, store
+    try:
+        state = store.read_json(paths.watch_state_file(), {})
+        rows = ((state.get("trust_check") or {}).get(slug) or {}).get("reported") or []
+    except Exception:
+        return []
+    return [r for r in rows if isinstance(r, str)]
+
+
 def run(args):
     projs = _select_projects(args)
     soft = config.get("thresholds.context_soft")
@@ -49,14 +60,18 @@ def run(args):
                 if sessions.is_open(r)]
         data.append((proj, recs))
     if args.json:
-        dump_json({"projects": [{"slug": p["slug"], "name": p.get("name"), "path": p.get("path"),
-                                 "sessions": recs} for p, recs in data]})
+        dump_json({"projects": [dict({"slug": p["slug"], "name": p.get("name"), "path": p.get("path"),
+                                      "sessions": recs}, **({"trust": _trust_drift(p["slug"])}
+                                                            if _trust_drift(p["slug"]) else {}))
+                                for p, recs in data]})
         return 0
     if not data:
         print("no projects initialised (run `foreman init` in a project folder)")
         return 0
     for proj, recs in data:
         print("# %s (%s)" % (proj["slug"], proj.get("path")))
+        for msg in _trust_drift(proj["slug"]):
+            print("  trust: " + msg)
         if not recs:
             print("  (no sessions)")
             continue

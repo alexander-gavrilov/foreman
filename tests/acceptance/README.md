@@ -38,6 +38,7 @@ fail the test if a real `gh` were run.
 | 10 | `test_a10_findings` | work-Mac default is a local draft; public issue argv has no project data | pass (incl. the pasted-credential guard) |
 | 11 | `test_a11_install` | install/uninstall round trip, Linux and darwin branches, installed artifacts executed | pass |
 | 12 | `test_a12_worktrees` | two workers in a git project get their own worktree and branch; closing one keeps unsaved work, takes back a clean checkout, never touches the other | pass |
+| 13, 14 | `test_a13_trust` | `init` trusts the folder (Antigravity entry, Codex project and hook hashes) and `open` its worktree, `uninstall` leaves both settings files as they were; trust is refused with a reason for `/`-like paths, foreign hooks, an orchestrator's session, a malformed file; the waiver cases | pass (Antigravity loading the hooks and a Codex hook firing in a worktree need a live agent: not covered) |
 
 A scenario that exposes a product bug is marked `@unittest.expectedFailure` with a comment starting `PRODUCT BUG:`;
 when the product is fixed it starts "unexpectedly succeeding" and the decorator is removed (both scenarios of items

@@ -2,7 +2,7 @@
 import os
 import shutil
 
-from foreman import limits, messaging, paths, projects, routing, sessions, store, transports, worktrees
+from foreman import limits, messaging, paths, projects, routing, sessions, store, transports, trust, worktrees
 from foreman.cliutil import CliError, add_project_arg, dump_json, read_text_arg, resolve_project
 from foreman.transports._proc import TransportError
 from foreman.transports.base import TerminalGone
@@ -130,8 +130,24 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
                 raise CliError("cannot create a worktree: %s (retry, or pass --no-worktree to work in the "
                                "project folder)" % exc, code=1)
             launch_cwd = wt["path"]
-            if chosen_agent == "codex":
+            if chosen_agent == "codex" and not trust.active()[0]:  # (5.5: Codex reads the main checkout's hooks)
                 note = (note + "; " if note else "") + "Codex: approve the foreman hook for this worktree in /hooks"
+    # spec 5.5: the consent and the folder's content are checked for the launched agent, and the worktree's trust is
+    # written before the agent starts; a refusal leaves nothing behind
+    try:
+        launch = trust.prepare_launch(project["slug"], chosen_agent, launch_cwd, worktree=wt,
+                                      expect=(wt or {}).get("path"))
+    except trust.TrustRefused as exc:
+        if new_wt:
+            worktrees.discard(project["path"], new_wt["path"], new_wt["branch"])
+        raise CliError("%s (the session was not %s)" % (exc.reason, "rotated" if isinstance(worktree, dict)
+                                                         else "opened"), code=1)
+    except BaseException:
+        if new_wt:
+            worktrees.discard(project["path"], new_wt["path"], new_wt["branch"])
+        raise
+    if launch.notes:
+        note = (note + "; " if note else "") + "; ".join(launch.notes)
     if role == "orchestrator":
         # D54: from here until the record exists, hooks of an unknown session of this agent in the project bind
         # as the pending orchestrator (guarded) instead of becoming an unguarded user worker.
@@ -165,6 +181,8 @@ def open_session(project, purpose, prompt, title=None, kind=None, agent=None, mo
             # or for an orchestrator launch the pending orchestrator): merge it into the real record
             sessions.absorb_strays(rec)
     except BaseException:
+        if not recorded:
+            launch.rollback()  # a launch that fails after the write takes its trust entry back
         if role == "orchestrator":
             sessions.discard_pending_strays(project["slug"])
         if new_wt and not recorded:  # nothing was recorded: do not leave the checkout behind
