@@ -130,7 +130,9 @@ the orchestrator owns gets its own.
   agent (initialised before this rule, or the agent was skipped), the session is not opened until the user
   runs `init`. The same holds for the launched agent when the worktree's checkout carries content that its
   trust would switch on and that is not foreman's (§5.5); the next step is then the user's: remove the
-  content, or trust the folder by hand and run `init` again (the waiver is set by `init`). Workers of other agents are not held up.
+  content, or trust the folder by hand and run `init` again (the waiver is set by `init`). In a trial instance
+  (§5.5, "Which state") `open` and `rotate` need no consent, because nothing is written there, but the check for
+  content that is not foreman's still applies and refuses the same way. Workers of other agents are not held up.
 - *If it cannot be made.* The session is not opened and nothing is left behind: no folder, no branch, no
   registration, no trust entry (§5.5), and nothing else touched. A worktree left by an `open` that was killed half way, with no
   session, is taken back by the scheduled check once it is 10 minutes old and holds no work. An explicit option opens it
@@ -511,7 +513,10 @@ decision: it is kept, and `init` reports the project as not trusted instead of p
   trial instance with a throwaway state folder cannot leave entries its own record would never remove. A file
   outside that HOME (a `CODEX_HOME` elsewhere, a dotfile link whose target lies outside) is written only when
   HOME is the account's own home, so a real user's setup works and a trial with a redirected HOME cannot reach
-  the real files through an inherited `CODEX_HOME`. Otherwise the step is skipped and said so.
+  the real files through an inherited `CODEX_HOME`. Otherwise the step is skipped and said so. In a trial
+  instance (the state folder is not the default one) `init` records no consent, so `open` and `rotate` do not require it either (§4.2); they write no
+  trust, and the check for content that is not foreman's still runs for the launched agent. No waiver can exist
+  there, so any such content refuses the launch.
 
 **What is recorded.** `trust.json` in the state folder lists, per file, the entries foreman added: the path or
 the Codex key and the hash written, the project, whether it is for the project folder or a worktree, and the
