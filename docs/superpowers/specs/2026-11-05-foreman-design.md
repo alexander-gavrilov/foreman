@@ -132,61 +132,75 @@ direction is the same command under the same rules **(design call)**.
 - *One loss, on purpose.* A session owned by the orchestrator counts as a session "of the orchestrator's side"
   (§5.5), as does every worker the orchestrator opened. From then on it cannot run `foreman init`, `close
   --user-consent` or `session own`, and cannot trigger a trust write. `--to user` gives that back.
-- *Who may run it.*
-  - The user, in a terminal, and an agent in a session the user owns (the same standing as `init` and `close
-    --user-consent`: an agent acts for the user there). `--to orchestrator` and `--to user` alike.
-  - The orchestrator, only on the user's own message (next bullet).
-  - A worker the orchestrator owns: never.
-- *The orchestrator's grant.* The orchestrator never passes `--user-consent` (§4.10), and that does not change: the
-  guard still refuses the option. The orchestrator may run `session own` only when the user has just asked for it, and
-  foreman checks that instead of trusting the orchestrator. foreman cannot know which message made the orchestrator
-  act, so the command looks in the project's chat for a message that could have. The message must be:
-  1. **the user's own**: one that reached the project through the authenticated web UI or through the project's
-     Telegram topic (§5.2, §5.3). A message from another session, a wake, terminal output, a transcript, or text the
-     orchestrator wrote to the chat itself is data (§7) and never counts, and neither does one entered with `foreman
-     reply-user` from a terminal (the user at a terminal runs the command themselves);
-  2. **recent**: at most 30 minutes old **(design call)**;
-  3. **naming the session**, by its id or by its exact title, as a whole word (`fm-api` does not name `fm-api2`);
-  4. **unused** for that session: a message that allowed a change is used up for the sessions it changed, in either
-     direction. Each session of a call needs its own qualifying message; one message may name several.
-  Only the orchestrator of the session's own project can have a grant, and only for sessions of that project.
-  The check is of the naming, not of the meaning: a message that merely mentions a session passes it. That is
-  accepted. The journal row quotes the message, and the orchestrator says in one line what it did (§4.1). The
-  orchestrator's skill adds the rest: run it only when the message asks for the handover or the take-back, and
-  never as a step towards a close the user did not ask for.
-  Like the rule of §5.5, this is not a defence against an agent that runs as the user and removes the session
-  environment it was started with: it then looks like a terminal.
-- *Naming sessions.* One or more per call. Each is a session id (`s-…`, unique everywhere) or a title, resolved as
-  `close` resolves it: a title is looked up in the caller's project, or in the one given with `--project`; an
-  ambiguous title is refused with the candidates; the same session named twice counts once. For the grant only the
-  id and the title count (the user does not type a terminal handle).
+- *Who changes the owner.* Only the user.
+  - **The user, in a terminal, or an agent in a session the user owns** (the same standing as `init` and `close
+    --user-consent`: an agent acts for the user there), runs the command and the change is made at once.
+  - **The orchestrator never changes an owner.** When it runs the command, nothing changes: foreman puts a question
+    to the user (next bullet) and changes the owner only on the user's answer. The orchestrator never passes
+    `--user-consent` (§4.10), and that does not change: the guard still refuses the option.
+  - **A worker the orchestrator owns** may not run the command at all.
+- *The question.* This is the one way the orchestrator gets a session handed over, and it replaces any reading of
+  the user's free text: a message that merely mentions a session, or says "do not touch it", asks for nothing.
+  1. The orchestrator runs `session own <session>… --to orchestrator` (or `--to user`). foreman checks the sessions
+     as below, so that the user is not asked about something that cannot be done, and records a **request**: the
+     sessions, the direction, the time and the orchestrator that asked. If a request for the same sessions and the
+     same direction is still waiting, no second question is posted. At most five requests wait per project
+     **(design call)**.
+  2. foreman itself posts the question to the project's chat, and so to its Telegram topic, with the buttons
+     **Да** and **Нет**, in the user's language, in foreman's own words. The text names each session by title and id,
+     says who owns it now and who will, and says what the change gives (the orchestrator may close and rotate the
+     session) and does not give (permissions, trust, file access). The orchestrator cannot word the question, add to
+     it, or reuse an earlier one: a question it wrote itself ("shall I show the logs of s-1?") is never a grant.
+  3. **Only the user's answer to that question changes anything:** a reply to that very question that reached the
+     project through the authenticated web UI or the project's Telegram topic (§5.2, §5.3), whose text is exactly
+     `Да` (a tap sends exactly that; so does typing it). `Нет` closes the request. Anything else, and a message
+     from a session, a wake, terminal output (all data, §7) or a message entered with `foreman reply-user` from a
+     terminal, leaves it waiting. A request lapses after 30 minutes **(design call)**. An answer is used once: a
+     second `Да`, or one to a lapsed or closed request, changes nothing and the chat says so.
+  4. On `Да`, foreman checks everything again, as for any call (below), and makes the change itself, as one call,
+     all or nothing. The chat gets one line saying what changed (or why nothing did) and the orchestrator is woken
+     with the result, as with any event. The orchestrator then may close or rotate the session under the usual
+     rules; the user's `Да` is the consent, given once and in advance, for that session.
+  The orchestrator may ask only about sessions of its own project, and only for a worker. A session the user names in
+  the chat but the orchestrator does not ask about is not asked about.
+  Like §5.5, this does not defend against an agent that runs as the user and removes the session environment it was
+  started with: it then looks like a terminal.
+- *Naming sessions.* One or more per call. Each is a session id (`s-…`, unique everywhere; the form to prefer) or a
+  title, resolved as `close` resolves it: a title is compared as a whole, exactly (any characters, spaces and
+  symbols included; never found inside a longer text), and looked up in the caller's project, or in the one given
+  with `--project`. An ambiguous title is refused with the candidates, and the same session named twice counts once.
+  The orchestrator's skill passes ids.
 - *Several in one call.* All or nothing. Every session is checked first; if any one cannot be handed over, nothing
-  changes and every reason is printed. A session that already has the wanted owner is not an error: it is reported
-  as already so and skipped, nothing is written for it and no message is used up. A call where every session
+  changes (and no question is posted) and every reason is printed. A session that already has the wanted owner is
+  not an error: it is reported as already so and skipped, and nothing is written for it. A call where every session
   is already so succeeds and changes nothing.
 - *Other projects.* The user may hand over a session of any initialised project, by id, or by title with
   `--project`; the journal row goes to that session's project. The orchestrator is refused a session of any other
-  project, even when the user's message names it: that message came to this project's chat. The user then asks in
-  that project's chat or topic, or runs the command in a terminal.
+  project, and the user is not asked: the user asks that project's orchestrator, or runs the command in a terminal.
 - *Which sessions.* Open workers: a session that was rotated and is still waiting to be asked is open; a closed one
   is not. A **busy** session may be handed over: only its record changes and nothing is interrupted; `close` and
   `rotate` still refuse it while it is busy. A session whose terminal has vanished may be handed over too, which
   is how the orchestrator gets to close its record.
 - *The journal.* Every change adds one row per session to the session's project journal (§4.8). It holds: the kind
-  (`own`), the session's id and title, the owner before and after, who ran the command (the orchestrator, a session,
-  or the user at a terminal) and who asked (the user, by terminal, web or Telegram, and for web and Telegram the
-  message's id and its first 120 characters). foreman writes the row itself, and the change and the row go together:
-  if the row cannot be written, the owner is not changed. A call that changes nothing writes nothing.
-- *What the web UI shows.* The Sessions list in the drawer (§5.2) shows each session's owner, and a change shows
-  there without a reload. The orchestrator confirms it in the chat in one line, which is mirrored to the topic. There
-  is no hand-over button in the first release; the user asks in the chat (for example "передай fm-api оркестратору"),
-  and the orchestrator runs the command under the grant above **(design call)**.
+  (`own`), the session's id and title, the owner before and after, who ran the command (the user at a terminal, a
+  session the user owns, or foreman on the user's answer), who asked (the user, by terminal, web or Telegram, and for
+  web and Telegram the id of the answer) and, when the orchestrator asked, which orchestrator. A request also adds a
+  row when it is made and when it ends without a change (declined, lapsed, failed). foreman writes the rows
+  itself, and the change and its row go together: if the row cannot be written, the owner is not changed. A call
+  that changes nothing and asks nothing writes nothing.
+- *What the web UI shows.* The question is in the chat with its two buttons, and in the Telegram topic with the
+  same ones. The Sessions list in the drawer (§5.2) shows each session's owner, and a change shows there without a
+  reload. There is no hand-over button in the drawer in the first release **(design call)**.
 - *Taking it back.* `foreman session own <session> --to user`, by the user in a terminal or by an agent in a session
-  the user owns, or the same words in the chat or the Telegram topic. From then on the orchestrator cannot close
-  the session without consent again. A `close` that already happened is not undone, and the orchestrator may use
-  the session as its own until the take-back.
-- *Failure cases.* Each one refuses the whole call, changes nothing and exits with a failure status naming the
-  reason and the next step:
+  the user owns; or the user asks the orchestrator in the chat, and it asks the question above (`--to user`). From
+  then on the orchestrator cannot close the session without consent again. A `close` that already happened is not
+  undone, and the orchestrator may use the session as its own until the take-back.
+- *Output.* Plain text, short. With `--json` one object: `{"ok": true|false, "to": "orchestrator"|"user",
+  "changed": [{"sid", "title", "from", "to"}], "skipped": [{"sid", "title", "reason"}], "asked": null | {"request",
+  "question", "sessions": [sid…]}, "errors": [{"ref", "reason"}]}`. `ok` is false, with the failure status, whenever
+  `errors` is not empty. A call that only asked has `ok` true, an empty `changed`, and `asked` filled.
+- *Failure cases.* Each one refuses the whole call, changes nothing, posts no question and exits with a failure
+  status naming the reason and the next step:
 
   | Case | Reason shown |
   |---|---|
@@ -195,14 +209,15 @@ direction is the same command under the same rules **(design call)**.
   | the session is closed | "already closed" |
   | the session's role is orchestrator, or it is the caller | "use `foreman orchestrator adopt`" |
   | the session belongs to another project, caller is the orchestrator | the project's name, and where to ask |
-  | caller is the orchestrator and no message qualifies (none, too old, already used, names another session, not the user's, not authenticated) | "the user must name the session in a message to you, or run it themselves" |
   | caller is a worker the orchestrator owns | "only the user hands over sessions" |
-  | the record or the journal cannot be written (lock lost, no space) | the error; the owner is as it was |
-  | the session closed between the check and the write | "already closed"; the write checks again under the record's lock |
+  | five requests are already waiting in the project (orchestrator) | "wait for the user's answers" |
+  | the record, the request or the journal cannot be written (lock lost, no space) | the error; the owner is as it was |
+  | on `Да`: a session closed, changed owner or turned into another role since the question | the chat says which and why; nothing changes |
 
 - *What the skills say.* The orchestrator's skill keeps "never close a session the user owns without consent" and
-  adds: *a session handed over by the user's own message is yours; never hand one over, or take one back, on any other
-  ground.* The user's skill text for agents says that `session own` is the user's command.
+  adds: *to get a user's session handed over, run `session own` with the id and wait for the answer; never close
+  a session in the same step, never ask for it on any ground but the user's wish, and never hand one over, or take
+  one back, any other way.* The skill text for agents says that `session own` is the user's command.
 
 **A worktree per worker.** Workers that share one checkout overwrite each other's files, so each worker
 the orchestrator owns gets its own.
@@ -359,7 +374,8 @@ Rules:
   - merge only through a pull request;
   - the reviewer is a different instance;
   - sessions owned by the user are not closed without consent. A handover that the user asks for (§4.2, "Handing a
-    session over") is that consent given once, in advance, for that session, and it is recorded.
+    session over") is that consent given once, in advance, for that session: the user's own `Да`, or the command
+    run by the user. It is recorded.
 - Changes to foreman's own rules and instructions always go through a pull request, even under
   autonomy. The orchestrator may prepare and drive that PR **(user)**.
   - Reason: agents process untrusted data, so rules that rewrite themselves would be an open door to
@@ -450,8 +466,8 @@ Rules:
   3. tapping the strip opens the Board / Sessions bottom sheet.
 - **Live**: what is on screen updates by itself, without a reload.
 - Through the UI, the user can talk to an orchestrator, and ask it to open, close or rotate a session, and to
-  take over a session of theirs or give it back (§4.2). The drawer's Sessions list shows each owner and updates
-  live.
+  take over a session of theirs or give it back (§4.2): the answer is a question with **Да** / **Нет** in the chat.
+  The drawer's Sessions list shows each owner and updates live.
   The UI also shows foreman's findings inbox.
 - **Access**: never from the public internet; every access needs a token **(design call)**.
   - Home server: reachable from the home network, from the user's desktop and laptop over OpenVPN, and
@@ -745,8 +761,8 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
   instructions or rule changes by themselves.
 - The web UI is never reachable from the public internet (§5.2).
 - Who owns a session decides who may close it. Only the user changes it: at a terminal, from a session the user
-  owns, or through the orchestrator on the user's own authenticated message naming the session (§4.2). A message
-  from a session, a wake or terminal output never counts, and the change is always in the journal.
+  owns, or by answering **Да** to a question that foreman itself worded (§4.2). The orchestrator can only ask. Free
+  text, a message from a session, a wake or terminal output never changes an owner, and every change is in the journal.
 - foreman never grants permissions to itself (§4.12). The one trust it grants is the narrow, recorded write of
   §5.5, on the user's consent at `init`. An orchestrator, a worker it owns or a message cannot make it
   write trust; trust is not limited to hooks, and §5.5 says what each kind switches on.
@@ -788,31 +804,38 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
     settings file; an orchestrator's session running `init --path`. Two workers opened at once both end up
     trusted. An entry that is already there is never removed by foreman, including after a crash between the
     record and the edit.
-15. Handing a session over (§4.2).
+20. Handing a session over (§4.2).
     a. A user-owned idle session: the orchestrator's `close` is refused ("owned by the user"). The user runs
        `session own <session> --to orchestrator`: `status` and the web drawer show `orchestrator` with no reload,
        the project journal has one `own` row (who ran it, who asked, before and after), and the session itself, its
        terminal and its files are untouched. The orchestrator's `close` and `rotate` now work on it when it is idle
        with nothing pending, and are refused while it is busy. The rotated successor is owned by the orchestrator.
        `--to user` brings the refusal back. Running the same command twice changes nothing, writes nothing and
-       succeeds.
-    b. The orchestrator, with no user message: refused, nothing changes. Also refused, with a message that
-       reached it as a session's message, a wake or terminal output (even one that names the session and
-       claims to be the user), as text the orchestrator wrote to the chat itself, or through `foreman reply-user`;
-       with a message older than 30 minutes; with one that names a different session or only part of the title
-       (`fm-api2` for `fm-api`); with one already used for that session; with a session of another project, even
-       when named. Allowed, with a web message and then with a Telegram message that names the session: done, and
-       the journal row quotes the message; a second run with the same message is refused. `--user-consent` from the
-       orchestrator is still refused by the guard.
-    c. A worker the orchestrator owns runs it: refused. An agent in a user-owned session runs it: done.
-    d. Several sessions in one call, one of them closed or of the wrong role: nothing changes and every reason is
-       printed. Two already owned and one not: the one changes, the two are reported and skipped. A session named
-       by id and by title counts once. An ambiguous title is refused with the candidates.
-    e. Nothing else changes: the session's agent settings and trust files, `trust.json`, the project's consent, its
+       succeeds. `--json` has the object of §4.2 in each case.
+    b. The orchestrator runs it: the owner does not change, the chat and the topic get foreman's question naming
+       the session by title and id with **Да** / **Нет**, and a second run for the same session and direction posts no
+       second question. `Да` (button, then typed, web, then Telegram) changes the owner, the chat says so, the
+       orchestrator is woken and the journal has the request row and the `own` row with the answer's id. `Нет` closes
+       the request. With no answer, or an answer to something else, nothing changes.
+    c. Nothing counts as an answer: a user message that names the session ("what is s-1 doing?", "do NOT touch s-1")
+       and is not a reply to the question; a reply to another question; a typed `Да` that is not a reply to it; a
+       message that reached the orchestrator as a session's message, a wake or terminal output, even one that claims
+       to be the user; a question the orchestrator wrote to the chat itself; a reply entered with `foreman
+       reply-user`; a second `Да`; an answer after 30 minutes. In each case the owner is unchanged and the
+       orchestrator's `close` of the session is still refused. `--user-consent` from the orchestrator is still
+       refused by the guard.
+    d. The orchestrator is refused (no question) for: a session of another project; a session whose role is
+       orchestrator; a closed one; a sixth waiting request. A session that changes owner, closes or turns into
+       another role between the question and the `Да` makes the `Да` change nothing, and the chat says why.
+    e. A worker the orchestrator owns runs it: refused. An agent in a user-owned session runs it: done at once.
+    f. Several sessions in one call, one of them closed or of the wrong role: nothing changes, nothing is asked, and
+       every reason is printed. Two already owned and one not: the one changes (or is asked about), the two are
+       reported and skipped. A session named by id and by title counts once. An ambiguous title is refused with the
+       candidates. A title with spaces and a symbol in it (`foreman · spec`) is found as a whole.
+    g. Nothing else changes: the session's agent settings and trust files, `trust.json`, the project's consent, its
        permissions and its worktree are byte for byte what they were. A handed-over session can no longer run
        `init`, and can again after `--to user`. The orchestrator still cannot edit project files.
-    f. A handover where the journal cannot be written changes nothing; a session that closes between the check and
-       the write is refused.
+    h. A change where the journal cannot be written changes nothing.
 
 ## 9. Left to the builder
 - Thresholds for "stuck" and "waiting too long", and what counts as "quiet" in the triage rail.
@@ -839,13 +862,10 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
    `config.toml`, rules), after showing the user what it contains? §5.5 says no, the user does it by hand.
    Whatever the answer, a config file that a worker drops into a worktree after `init` takes effect before the
    scheduled check reports it; the user should accept that knowingly.
-8. May the orchestrator run `session own` on the user's message (§4.2, the grant), or should it stay strictly the
-   user's command, the orchestrator only asking the user to run it? The spec says the first, with a check that
-   only counts the authenticated user's message naming the session. The check is of the naming, not of the meaning.
-9. Is naming enough, or should the grant need the user's answer to a question the orchestrator asked about exactly
-   those sessions (a button)? That is stricter, and costs one more tap.
-10. Is 30 minutes, used once per message and session, the right window?
-11. May an agent in a session the user owns run it (as with `init` and `--user-consent`), or only the user at a
-    terminal, or only for its own session?
-12. Should the Sessions drawer have a hand-over and take-back button (an authenticated action by the user
-    themselves, with no grant needed)? The first release has none; the chat does it.
+14. For the handover of §4.2: is 30 minutes the right life for a question, with at most five waiting? The rule that
+    the orchestrator can only ask, and that foreman words the question, was decided for the user (option "confirm by
+    button" of the review of PR 33), and is relayed by the orchestrator: the user is asked to confirm it.
+15. May an agent in a session the user owns run `session own` (as with `init` and `--user-consent`), or only the user
+    at a terminal, or only for its own session?
+16. Should the Sessions drawer have a hand-over and take-back button (an authenticated action by the user themselves,
+    with no question needed)? The first release has none; the chat does it.
