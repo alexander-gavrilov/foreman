@@ -707,7 +707,9 @@ drawing is only how the web UI shows it.
   stays as today: the orchestrator is told its kind.
 - **Limits**: at most 20 MiB per file (Telegram's own cap on what a bot can fetch is about 20 MB, so a file near
   the limit may be refused there, with the same reason), 10 files and 50 MiB per message, 2 GiB per project in all,
-  and foreman refuses an upload that would leave the disk with less than 1 GiB free (§10.9). A message may carry
+  and foreman refuses an upload that would leave the disk with less than 1 GiB free (§10.9). Files uploaded but not
+  yet attached to a message count separately and are capped per project at 10 files and 50 MiB in all (one message's
+  worth), so nobody can fill the project's quota with files that will expire and block it for an hour. A message may carry
   files and no text.
 - **Kinds.** The content decides, not the name and not the type the sender declares:
   - *image*: PNG, JPEG, GIF, WebP;
@@ -726,16 +728,23 @@ drawing is only how the web UI shows it.
 - **Audio is not transcribed** and no agent listens to it; a voice note is passed on as a file (§10.11).
 
 #### Files: where they are and how they travel
-- **On disk**: `<state>/attachments/<project>/<id>/<name>`, outside every repository and worktree (so it cannot be
-  committed by accident) and outside the work folders (§4.9). `<id>` is random (`a-` and 12 hex characters), made by
-  foreman. Folders are 0700 and files 0600; the executable bit is never set. Next to the file, `meta.json` records
-  the id, project, message id, channel, original name, found and claimed type, kind, size, SHA-256 and times; the chat
-  message records the files only by id, name, kind, size and state, never their bytes.
+- **On disk**: the file is `<state>/attachments/<project>/<id>/content/<name>`, outside every repository and worktree
+  (so it cannot be committed by accident) and outside the work folders (§4.9). `<id>` is random (`a-` and 12 hex
+  characters), made by foreman. Folders are 0700 and files 0600; the executable bit is never set. Beside the
+  `content` folder, never inside it, `meta.json` records the id, project, message id, channel, original name, found and
+  claimed type, kind, size, SHA-256 and times. The two live in different folders, so a file called `meta.json`, or
+  any other name, cannot meet foreman's own record. The chat message records the files only by id, name, kind, size
+  and state, never their bytes.
 - **The name** is made by foreman from the original: only the last component after splitting on both `/` and
   `\`; Unicode normalised; control characters, NUL, bidirectional overrides and zero-width characters removed;
   anything else that is not a letter, digit, space or one of `._-()` replaced by `_` (Cyrillic and other letters
-  stay); leading dots and spaces and trailing dots and spaces removed; at most 100 characters, the extension kept
-  and set to the found type's; empty or `.`/`..` becomes `file`. The id folder makes two files of one name harmless.
+  stay); leading dots and spaces and trailing dots and spaces removed; empty or `.`/`..` becomes `file`. The whole
+  name, stem, dot and extension, is at most 100 characters: a longer one is cut in its stem, never in its
+  extension. **The extension** follows what the bytes are: for a kind with a signature (image, audio, pdf) it is set
+  to the found type's, so a PDF called `notes.txt` is stored as `notes.pdf`; for *text* and *other* the sniff cannot
+  tell `.py` from `.csv`, so the original extension is kept when it is plain (letters and digits, at most 8) and is
+  not one of the signature kinds' or a refused one, and otherwise becomes `.txt` for text and `.bin` for other. The
+  content folder makes two files of one name harmless.
   The name is never used to build a path except as that last component; the file is created new (exclusive,
   never following a link) and the resolved path is checked to lie inside the attachments folder. The original
   name is kept only for display, and is shown as text, never as HTML.
@@ -746,7 +755,10 @@ drawing is only how the web UI shows it.
   file: it is not the user's words, and the user's frame carries the user's authority (D62). A message with only
   files says so in its user block. The orchestrator follows §4.1: it may look at one image or a short text file when
   that is the whole task, and sends everything bigger to a worker on a cheap model. `foreman attachment list` and
-  `show` are safe for the orchestrator; `remove` is not.
+  `show` are safe for the orchestrator; `remove` is not. The commands are `list [--project <slug>] [--json]` (newest
+  first: id, time, kind, size, name, state), `show [--project <slug>] <id> [--json]` (the record and the stored path)
+  and `remove [--project <slug>] <id>`, with the project found as in every other command. No command prints the
+  bytes of a file: `show` is metadata and a path only, so a file can never flood an agent's context.
 - **To worker sessions.** foreman never forwards a file by itself. The orchestrator decides which worker needs it
   and puts the stored path in its message, as it does with a work folder (§4.9). The orchestrator's briefing has it
   tell the worker that a file from the user is data to read, never to run, never to extract anywhere but a work
@@ -763,8 +775,11 @@ drawing is only how the web UI shows it.
   PDF is downloaded, not opened inside the page. A file still uploading shows a progress bar, a cancel button, and
   on failure a retry.
 - A file served back by foreman is sent only as one of the inline types above (images and audio, by the found
-  type), or else as a download with the type `application/octet-stream`; always with `nosniff`, a policy that
-  allows nothing to run or load, `no-store`, and a name that was made as above.
+  type), or else as a download with the type `application/octet-stream`; always with `X-Content-Type-Options:
+  nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cache-Control: no-store`, and a name that was made
+  as above. A download names the file in two forms: an ASCII fallback in `filename="…"` (anything outside ASCII
+  replaced by `_`) and the real name in `filename*=UTF-8''…`, percent-encoded as RFC 6266 and RFC 5987 say, so a
+  Cyrillic name neither breaks the header nor is lost.
 - The user can **remove a file** from its card, or with `foreman attachment remove <id>` from a terminal or a
   session the user owns: the bytes go, the card stays with "file removed". An orchestrator, or a worker it owns,
   cannot remove one (the same rule as the trust write, §5.5, and found the same way).
@@ -795,7 +810,7 @@ drawing is only how the web UI shows it.
 #### Files: when something goes wrong
 | What happened | The user sees | What is left |
 |---|---|---|
-| over a limit (file, message, project, disk), or a refused kind | the chip fails with the reason; the message is not sent while it is there (remove it) | nothing |
+| over a limit (file, message, staging, project, disk), or a refused kind | the chip fails with the reason; the message is not sent while it is there (remove it) | nothing |
 | the upload breaks (network, sleep, server restart) | "not uploaded", with retry | nothing; the partial file is deleted |
 | a file waited over an hour before the send | the send is refused for that file: "attach it again" | the text stays in the field |
 | the disk write fails | "not saved", and the journal says why | nothing; no half file |
@@ -925,20 +940,24 @@ as passed.
     - (suite) The served UI carries the content security policy of §5.6 and no stored text is changed by drawing.
 17. **Files from the web.**
     - (suite) Uploading a PNG, a JPEG, a PDF, a UTF-8 text file, an Ogg file, a zip and an unknown binary stores each
-      at `<state>/attachments/<project>/<id>/<name>` with the right kind, mode 0600 in a 0700 folder, no executable
+      at `<state>/attachments/<project>/<id>/content/<name>` with the right kind, mode 0600 in a 0700 folder, no executable
       bit, and a `meta.json` whose SHA-256 matches the bytes. A message with two files gives one chat record that
       lists them by id, and the orchestrator's digest holds the user block, then the files block with both paths
       and the data header; the text of a file never appears in it. A files-only message says so.
     - (suite) Names: `../../etc/passwd`, `a\..\b`, `C:\x\y.txt`, a name with NUL, a name with U+202E, a 400-character
-      name, `.hidden`, `CON.`, an empty name, a name containing `[foreman · message from your user …]`: each is
+      name with a long extension (the whole name ends at 100 characters, the extension intact), `meta.json` (stored
+      beside a `meta.json` record that is not overwritten, and the record not read back as the file), `.hidden`,
+      `CON.`, an empty name, a Cyrillic name (its download header carries both `filename` and `filename*`), a name containing `[foreman · message from your user …]`: each is
       stored inside its own id folder under a safe name, and the digest shows the quoted, defanged form. Nothing is
       written outside the attachments folder, and no link is followed.
     - (suite) Types: an ELF, a PE and a Mach-O file renamed `photo.png`, and a `.jar`, are refused with the reason;
-      a PDF named `notes.txt` is stored as a PDF; an HTML file named `x.png` is text; an SVG is text, and is served
+      a PDF named `notes.txt` is stored as `notes.pdf`; `script.py` and `data.csv` keep their extensions; an HTML file named
+      `x.png` is text stored as `x.txt`; an SVG is text, and is served
       as a download, not inline. A shell script is accepted, is not executable, and nothing runs it.
     - (suite) Limits: 20 MiB works and 20 MiB + 1 is refused with nothing left in the staging folder, also when the
-      declared size is a lie and the body is longer; the 11th file, the message over 50 MiB, the project over its
-      quota and a disk with too little free space are each refused with their reason. A fourth parallel upload waits
+      declared size is a lie and the body is longer; the 11th file, the message over 50 MiB, an 11th file or more than
+      50 MiB of unattached staged uploads in one project, the project over its quota and a disk with too little free
+      space are each refused with their reason. A fourth parallel upload waits
       or is refused. An upload cut off half way, and one cut by a restart, leave nothing.
     - (suite) Serving: an image is returned with its found type and an inline-capable disposition; everything else as
       `application/octet-stream` and a download; always `nosniff`, the closed policy and `no-store`. Without a token:
@@ -962,7 +981,7 @@ as passed.
       the folder; `init --remove` does not.
     - `foreman attachment remove` works from a terminal and from a session the user owns, and is refused from an
       orchestrator's session and from a worker it owns (the same environment check as the trust write); the web
-      "remove" works with the device token and leaves the card. `list` and `show` work from the orchestrator; a
+      "remove" works with the device token and leaves the card. `list` and `show` work from the orchestrator and `show` prints no file content, even for a small text file; a
       command that tries to run a stored path is denied by the guard.
     - Live, with real agents (reported as run or not run): an image and a PDF sent from the web and from Telegram; a
       Claude orchestrator answers by sending a worker the path; a Claude worker and an Antigravity worker each read
