@@ -14,8 +14,8 @@ _RANK = {"unknown": 0, "ok": 1, "warn": 2, "stop": 3}
 # (agent, model, effort), best first. Antigravity entries may serve Claude models; they still count against
 # the antigravity provider.
 DEFAULT_ROUTING = {
-    "routine": [("claude", "sonnet", None), ("antigravity", "gemini-3.8-flash-high", None)],
-    "research": [("antigravity", "gemini-3.8-flash-medium", None), ("claude", "sonnet", None)],
+    "routine": [("claude", "sonnet", None), ("antigravity", "gemini-4-hydrogen-high", None)],
+    "research": [("antigravity", "gemini-4-hydrogen-low", None), ("claude", "sonnet", None)],
     "design": [("antigravity", "gemini-4-argon-medium", None)],
     "review": [("claude", "opus", None), ("antigravity", "claude-opus-5-5-high", None)],
     "hard": [("claude", "opus", None), ("antigravity", "claude-opus-5-5-high", None)],

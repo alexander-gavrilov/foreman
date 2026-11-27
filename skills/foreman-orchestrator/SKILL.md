@@ -34,8 +34,9 @@ Speak to the user in their language (Russian by default). Everything you write i
 - Never interrupt a busy session. `foreman send` queues for the next idle point and says so.
 
 ## Models and effort
-- Cheapest model that fits: routine coding and data entry on Sonnet or Antigravity Flash; open-ended design on a
-  strong model (for example Gemini Argon); design review and hard debugging on Opus. Expensive models only when needed.
+- Cheapest model that fits: cheap mechanical on Gemini Hydrogen Low; QA/routine on Hydrogen High, Carbon Medium, or
+  Sonnet; implementation on Carbon High or Sonnet 5.5; planning/design on Argon Medium; review and hard bugs on Opus
+  (alt Argon High). Expensive models only when needed.
 - The user's explicit choice always wins. Record side-by-side comparisons in the journal so routing follows evidence.
 - Codex is a worker only in v1. The reviewer is always a different instance from the author, and gets the files and
   the spec, not the author's conclusions.

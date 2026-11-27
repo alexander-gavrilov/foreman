@@ -20,7 +20,7 @@ class ChooseTest(ForemanTestCase):
     def test_defaults_when_everything_is_ok(self):
         expect = {
             "routine": ("claude", "sonnet", None),
-            "research": ("antigravity", "gemini-3.8-flash-medium", None),
+            "research": ("antigravity", "gemini-4-hydrogen-low", None),
             "design": ("antigravity", "gemini-4-argon-medium", None),
             "review": ("claude", "opus", None),
             "hard": ("claude", "opus", None),
@@ -37,7 +37,7 @@ class ChooseTest(ForemanTestCase):
             self.choose("nonsense", OK)
 
     def test_second_choices(self):
-        self.assertEqual(self.choose("routine", lv(claude="warn"))[:3], ("antigravity", "gemini-3.8-flash-high", None))
+        self.assertEqual(self.choose("routine", lv(claude="warn"))[:3], ("antigravity", "gemini-4-hydrogen-high", None))
         self.assertEqual(self.choose("research", lv(antigravity="stop"))[:3], ("claude", "sonnet", None))
         self.assertEqual(self.choose("review", lv(claude="stop"))[:3], ("antigravity", "claude-opus-5-5-high", None))
         self.assertEqual(self.choose("hard", lv(claude="stop"))[:3], ("antigravity", "claude-opus-5-5-high", None))
