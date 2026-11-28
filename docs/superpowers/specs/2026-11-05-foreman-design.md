@@ -272,10 +272,12 @@ Antigravity, checked on agy 1.5.19:
   spending **those**. Windows of one provider that cross in the same pass share one message per
   recipient, which lists only the windows that recipient spends.
 - **Delivery and expiry.** Only the recipient's Stop hook delivers the message. foreman never types it
-  into a terminal and it never causes a delivery by itself. It is dropped, unsent, when a watch pass finds
-  the recipient `idle`, gone, rotated or closed with it still unclaimed (also after a provisional agy
-  claim was released), or when the marks of all its windows are cleared. The Stop hook checks that before
-  claiming, including whether a mark's reset time has passed, and drops or narrows the message
+  into a terminal and it never causes a delivery by itself; every other delivery path (`deliver_pending`,
+  and the claims made for a send or a wake) leaves the row unclaimed. It is dropped, unsent, when a watch
+  pass finds the recipient gone, rotated or closed, or `idle` for at least 60 seconds, with it still
+  unclaimed (also after a provisional agy claim was released). The grace is needed because the Stop hook
+  shows the session `idle` shortly before it claims. It is also dropped
+  when the marks of all its windows are cleared. The Stop hook checks that before claiming, including whether a mark's reset time has passed, and drops or narrows the message
   accordingly. A dropped message is not queued again.
 
 **Once per crossing and window.**
@@ -352,8 +354,9 @@ instruction to tell running sessions to wind down is removed.
 5. 70%: no inbox row and no wake for anybody; one user notification over many passes.
 6. 90%: one message each to the `starting`, `busy`, `stuck` and waiting sessions of that provider; none
    to idle, gone, rotated or other-provider ones; a 3p crossing reaches only 3p-model sessions and names
-   them. A Stop delivers it. It is dropped, and nothing is typed, when the recipient is found idle or
-   gone, and when its marks are cleared or their reset time passes first.
+   them. A Stop delivers it, and every other delivery path skips it. It is dropped, and nothing is typed,
+   when the recipient is found gone or `idle` for 60 s (a pass between the Stop hook's `idle` and its
+   claim does not drop it), and when its marks are cleared or their reset time passes first.
 7. 90% with no running session: no message and no wake, also when a session turns busy later.
 8. No repeat after: a stale then fresh reading; a dip to 65% and rise; a reading below 60% with the same
    or an earlier reset time; a reset moved by less than rule 2 needs; a watch restart; an upgrade from old
@@ -402,9 +405,10 @@ instruction to tell running sessions to wind down is removed.
   something happened:
   - a session finished, got stuck, or has been waiting for a long time;
   - a context threshold was crossed;
-  - a limit reached 90% while sessions were working on that provider (those sessions are told, §4.4.1);
   - a terminal disappeared;
   - the user replied.
+  A limit crossing is not among these: it wakes nobody. At 90%, sessions working on that provider are
+  told when their current turn ends (§4.4.1).
 - No periodic "tick" of the orchestrator **(user)**.
 - When nothing is happening, foreman spends nothing.
 - **No phantom monitoring.** The orchestrator says it is watching something only if foreman actually has
