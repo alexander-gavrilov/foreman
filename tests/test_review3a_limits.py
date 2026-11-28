@@ -47,8 +47,12 @@ class ThirdPartyWindowsTest(ForemanTestCase):
     def test_routing_skips_only_the_3p_candidate(self):
         from foreman import limits, routing
         lv = dict(limits.levels(), claude="stop")
-        # 'review' = claude opus (stop), gemini argon, antigravity claude (3p, stop): argon is left
-        self.assertEqual(routing.choose("review", lv)[:2], ("antigravity", "gemini-4-argon-medium"))
+        # no built-in default is a 3p model, so configure one ahead of a gemini candidate
+        self.write_config({"routing": {"review": [["claude", "opus"], ["antigravity", "claude-opus-5-5-high"],
+                                                  ["antigravity", "gemini-4-argon-medium"]]}})
+        agent, model, _, note = routing.choose("review", lv)
+        self.assertEqual((agent, model), ("antigravity", "gemini-4-argon-medium"))
+        self.assertIn("claude, antigravity-3p at stop: skipped", note)
         # an antigravity gemini candidate is usable although 3p is at stop
         agent, model, _, _ = routing.choose("research", lv)
         self.assertEqual((agent, model), ("antigravity", "gemini-4-hydrogen-low"))

@@ -1,3 +1,4 @@
+import itertools
 import os
 import unittest
 
@@ -161,8 +162,7 @@ class TierRulesTest(ForemanTestCase):
     TIER4 = [("claude", "haiku", None), ("antigravity", "gemini-4-hydrogen-low", None)]
     TIER3 = {("claude", "sonnet"), ("antigravity", "gemini-4-hydrogen-medium"),
              ("antigravity", "gemini-4-hydrogen-high")}
-    TIER2 = [("claude", "opus", None), ("antigravity", "gemini-4-argon-medium", None),
-             ("antigravity", "claude-opus-5-5-high", None)]
+    TIER2 = [("claude", "opus", None), ("antigravity", "gemini-4-argon-medium", None)]
 
     def defaults(self):
         from foreman import routing
@@ -185,6 +185,19 @@ class TierRulesTest(ForemanTestCase):
     def test_review_and_hard_are_the_same_tier_2_list(self):
         for kind in ("review", "hard"):
             self.assertEqual(self.defaults()[kind], self.TIER2, kind)
+
+    def test_every_tier_2_candidate_can_be_selected_under_some_quota_levels(self):
+        from foreman import routing
+        grid = ("unknown", "ok", "warn", "stop")
+        for kind in ("review", "hard"):
+            picked = set()
+            for claude, agy, third_party in itertools.product(grid, repeat=3):
+                levels = {"claude": claude, "antigravity": agy, "antigravity-3p": third_party}
+                try:
+                    picked.add(routing.choose(kind, levels)[:3])
+                except routing.RoutingError:
+                    pass
+            self.assertEqual(picked, set(self.defaults()[kind]), kind)
 
     def test_argon_is_used_when_claude_and_antigravity_3p_are_at_stop(self):
         from foreman import routing
