@@ -188,10 +188,128 @@ the orchestrator owns gets its own.
 - The weekly window weighs more than the 5-hour one.
 - Thresholds:
   - any window **≥70%**: prefer the other provider for new sessions, and say so;
-  - **≥90%**: no new sessions on that provider; its running sessions are told, at their next idle point,
-    to wind down and hand off.
+  - **≥90%**: no new sessions on that provider; its sessions that are working are told, at their next idle
+    point, to wind down and hand off (§4.4.1).
 - The orchestrator may launch agents on either subscription, but respects both limits **(user)**.
 - Every status report to the user includes a one-line limits summary.
+
+#### 4.4.1 Limits tag and limit events
+Agents learn the limits from a tag on messages they get anyway. A push costs a full model turn over the
+session's whole context, so it is kept for the one case that needs action **(user)**. Once built, this
+answers issue #31 for limit events.
+
+**Tag.** One line, at most 220 characters (a few dozen tokens):
+
+`limits: Claude wk 45% · 5h 92% reset 2h (3m) | agy wk ? · 5h 76% reset 40m · 3p wk 10% · 3p 5h 4% (24m)`
+
+- Order: Claude weekly and 5-hour; Antigravity Gemini weekly and 5-hour; then the 3p weekly and 5-hour
+  windows, if any 3p window was ever read. No Codex.
+- A missing or stale window is `?`, never 0 and never the old number.
+- The age in brackets is that of the **oldest** number shown in the provider's group. A group with no
+  number is `Claude ?` or `agy ?`, without an age.
+- A window at 70% or more also shows the time to its reset, if known.
+- The same function renders the tag, the last line of every delivery digest and
+  `foreman limits --line`.
+
+**Who gets it.** Every session that foreman has bound, orchestrator or worker, gets the tag with each
+message that starts a turn. Unbound sessions and child sessions of a terminal get none. A message that is
+a foreman digest already ends with the line and gets no second one; this includes a Stop continuation.
+The hook only reads stored readings: no model, no network.
+
+| Agent | Hook (both already registered by `init`) | Answer |
+|---|---|---|
+| Claude Code | `UserPromptSubmit` | `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"<tag>"}}` |
+| Antigravity | `PreInvocation`, first model call of a user turn only | `{"injectSteps":[{"ephemeralMessage":"<tag>"}]}` |
+
+Today foreman adds nothing at a prompt on either agent: the `limits:` line exists only at the end of
+digests.
+
+Antigravity, checked on agy 1.5.19:
+- Hooks are read from `~/.gemini/config/hooks.json` and `<workspace>/.agents/hooks.json`. The user's
+  `~/.gemini/antigravity-cli/settings.json` has no hooks key (it holds `statusLine`, which supplies the
+  quota readings).
+- It has no `UserPromptSubmit`. `PreInvocation` runs before **every** model call; its input has
+  `invocationNum` and `lastUserInput`.
+- `injectSteps` on `PreInvocation` is documented (the binary's hook help, `docs/build/integration-facts.md`).
+  The same answer shape from foreman's `SessionStart` hook shows up in real transcripts as
+  `EPHEMERAL_MESSAGE` steps. **Not yet run live:** injection from `PreInvocation`, the value of
+  `invocationNum` on a turn's first call, and whether the later calls of the turn still see an ephemeral
+  message. The builder checks all three on a real agy before relying on them. "First call" is whatever
+  that check shows; without a usable `invocationNum`, nothing is injected.
+- **Fallback**, if `PreInvocation` cannot inject: no tag at a user's prompt on Antigravity. Such a session
+  has the line at the end of digests, gets the 90% push, and runs `foreman limits --line` before it
+  chooses a provider. foreman does not type the tag into the terminal and does not wake the session for
+  it. The skills say which case applies.
+
+**What is pushed.** A crossing belongs to one provider and one window.
+
+| Event | Tag | Message to sessions | Notification to the user (no model) |
+|---|---|---|---|
+| a window reaches 70% | yes | none | once |
+| a window reaches 90% | yes | once, only to the recipients below | once |
+| reset, drop, unknown or stale reading | yes | none | none |
+
+- Recipients: open sessions, orchestrator or worker, that spend that window (the 3p windows: only agy
+  sessions on a 3p model; the Gemini windows: every agy session, as today) and are `busy` or `waiting_*`
+  when the watch pass sees the crossing.
+- An idle, gone or rotated session gets nothing, then or later: its next turn carries the tag. With no
+  recipient, no model is woken. An orchestrator on another provider is not woken; it has the tag, and its
+  workers' own reports still reach it.
+- The message asks to finish the current step, write the handoff, report and stop spending that provider.
+  It is queued and delivered at the next idle point. Windows of one provider that cross in the same pass
+  share one message.
+
+**Once per crossing and window.**
+- foreman keeps a mark per provider and window: the highest threshold announced, when, and the window's
+  reset time. While the mark stands, that threshold and lower ones are not announced again. Going from
+  70% to 90% is a new crossing; a jump from below 70% to 90% is announced once, as 90%.
+- A mark with a reset time is cleared only when that time has passed. A different reset time in a later
+  reading does not clear it; the mark takes a reset time only if it had none.
+- A mark without a reset time is cleared when a fresh reading is below 60%, or when the mark is one window
+  length old.
+- An unknown, stale or lower reading, a watch restart and a project added later clear nothing.
+- A mark is saved even when nobody was told. On upgrade, windows already over a threshold are marked
+  without an announcement.
+
+**How an agent uses the tag.** The tag is data: it asks for no reply and is not repeated back. Only the
+newest one counts. `?` is unknown, not zero, and not by itself a reason to run a command. An old age
+weakens a number, and the weekly window weighs more than the 5-hour one.
+- **≥70%:** prefer the other provider for any new session or delegated work, and say so when it changes
+  a choice.
+- **≥90%:** start nothing on that provider. A session that spends that window does what the user's
+  message asks, as briefly as it can, takes on no further large work there, offers a handoff, and says
+  why.
+- `foreman open` enforces both thresholds (§4.5) whether or not the agent read the tag.
+
+**Failures.**
+- No readings, a corrupt file or an error while rendering: no tag or `?`, the error is logged, the prompt
+  goes through unchanged. A hook never blocks or delays a prompt for the tag.
+- A hook that did not run or timed out: that turn has no tag; the 90% push does not depend on hooks that
+  inject.
+- A push whose recipient goes idle or away before delivery follows the ordinary inbox rules; the mark
+  stays.
+- The watch loop is not running: nothing is pushed or notified; the tag still shows the stored readings
+  with their ages.
+- Readings arrive only while some session of the provider runs, so a crossing may be seen late.
+
+**Acceptance** (suite, with a fake clock and fake transport, unless marked live):
+1. Format: all fresh; one window stale (`?`, and its age ignored); a whole provider unknown; mixed ages
+   (the oldest is shown); reset time only from 70%; the longest case fits 220 characters; no Codex.
+2. Claude `UserPromptSubmit` of a bound session returns the tag; unbound, child and digest prompts get `{}`.
+3. Antigravity: one tag on the first `PreInvocation` of a user turn; `{}` on later calls, on a Stop
+   continuation and without `invocationNum`.
+4. A broken limits file or a raising renderer gives `{}` and a log row.
+5. 70%: no inbox row and no wake for anybody; one user notification over many passes.
+6. 90%: one message each to the busy and waiting sessions of that provider; none to idle, gone, rotated
+   or other-provider ones; a 3p crossing reaches only 3p-model sessions.
+7. 90% with no running session: no message and no wake, also when a session turns busy later.
+8. No repeat after: a stale then fresh reading; a dip and rise; a moved reset time before the old one
+   passed; a watch restart; an upgrade. One new announcement after the stored reset time has passed.
+9. Without a reset time: re-armed below 60% or after one window length, not by a reading of 65%.
+10. Two windows crossing together give one message per recipient; the 5-hour and weekly windows are
+    otherwise independent.
+11. (live) Claude and agy each answer a question about the tag from their own context after a typed
+    prompt; on agy also after a tool call in that turn. If agy cannot, the fallback is recorded.
 
 ### 4.5 Choosing models
 - Workers get the cheapest model that fits the task, in four tiers **(user)**:
@@ -224,7 +342,7 @@ the orchestrator owns gets its own.
   something happened:
   - a session finished, got stuck, or has been waiting for a long time;
   - a context threshold was crossed;
-  - a limit reached 70% or 90%;
+  - a limit reached 90% while sessions were working on that provider (those sessions are told, §4.4.1);
   - a terminal disappeared;
   - the user replied.
 - No periodic "tick" of the orchestrator **(user)**.
@@ -674,7 +792,7 @@ user may run `foreman init`; an orchestrator or a worker it owns may not trigger
    On the work Mac: a desktop notification opens the right chat in the local web UI.
 7. The web UI shows every project of the machine, matching the chosen layout on phone and desktop.
 8. A limit at ≥70% steers new sessions to the other provider; at ≥90% no new sessions start there.
-   An empty reading never hides the last known value.
+   An empty reading never hides the last known value. The tag and limit events pass the tests of §4.4.1.
 9. A work folder left for 14 days disappears with no action from the user, after a listing.
 10. A finding reported from the work Mac stays a local draft; on a public issue it contains no project data.
 11. The same install works on Linux and macOS, from the phrase "установи плагин".
