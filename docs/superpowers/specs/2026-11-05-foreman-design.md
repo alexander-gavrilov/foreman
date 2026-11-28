@@ -194,9 +194,22 @@ the orchestrator owns gets its own.
 - Every status report to the user includes a one-line limits summary.
 
 ### 4.5 Choosing models
-- Workers get the cheapest model that fits the task. Routine coding and data entry: Sonnet or
-  Antigravity Flash. Open-ended design: a strong model, e.g. Gemini Argon. Design, review and
-  hard debugging: Opus. The expensive models are used only when needed **(user)**.
+- Workers get the cheapest model that fits the task, in four tiers **(user)**:
+  - **tier 4**, mechanical work, routine chores and data entry: Claude Haiku first; on Antigravity,
+    Gemini 4 Hydrogen Low. Chores and data entry are opened with `--kind research`;
+  - **tier 3**, daily development, authoring and fixes (routine coding included): Gemini 4 Hydrogen
+    Medium or High, or Claude Sonnet. This is kind `routine`, which is also used when no kind is
+    given; its default is Claude Sonnet;
+  - **tier 2**, review, security-sensitive review and production-critical fixes (hard debugging
+    included): Gemini 4 Argon Medium or Claude Opus 5.5;
+  - **tier 1**, Gemini 4 Carbon and Neon, and Fable: only the hardest design or audit, with an explicit
+    reason, never as a default.
+- Open-ended design: a strong model, e.g. Gemini 4 Argon Medium.
+- Each kind has an ordered list of candidates, gated by usage thresholds (70% and 90% by default):
+  a candidate at 90% or more is skipped; the first remaining one below 70% (unknown usage counts as
+  below) is taken; if all remaining ones are at 70% or more, the first of them. foreman does not
+  otherwise compare how much quota is free **(design call)**.
+- No default depends on a Gemini Flash model: Flash is being retired.
 - Routing rules follow evidence. When the same brief was given to Argon and Flash, Argon was
   faster and the user preferred its result at about the same quota cost. foreman keeps such
   comparisons in the journal so the rules can change when the evidence changes **(design call)**.

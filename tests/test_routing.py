@@ -1,3 +1,4 @@
+import itertools
 import os
 import unittest
 
@@ -20,7 +21,7 @@ class ChooseTest(ForemanTestCase):
     def test_defaults_when_everything_is_ok(self):
         expect = {
             "routine": ("claude", "sonnet", None),
-            "research": ("antigravity", "gemini-3.8-flash-medium", None),
+            "research": ("claude", "haiku", None),
             "design": ("antigravity", "gemini-4-argon-medium", None),
             "review": ("claude", "opus", None),
             "hard": ("claude", "opus", None),
@@ -37,10 +38,11 @@ class ChooseTest(ForemanTestCase):
             self.choose("nonsense", OK)
 
     def test_second_choices(self):
-        self.assertEqual(self.choose("routine", lv(claude="warn"))[:3], ("antigravity", "gemini-3.8-flash-high", None))
-        self.assertEqual(self.choose("research", lv(antigravity="stop"))[:3], ("claude", "sonnet", None))
-        self.assertEqual(self.choose("review", lv(claude="stop"))[:3], ("antigravity", "claude-opus-5-5-high", None))
-        self.assertEqual(self.choose("hard", lv(claude="stop"))[:3], ("antigravity", "claude-opus-5-5-high", None))
+        self.assertEqual(self.choose("routine", lv(claude="warn"))[:3], ("antigravity", "gemini-4-hydrogen-high", None))
+        self.assertEqual(self.choose("research", lv(claude="stop"))[:3],
+                         ("antigravity", "gemini-4-hydrogen-low", None))
+        self.assertEqual(self.choose("review", lv(claude="stop"))[:3], ("antigravity", "gemini-4-argon-medium", None))
+        self.assertEqual(self.choose("hard", lv(claude="stop"))[:3], ("antigravity", "gemini-4-argon-medium", None))
 
     def test_warn_prefers_the_other_provider_and_says_so(self):
         agent, model, _, note = self.choose("routine", lv(claude="warn"))
@@ -110,7 +112,7 @@ class ChooseTest(ForemanTestCase):
 
     def test_explicit_agent_name_takes_the_model_from_the_table(self):
         self.assertEqual(self.choose("review", OK, preferred="antigravity")[:3],
-                         ("antigravity", "claude-opus-5-5-high", None))
+                         ("antigravity", "gemini-4-argon-medium", None))
         self.assertEqual(self.choose("routine", OK, preferred=("claude", None, None))[:3], ("claude", "sonnet", None))
         # no table entry for that agent: its own default model
         self.assertEqual(self.choose("design", OK, preferred="claude")[:3], ("claude", None, None))
@@ -153,6 +155,60 @@ class ChooseTest(ForemanTestCase):
         from foreman import routing
         with self.assertRaises(routing.RoutingError):
             self.choose("routine", lv(codex="stop"), preferred="codex")
+
+
+class TierRulesTest(ForemanTestCase):
+    """The approved model tiers (spec 4.5): what the built-in defaults may offer for each kind."""
+    TIER4 = [("claude", "haiku", None), ("antigravity", "gemini-4-hydrogen-low", None)]
+    TIER3 = {("claude", "sonnet"), ("antigravity", "gemini-4-hydrogen-medium"),
+             ("antigravity", "gemini-4-hydrogen-high")}
+    TIER2 = [("claude", "opus", None), ("antigravity", "gemini-4-argon-medium", None)]
+
+    def defaults(self):
+        from foreman import routing
+        return routing.DEFAULT_ROUTING
+
+    def test_tier_1_and_flash_are_never_a_default(self):
+        for kind, rows in self.defaults().items():
+            for _, model, _ in rows:
+                for banned in ("carbon", "neon", "fable", "flash"):
+                    self.assertNotIn(banned, model.lower(), kind)
+
+    def test_research_is_tier_4_haiku_first_then_hydrogen_low(self):
+        self.assertEqual(self.defaults()["research"], self.TIER4)
+
+    def test_routine_is_tier_3(self):
+        self.assertTrue(self.defaults()["routine"])
+        for agent, model, _ in self.defaults()["routine"]:
+            self.assertIn((agent, model), self.TIER3)
+
+    def test_review_and_hard_are_the_same_tier_2_list(self):
+        for kind in ("review", "hard"):
+            self.assertEqual(self.defaults()[kind], self.TIER2, kind)
+
+    def test_every_tier_2_candidate_can_be_selected_under_some_quota_levels(self):
+        from foreman import routing
+        grid = ("unknown", "ok", "warn", "stop")
+        for kind in ("review", "hard"):
+            picked = set()
+            for claude, agy, third_party in itertools.product(grid, repeat=3):
+                levels = {"claude": claude, "antigravity": agy, "antigravity-3p": third_party}
+                try:
+                    picked.add(routing.choose(kind, levels)[:3])
+                except routing.RoutingError:
+                    pass
+            self.assertEqual(picked, set(self.defaults()[kind]), kind)
+
+    def test_argon_is_used_when_claude_and_antigravity_3p_are_at_stop(self):
+        from foreman import routing
+        levels = {"claude": "stop", "antigravity": "ok", "antigravity-3p": "stop"}
+        for kind in ("review", "hard"):
+            self.assertEqual(routing.choose(kind, levels)[:2], ("antigravity", "gemini-4-argon-medium"), kind)
+
+    def test_the_users_explicit_tier_1_choice_is_still_honoured(self):
+        from foreman import routing
+        pick = routing.choose("hard", OK, preferred=("antigravity", "gemini-4-carbon-high", None))
+        self.assertEqual(pick[:2], ("antigravity", "gemini-4-carbon-high"))
 
 
 class ColdCacheTest(ForemanTestCase):

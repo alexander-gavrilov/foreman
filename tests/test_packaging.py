@@ -54,6 +54,29 @@ class Packaging(ForemanTestCase):
             self.assertEqual(keys["name"], name)
         self.assertGreaterEqual(found, 2)
 
+    def test_orchestrator_skill_states_the_model_tiers(self):
+        text = read("skills", "foreman-orchestrator", "SKILL.md")
+        section = " ".join(text.split("## Models and effort")[1].split("\n## ")[0].split())
+        tiers = dict(re.findall(r"- Tier (\d)(.*?)(?=- Tier \d|- The user's explicit choice)", section))
+        self.assertEqual(sorted(tiers), ["1", "2", "3", "4"])
+        for tier, needles in (
+                ("4", ("`research`", "routine chores", "data entry", "Claude Haiku first", "Gemini 4 Hydrogen Low")),
+                ("3", ("`routine`", "without `--kind`", "Gemini 4 Hydrogen Medium or High", "Claude Sonnet")),
+                ("2", ("`review`", "`hard`", "security-sensitive review", "production-critical fixes",
+                       "Claude Opus 5.5", "Gemini 4 Argon Medium")),
+                ("1", ("Gemini 4 Carbon", "Neon", "Fable", "reason", "never a default"))):
+            for needle in needles:
+                self.assertIn(needle, tiers[tier], "tier " + tier)
+        for tier in ("4", "3", "2"):
+            for banned in ("Carbon", "Neon", "Fable"):
+                self.assertNotIn(banned, tiers[tier], "tier " + tier)
+        self.assertNotIn("Argon High", section)
+        self.assertNotIn("Flash", section)
+        for needle in ("list order", "70%", "90%"):
+            self.assertIn(needle, section)
+        for gone in ("free quota", "on Antigravity", "`design`"):
+            self.assertNotIn(gone, section)
+
     def test_install_phrase_in_skill(self):
         text = read("skills", "foreman", "SKILL.md")
         self.assertIn("npx skills add alexander-gavrilov/foreman -g -y", text)

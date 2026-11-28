@@ -36,7 +36,7 @@ class ThirdPartyWindowsTest(ForemanTestCase):
 
     def test_gemini_open_is_allowed_and_3p_open_is_refused(self):
         code, out, err = run_main("open", "--project", "demo", "--agent", "antigravity", "--model",
-                                  "gemini-3.8-flash-high", "--purpose", "x", "--title", "g1",
+                                  "gemini-4-hydrogen-high", "--purpose", "x", "--title", "g1",
                                   "--transport", "fake", "--prompt", "hi")
         self.assertEqual(code, 0, err)
         code, out, err = run_main("open", "--project", "demo", "--agent", "antigravity", "--model",
@@ -47,17 +47,20 @@ class ThirdPartyWindowsTest(ForemanTestCase):
     def test_routing_skips_only_the_3p_candidate(self):
         from foreman import limits, routing
         lv = dict(limits.levels(), claude="stop")
-        # 'review' = claude opus, then antigravity claude (3p, at stop): nothing left
-        with self.assertRaises(routing.RoutingError):
-            routing.choose("review", lv)
-        # 'research' = antigravity gemini first: usable although 3p is at stop
+        # no built-in default is a 3p model, so configure one ahead of a gemini candidate
+        self.write_config({"routing": {"review": [["claude", "opus"], ["antigravity", "claude-opus-5-5-high"],
+                                                  ["antigravity", "gemini-4-argon-medium"]]}})
+        agent, model, _, note = routing.choose("review", lv)
+        self.assertEqual((agent, model), ("antigravity", "gemini-4-argon-medium"))
+        self.assertIn("claude, antigravity-3p at stop: skipped", note)
+        # an antigravity gemini candidate is usable although 3p is at stop
         agent, model, _, _ = routing.choose("research", lv)
-        self.assertEqual((agent, model), ("antigravity", "gemini-3.8-flash-medium"))
+        self.assertEqual((agent, model), ("antigravity", "gemini-4-hydrogen-low"))
 
     def test_watch_winds_down_only_3p_workers(self):
         from foreman import sessions, watch, transports
         t = transports.get_transport("fake")
-        gem = sessions.create_session("demo", "antigravity", model="gemini-3.8-flash-high", state="idle",
+        gem = sessions.create_session("demo", "antigravity", model="gemini-4-hydrogen-high", state="idle",
                                       title="gem", transport={"kind": "fake", "handle": t.launch(
                                           "antigravity", "g", None, self.work, "p", "gem")})
         cl3p = sessions.create_session("demo", "antigravity", model="claude-opus-5-5-high", state="idle",

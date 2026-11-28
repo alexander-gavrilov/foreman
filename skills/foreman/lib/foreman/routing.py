@@ -13,12 +13,21 @@ _RANK = {"unknown": 0, "ok": 1, "warn": 2, "stop": 3}
 
 # (agent, model, effort), best first. Antigravity entries may serve Claude models; they still count against
 # the antigravity provider.
+# Model tiers (spec 4.5). Tier 1 (Gemini 4 Carbon and Neon, Fable) is never a default.
+#   tier 4: "research", which also takes mechanical work, routine chores and data entry. There is no separate
+#     "mechanical" kind.
+#   tier 3, daily dev, authoring, fixes: "routine", despite its name. It is also the kind of a worker opened
+#     without one (Claude Sonnet first), so it stays at tier 3 and not at tier 4.
+#   tier 2: "review" (security-sensitive review included) and "hard" (hard bugs, production-critical fixes).
+#     Claude Opus on Antigravity is not listed: it is gated by the worse of the 3p and Gemini levels, so Argon,
+#     ahead of it, would qualify whenever it does and it could never be picked.
+_TIER2 = (("claude", "opus", None), ("antigravity", "gemini-4-argon-medium", None))
 DEFAULT_ROUTING = {
-    "routine": [("claude", "sonnet", None), ("antigravity", "gemini-3.8-flash-high", None)],
-    "research": [("antigravity", "gemini-3.8-flash-medium", None), ("claude", "sonnet", None)],
+    "routine": [("claude", "sonnet", None), ("antigravity", "gemini-4-hydrogen-high", None)],
+    "research": [("claude", "haiku", None), ("antigravity", "gemini-4-hydrogen-low", None)],
     "design": [("antigravity", "gemini-4-argon-medium", None)],
-    "review": [("claude", "opus", None), ("antigravity", "claude-opus-5-5-high", None)],
-    "hard": [("claude", "opus", None), ("antigravity", "claude-opus-5-5-high", None)],
+    "review": list(_TIER2),
+    "hard": list(_TIER2),
     "orchestrator": [("claude", "sonnet", None)],
 }
 KINDS = tuple(DEFAULT_ROUTING)
