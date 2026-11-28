@@ -194,9 +194,17 @@ the orchestrator owns gets its own.
 - Every status report to the user includes a one-line limits summary.
 
 ### 4.5 Choosing models
-- Workers get the cheapest model that fits the task. Routine coding and data entry: Sonnet or
-  Antigravity Flash. Open-ended design: a strong model, e.g. Gemini Argon. Design, review and
-  hard debugging: Opus. The expensive models are used only when needed **(user)**.
+- Workers get the cheapest model that fits the task, in four tiers. Within a tier the provider is
+  chosen by free quota **(user)**:
+  - **tier 4**, mechanical work: Claude Haiku first; on Antigravity, Gemini 4 Hydrogen Low;
+  - **tier 3**, daily development, authoring and fixes (routine coding and data entry included):
+    Gemini 4 Hydrogen Medium or High, or Claude Sonnet;
+  - **tier 2**, review, security-sensitive review and production-critical fixes (hard debugging
+    included): Gemini 4 Argon Medium or Claude Opus 5.5. Open-ended design: a strong model, e.g.
+    Gemini 4 Argon Medium;
+  - **tier 1**, Gemini 4 Carbon and Neon, and Fable: only the hardest design or audit, with an explicit
+    reason, never as a default.
+- No default depends on a Gemini Flash model: Flash is being retired.
 - Routing rules follow evidence. When the same brief was given to Argon and Flash, Argon was
   faster and the user preferred its result at about the same quota cost. foreman keeps such
   comparisons in the journal so the rules can change when the evidence changes **(design call)**.

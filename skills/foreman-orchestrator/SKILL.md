@@ -34,9 +34,13 @@ Speak to the user in their language (Russian by default). Everything you write i
 - Never interrupt a busy session. `foreman send` queues for the next idle point and says so.
 
 ## Models and effort
-- Cheapest model that fits: cheap mechanical on Gemini Hydrogen Low; QA/routine on Hydrogen High, Carbon Medium, or
-  Sonnet; implementation on Carbon High or Sonnet 5.5; planning/design on Argon Medium; review and hard bugs on Opus
-  (alt Argon High). Expensive models only when needed.
+- Take the cheapest tier that fits (`--kind` in backticks); within a tier the provider is chosen by free quota.
+- Tier 4, mechanical work, bulk reading, search (`research`): Claude Haiku first, else Gemini 4 Hydrogen Low.
+- Tier 3, daily dev, authoring, fixes (`routine`): Gemini 4 Hydrogen Medium or High, or Claude Sonnet.
+- Tier 2, review, security-sensitive review (`review`), production-critical fixes, hard bugs (`hard`): Claude
+  Opus 5.5 or Gemini 4 Argon Medium (default order: Claude Opus, Argon Medium, Opus on Antigravity). Planning and
+  design (`design`): Argon Medium.
+- Tier 1 (Gemini 4 Carbon and Neon, Fable): only the hardest design or audit, with the reason stated; never a default.
 - The user's explicit choice always wins. Record side-by-side comparisons in the journal so routing follows evidence.
 - Codex is a worker only in v1. The reviewer is always a different instance from the author, and gets the files and
   the spec, not the author's conclusions.
